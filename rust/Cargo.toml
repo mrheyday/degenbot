@@ -1,3 +1,14 @@
+# [workspace] — added by mev-arbitrum 2026-05-11 to stop cargo's walk
+# from reaching the parent project's Cargo.toml. The worktree's Cargo.toml
+# excludes this path, but cargo continues walking up to the project root's
+# Cargo.toml whose exclude entry doesn't match the worktree-relative path
+# `vendor/degenbot/rust`. Root then tries to claim this crate as a member
+# and maturin fails with "current package believes it's in a workspace
+# when it's not". Declaring an empty workspace here makes degenbot_rs
+# standalone. Submodule-drift carry-forward: re-apply after every
+# `git submodule update vendor/degenbot`.
+[workspace]
+
 [package]
 authors = ["BowTiedDevil <devil@bowtieddevil.com>"]
 name = "degenbot_rs"
