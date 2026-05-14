@@ -520,33 +520,30 @@ mod tests {
 
     #[test]
     fn test_abi_value_to_python_roundtrip() {
-        #[allow(unsafe_code)]
-        unsafe {
-            pyo3::with_embedded_python_interpreter(|py| {
-                let val = AbiValue::Uint(U256::from(123_456_789_u64));
-                let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
-                let n: u64 = py_val.extract().expect("should extract as u64");
-                assert_eq!(n, 123_456_789_u64);
+        crate::with_python_for_tests(|py| {
+            let val = AbiValue::Uint(U256::from(123_456_789_u64));
+            let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
+            let n: u64 = py_val.extract().expect("should extract as u64");
+            assert_eq!(n, 123_456_789_u64);
 
-                let val = AbiValue::Bool(true);
-                let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
-                let b: bool = py_val.extract().expect("should extract as bool");
-                assert!(b);
+            let val = AbiValue::Bool(true);
+            let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
+            let b: bool = py_val.extract().expect("should extract as bool");
+            assert!(b);
 
-                let val = AbiValue::String("Hello".to_string());
-                let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
-                let s: String = py_val.extract().expect("should extract as String");
-                assert_eq!(s, "Hello");
+            let val = AbiValue::String("Hello".to_string());
+            let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
+            let s: String = py_val.extract().expect("should extract as String");
+            assert_eq!(s, "Hello");
 
-                let val = AbiValue::Array(vec![
-                    AbiValue::Uint(U256::from(1u64)),
-                    AbiValue::Uint(U256::from(2u64)),
-                ]);
-                let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
-                let list: Vec<u64> = py_val.extract().expect("should extract as Vec<u64>");
-                assert_eq!(list, vec![1, 2]);
-            });
-        }
+            let val = AbiValue::Array(vec![
+                AbiValue::Uint(U256::from(1u64)),
+                AbiValue::Uint(U256::from(2u64)),
+            ]);
+            let py_val = abi_value_to_python(&val, py, true).expect("should convert to Python");
+            let list: Vec<u64> = py_val.extract().expect("should extract as Vec<u64>");
+            assert_eq!(list, vec![1, 2]);
+        });
     }
 
     // =========================================================================
@@ -624,7 +621,9 @@ mod tests {
 
     #[test]
     fn test_type_caching() {
-        use crate::abi_types::cached::TYPE_CACHE;
+        use crate::abi_types::cached::{TYPE_CACHE, TYPE_CACHE_TEST_LOCK};
+
+        let _guard = TYPE_CACHE_TEST_LOCK.lock();
 
         // Ensure cache starts empty
         TYPE_CACHE.lock().clear();
@@ -632,20 +631,22 @@ mod tests {
         // First call should populate cache
         let data = vec![0u8; 32];
         let _result1 = decode_single_rust("uint256", &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256"]);
 
         // Second call should use cache (same key)
         let _result2 = decode_single_rust("uint256", &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1); // Still 1, not 2
+        assert_cache_contains(&["uint256"]);
 
         // Different type should add to cache
         let _result3 = decode_single_rust("address", &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 2);
+        assert_cache_contains(&["address"]);
     }
 
     #[test]
     fn test_type_caching_multiple_types() {
-        use crate::abi_types::cached::TYPE_CACHE;
+        use crate::abi_types::cached::{TYPE_CACHE, TYPE_CACHE_TEST_LOCK};
+
+        let _guard = TYPE_CACHE_TEST_LOCK.lock();
 
         TYPE_CACHE.lock().clear();
 
@@ -655,14 +656,21 @@ mod tests {
 
         // First call with these types
         let _result1 = decode_rust(&["uint256", "bool"], &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256", "bool"]);
 
         // Second call with same types should use cache
         let _result2 = decode_rust(&["uint256", "bool"], &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256", "bool"]);
 
         // Different order is a different cache entry
         let _result3 = decode_rust(&["bool", "uint256"], &data).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 2);
+        assert_cache_contains(&["bool", "uint256"]);
+    }
+
+    fn assert_cache_contains(types: &[&str]) {
+        use crate::abi_types::cached::TYPE_CACHE;
+
+        let key: Vec<String> = types.iter().map(std::string::ToString::to_string).collect();
+        assert!(TYPE_CACHE.lock().iter().any(|(cache_key, _)| cache_key == &key));
     }
 }

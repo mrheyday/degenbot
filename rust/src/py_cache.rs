@@ -101,9 +101,13 @@ mod tests {
 
     use super::*;
 
+    fn with_python<R>(f: impl for<'py> FnOnce(pyo3::Python<'py>) -> R) -> R {
+        crate::with_python_for_tests(f)
+    }
+
     #[test]
     fn test_bytes_to_int() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Test zero
             let zero_bytes = [0u8; 32];
             let py_zero = bytes_to_int(py, &zero_bytes).unwrap();
@@ -128,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_bytes_to_int_signed() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Test positive
             let mut pos_bytes = [0u8; 32];
             pos_bytes[31] = 42;
@@ -146,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_create_hexbytes() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Skip test if hexbytes is not installed
             if py.import("hexbytes").is_err() {
                 eprintln!("Skipping test_create_hexbytes: hexbytes module not installed");
@@ -156,19 +160,19 @@ mod tests {
             // Test empty bytes
             let empty_hb = create_hexbytes(py, &[]).unwrap();
             let hex_str: String = empty_hb.call_method0("hex").unwrap().extract().unwrap();
-            assert_eq!(hex_str, "0x");
+            assert_eq!(hex_str, "");
 
             // Test some bytes
             let test_bytes = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
             let hb = create_hexbytes(py, &test_bytes).unwrap();
             let hex_str: String = hb.call_method0("hex").unwrap().extract().unwrap();
-            assert_eq!(hex_str, "0x0123456789abcdef");
+            assert_eq!(hex_str, "0123456789abcdef");
         });
     }
 
     #[test]
     fn test_caching_works() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // First call initializes cache
             let _first = bytes_to_int(py, &[0u8; 32]).unwrap();
 

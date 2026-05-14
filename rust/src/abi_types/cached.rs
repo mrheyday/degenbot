@@ -26,6 +26,9 @@ const CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(10_000).expect("10_000 is
 pub(crate) static TYPE_CACHE: LazyLock<Mutex<LruCache<Vec<String>, CachedAbiTypes>>> =
     LazyLock::new(|| Mutex::new(LruCache::new(CACHE_CAPACITY)));
 
+#[cfg(test)]
+pub(crate) static TYPE_CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 /// Get or create cached types for the given type strings.
 ///
 /// This function checks the global cache first, and only parses
