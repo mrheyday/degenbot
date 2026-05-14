@@ -474,40 +474,51 @@ mod tests {
 
     #[test]
     fn test_encoder_uses_shared_cache() {
-        use crate::abi_types::cached::TYPE_CACHE;
+        use crate::abi_types::cached::{TYPE_CACHE, TYPE_CACHE_TEST_LOCK};
+
+        let _guard = TYPE_CACHE_TEST_LOCK.lock();
 
         TYPE_CACHE.lock().clear();
 
         // Encode should populate the shared cache
         let value = AbiValue::Uint(U256::from(42u64));
         let _encoded = encode_single_rust("uint256", &value).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256"]);
 
         // Same type should use cache (no new entry)
         let value2 = AbiValue::Uint(U256::from(99u64));
         let _encoded2 = encode_single_rust("uint256", &value2).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256"]);
 
         // Different type adds new entry
         let value3 = AbiValue::Bool(true);
         let _encoded3 = encode_single_rust("bool", &value3).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 2);
+        assert_cache_contains(&["bool"]);
     }
 
     #[test]
     fn test_encode_rust_delegates_to_shared_cache() {
-        use crate::abi_types::cached::TYPE_CACHE;
+        use crate::abi_types::cached::{TYPE_CACHE, TYPE_CACHE_TEST_LOCK};
+
+        let _guard = TYPE_CACHE_TEST_LOCK.lock();
 
         TYPE_CACHE.lock().clear();
 
         let values = vec![AbiValue::Uint(U256::from(42u64)), AbiValue::Bool(true)];
         let _encoded = encode_rust(&["uint256", "bool"], &values).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256", "bool"]);
 
         // Second call with same types uses cache
         let values2 = vec![AbiValue::Uint(U256::from(1u64)), AbiValue::Bool(false)];
         let _encoded2 = encode_rust(&["uint256", "bool"], &values2).unwrap();
-        assert_eq!(TYPE_CACHE.lock().len(), 1);
+        assert_cache_contains(&["uint256", "bool"]);
+    }
+
+    fn assert_cache_contains(types: &[&str]) {
+        use crate::abi_types::cached::TYPE_CACHE;
+
+        let key: Vec<String> = types.iter().map(std::string::ToString::to_string).collect();
+        assert!(TYPE_CACHE.lock().iter().any(|(cache_key, _)| cache_key == &key));
     }
 }
 

@@ -59,10 +59,19 @@ pub use tick_math_py::{get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio};
 
 use pyo3::prelude::*;
 
+#[cfg(test)]
+pub(crate) fn with_python_for_tests<R>(f: impl for<'py> FnOnce(Python<'py>) -> R) -> R {
+    static PYTHON_INIT: std::sync::Once = std::sync::Once::new();
+    PYTHON_INIT.call_once(Python::initialize);
+    Python::attach(f)
+}
+
 #[pymodule]
 fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Initialize logging bridge from Rust to Python
-    pyo3_log::init();
+    // Initialize logging bridge from Rust to Python. Pytest and editable
+    // reloads can import this extension more than once in-process; a prior
+    // logger should not turn an otherwise valid import into a panic.
+    let _ = pyo3_log::try_init();
 
     // Tick math functions
     m.add_function(wrap_pyfunction!(tick_math_py::get_sqrt_ratio_at_tick, m)?)?;

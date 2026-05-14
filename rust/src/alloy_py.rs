@@ -227,9 +227,13 @@ mod tests {
 
     use super::*;
 
+    fn with_python<R>(f: impl for<'py> FnOnce(pyo3::Python<'py>) -> R) -> R {
+        crate::with_python_for_tests(f)
+    }
+
     #[test]
     fn test_u256_to_python() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Test zero
             let zero = U256::ZERO;
             let py_zero = u256_to_py(py, &zero).unwrap();
@@ -261,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_extract_python_u256() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Test small integer
             let small = pyo3::types::PyInt::new(py, 42);
             let val = extract_python_u256(&small).unwrap();
@@ -297,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_i256_to_python() {
-        pyo3::Python::attach(|py| {
+        with_python(|py| {
             // Test zero
             let zero = I256::ZERO;
             let py_zero = i256_to_py(py, &zero).unwrap();
