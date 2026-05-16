@@ -219,6 +219,60 @@ def get_function_selector(function_signature: str) -> str:
         ValueError: If the function signature is invalid
     """
 
+def encode_native_arb_calldata(
+    flash_lender: str,
+    flash_protocol: str,
+    flash_token: str,
+    flash_amount: int | bytes,
+    swaps: list[dict[str, Any]],
+    min_profit: int | bytes,
+    deadline: int | bytes,
+) -> bytes:
+    """
+    Encode calldata for `Executor.executeNativeArb`.
+
+    Args:
+        flash_lender: Flash-loan lender address
+        flash_protocol: Flash protocol selector name
+        flash_token: Flash-loan token address
+        flash_amount: Flash-loan amount
+        swaps: Ordered swap steps as dictionaries
+        min_profit: Minimum profit threshold
+        deadline: Unix deadline
+    """
+
+def encode_match_internal_calldata(
+    cow_settlement_calldata: bytes,
+    uniswapx_batch_calldata: bytes,
+    expected_token_inflows: list[str],
+    expected_token_inflow_min: list[int | bytes],
+    flash_lender: str,
+    flash_protocol: str,
+    flash_token: str,
+    flash_amount: int | bytes,
+    min_profit: int | bytes,
+    deadline: int | bytes,
+) -> bytes:
+    """
+    Encode calldata for `Executor.matchInternal`.
+    """
+
+def encode_compose_four_leg_calldata(
+    across_fill_calldata: bytes,
+    arb_swaps: list[dict[str, Any]],
+    cow_fill_calldata: bytes,
+    uniswapx_rebalance_calldata: bytes,
+    flash_lender: str,
+    flash_protocol: str,
+    flash_token: str,
+    flash_amount: int | bytes,
+    min_profit: int | bytes,
+    deadline: int | bytes,
+) -> bytes:
+    """
+    Encode calldata for `Executor.composeFourLeg`.
+    """
+
 class Contract:
     """
     Synchronous wrapper for smart contract interactions.
@@ -363,6 +417,9 @@ __all__ = [
     "decode_return_data",
     "decode_single",
     "encode_function_call",
+    "encode_compose_four_leg_calldata",
+    "encode_match_internal_calldata",
+    "encode_native_arb_calldata",
     "get_function_selector",
     "get_sqrt_ratio_at_tick",
     "get_tick_at_sqrt_ratio",

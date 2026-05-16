@@ -28,6 +28,11 @@ from .degenbot_rs import (
     get_tick_at_sqrt_ratio,
     to_checksum_address,
 )
+from .execution import (
+    encode_compose_four_leg_calldata,
+    encode_match_internal_calldata,
+    encode_native_arb_calldata,
+)
 from .version import __version__
 
 # isort: split
@@ -41,6 +46,7 @@ from .aerodrome import (
     AerodromeV3PoolState,
 )
 from .anvil_fork import AnvilFork
+from .bot import BotOpportunity, BotScanConfig, DegenbotBot
 from .arbitrage import ArbitrageCalculationResult, UniswapCurveCycle, UniswapLpCycle
 from .camelot import CamelotLiquidityPool
 from .chainlink import ChainlinkPriceContract
@@ -97,6 +103,8 @@ __all__ = (
     "AerodromeV3PoolManager",
     "AerodromeV3PoolState",
     "AnvilFork",
+    "BotOpportunity",
+    "BotScanConfig",
     "ArbitrageCalculationResult",
     "CamelotLiquidityPool",
     "ChainlinkPriceContract",
@@ -104,6 +112,7 @@ __all__ = (
     "CurveStableswapPool",
     "CurveStableswapPoolSimulationResult",
     "CurveStableswapPoolState",
+    "DegenbotBot",
     "Erc20Token",
     "Erc20TokenManager",
     "EtherPlaceholder",
@@ -141,7 +150,10 @@ __all__ = (
     "async_connection_manager",
     "connection_manager",
     "decode_return_data",
+    "encode_compose_four_leg_calldata",
     "encode_function_call",
+    "encode_match_internal_calldata",
+    "encode_native_arb_calldata",
     "get_async_web3",
     "get_checksum_address",
     "get_default_adapter",

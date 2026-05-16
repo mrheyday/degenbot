@@ -18,11 +18,9 @@ impl From<TickMathError> for PyErr {
     fn from(err: TickMathError) -> Self {
         // Preserve the specific error type and message
         match err {
-            TickMathError::InvalidTick(tick) => {
-                Self::new::<PyValueError, _>(format!(
-                    "Invalid tick value: {tick}. Must be in range [-887272, 887272]"
-                ))
-            }
+            TickMathError::InvalidTick(tick) => Self::new::<PyValueError, _>(format!(
+                "Invalid tick value: {tick}. Must be in range [-887272, 887272]"
+            )),
             TickMathError::SqrtRatioOutOfBounds => {
                 Self::new::<PyValueError, _>("Sqrt ratio out of bounds")
             }
@@ -228,9 +226,13 @@ impl From<ContractError> for PyErr {
 impl From<crate::errors::AbiDecodeError> for ContractError {
     fn from(err: crate::errors::AbiDecodeError) -> Self {
         match err {
-            crate::errors::AbiDecodeError::UnsupportedType(msg) => Self::InvalidAbi { message: msg },
+            crate::errors::AbiDecodeError::UnsupportedType(msg) => {
+                Self::InvalidAbi { message: msg }
+            }
             crate::errors::AbiDecodeError::InvalidLength(msg)
-            | crate::errors::AbiDecodeError::InvalidOffset(msg) => Self::DecodingError { message: msg },
+            | crate::errors::AbiDecodeError::InvalidOffset(msg) => {
+                Self::DecodingError { message: msg }
+            }
             crate::errors::AbiDecodeError::InsufficientData { .. } => Self::DecodingError {
                 message: err.to_string(),
             },
@@ -243,3 +245,36 @@ impl From<crate::errors::AbiDecodeError> for ContractError {
 
 /// Result type alias for contract ABI encoding/decoding operations.
 pub type ContractResult<T> = Result<T, ContractError>;
+
+/// Errors that can occur while constructing Executor calldata.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExecutionError {
+    /// A required list of execution steps was empty.
+    #[error("{strategy} swap chain cannot be empty")]
+    EmptySwapChain {
+        /// Strategy label used in the error message.
+        strategy: &'static str,
+    },
+    /// Two related lists have mismatched lengths.
+    #[error("{left} length {left_len} does not match {right} length {right_len}")]
+    LengthMismatch {
+        /// Left-hand field name.
+        left: &'static str,
+        /// Left-hand list length.
+        left_len: usize,
+        /// Right-hand field name.
+        right: &'static str,
+        /// Right-hand list length.
+        right_len: usize,
+    },
+}
+
+impl From<ExecutionError> for PyErr {
+    fn from(err: ExecutionError) -> Self {
+        Self::new::<PyValueError, _>(err.to_string())
+    }
+}
+
+/// Result type alias for executor calldata construction.
+pub type ExecutionResult<T> = Result<T, ExecutionError>;

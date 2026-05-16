@@ -3,8 +3,8 @@
 //! Provides `AbiValue` enum for representing encoded/decoded ABI values,
 //! plus integer parsing helpers and string-to-value conversion.
 
-use crate::errors::{AbiDecodeError, ContractError};
 use crate::abi_types::type_::AbiType;
+use crate::errors::{AbiDecodeError, ContractError};
 use alloy::dyn_abi::DynSolValue;
 use alloy::hex;
 use alloy::primitives::{Address, I256, U256};
@@ -251,9 +251,12 @@ pub(crate) fn parse_int256_with_hex_prefix(s: &str) -> Result<I256, ParseIntErro
     let max_positive = (U256::from(1u8) << 255) - U256::from(1u8);
 
     if let Some(abs_str) = s.strip_prefix('-') {
-        if let Some(hex_str) = abs_str.strip_prefix("0x").or_else(|| abs_str.strip_prefix("0X")) {
-            let abs_val = U256::from_str_radix(hex_str, 16)
-                .map_err(|_| ParseIntError::InvalidHex)?;
+        if let Some(hex_str) = abs_str
+            .strip_prefix("0x")
+            .or_else(|| abs_str.strip_prefix("0X"))
+        {
+            let abs_val =
+                U256::from_str_radix(hex_str, 16).map_err(|_| ParseIntError::InvalidHex)?;
 
             let min_abs = U256::from(1u8) << 255;
             if abs_val == min_abs {
@@ -366,10 +369,10 @@ mod tests {
     fn test_parse_int256_large_positive_hex() {
         let max_hex = "0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
         let result = parse_int256_with_hex_prefix(max_hex);
-        
+
         assert!(result.is_ok(), "Should parse successfully: {result:?}");
         let parsed = result.unwrap();
-        
+
         assert!(
             parsed > I256::ZERO,
             "I256::MAX should be positive, but got {parsed}"
@@ -381,15 +384,15 @@ mod tests {
     fn test_parse_int256_edge_case_near_sign_bit() {
         let val_hex = "0x4000000000000000000000000000000000000000000000000000000000000000";
         let result = parse_int256_with_hex_prefix(val_hex);
-        
+
         assert!(result.is_ok(), "Should parse successfully");
         let parsed = result.unwrap();
-        
+
         assert!(
             parsed > I256::ZERO,
             "Value 2^254 should be positive, but got {parsed}"
         );
-        
+
         let expected = I256::try_from(U256::from(1u8) << 254).unwrap();
         assert_eq!(parsed, expected);
     }
@@ -398,8 +401,11 @@ mod tests {
     fn test_parse_int256_hex_out_of_range_positive_fails() {
         let too_large = "0x8000000000000000000000000000000000000000000000000000000000000000";
         let result = parse_int256_with_hex_prefix(too_large);
-        
-        assert!(result.is_err(), "Hex value 2^255 should be out of range for positive int256");
+
+        assert!(
+            result.is_err(),
+            "Hex value 2^255 should be out of range for positive int256"
+        );
     }
 
     #[test]
@@ -439,14 +445,16 @@ mod tests {
 
     #[test]
     fn test_parse_uint256_max_decimal() {
-        let max_decimal = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        let max_decimal =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935";
         let result = parse_uint256_with_hex_prefix(max_decimal).unwrap();
         assert_eq!(result, U256::MAX);
     }
 
     #[test]
     fn test_int256_min_from_str_arg() {
-        let min_val = "-57896044618658097711785492504343953926634992332820282019728792003956564819968";
+        let min_val =
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819968";
         let result = AbiValue::from_str_arg(&AbiType::Int(256), min_val).unwrap();
         match result {
             AbiValue::Int(n) => assert_eq!(n, I256::MIN),

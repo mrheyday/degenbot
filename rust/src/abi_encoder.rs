@@ -15,8 +15,8 @@
 //! 2. **Thin `PyO3` wrapper**: `encode()` and `encode_single()` functions that convert
 //!    Python objects to `AbiValue` and encode them.
 
-use crate::abi_types::{AbiType, AbiValue};
 use crate::abi_types::cached::get_cached_types;
+use crate::abi_types::{AbiType, AbiValue};
 use crate::errors::AbiDecodeError;
 use pyo3::{
     exceptions::PyValueError,
@@ -204,8 +204,8 @@ pub fn encode<'py>(
         .collect::<Result<_, _>>()?;
     let type_refs: Vec<&str> = type_strings.iter().map(String::as_str).collect();
 
-    let encoded = encode_rust(&type_refs, &abi_values?)
-        .map_err(|e| PyValueError::new_err(format!("{e}")))?;
+    let encoded =
+        encode_rust(&type_refs, &abi_values?).map_err(|e| PyValueError::new_err(format!("{e}")))?;
     Ok(PyBytes::new(py, &encoded))
 }
 
@@ -518,7 +518,10 @@ mod tests {
         use crate::abi_types::cached::TYPE_CACHE;
 
         let key: Vec<String> = types.iter().map(std::string::ToString::to_string).collect();
-        assert!(TYPE_CACHE.lock().iter().any(|(cache_key, _)| cache_key == &key));
+        assert!(TYPE_CACHE
+            .lock()
+            .iter()
+            .any(|(cache_key, _)| cache_key == &key));
     }
 }
 

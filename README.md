@@ -1,6 +1,6 @@
 # Degenbot
 
-Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve V1, Solidly V2, Balancer V2, and Aave V3 integrations on EVM-compatible blockchains.
+Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve StableSwap (V1 and NG), Solidly V2, Balancer V2, and Aave V3 integrations on EVM-compatible blockchains.
 
 ## Contents
 
@@ -16,6 +16,7 @@ Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve V1, Solid
   - [Uniswap Arbitrage](#uniswap-arbitrage)
   - [Chainlink Price Feeds](#chainlink-price-feeds)
 - [CLI Reference](#cli-reference)
+- [Bot](#bot)
 - [Configuration](#configuration)
 - [Rust Extension](#rust-extension)
 - [Documentation](#documentation)
@@ -85,11 +86,11 @@ print(f"Output: {amount_out}")
 
 | Protocol | Versions | Chains |
 |----------|----------|--------|
-| Uniswap | V2, V3, V4 | Ethereum, Base |
+| Uniswap | V2, V3, V4 | Ethereum, Base, Arbitrum |
 | Aerodrome | V2, V3 | Base |
 | PancakeSwap | V2, V3 | Ethereum, Base |
 | SushiSwap | V2, V3 | Ethereum, Base |
-| Curve | V1 | Ethereum |
+| Curve | StableSwap V1, StableSwap-NG | Ethereum, Arbitrum |
 | Solidly | V2 | Ethereum, Base | *(utility functions only, no pool class)*
 | Balancer | V2 | Ethereum | *(internal, not in public API)* |
 | Camelot | V2 | Arbitrum |
@@ -278,6 +279,11 @@ UniswapV4PoolKey(
     hooks='0x0000000000000000000000000000000000000000'
 )
 ```
+
+For dynamic-fee pools, the PoolKey `fee` is the `LPFeeLibrary.DYNAMIC_FEE_FLAG`
+sentinel (`0x800000`). The effective LP fee is read from `StateView.getSlot0(pool_id)`;
+hooks may also return one-swap override fees that require quoter or fork simulation to model safely.
+Hook fees charged through return deltas are execution costs and must be included in route profitability.
 
 ### Forking With Anvil
 
@@ -493,6 +499,16 @@ degenbot --help
 
 ### Commands
 
+#### Bot
+
+```bash
+# Scan registered pools and print the best opportunity
+degenbot bot best \
+  --chain-id 1 \
+  --input-token 0x0000000000000000000000000000000000000000 \
+  --from-address 0x000000000000000000000000000000000000dEaD
+```
+
 #### Database Management
 
 ```bash
@@ -516,15 +532,32 @@ degenbot database compact
 degenbot pool update [--chunk SIZE] [--to-block BLOCK]
 
 # Activate an exchange for tracking
-degenbot exchange activate base_uniswap_v3
+degenbot exchange activate arbitrum_uniswap_v4
 
 # Deactivate an exchange
-degenbot exchange deactivate base_uniswap_v3
+degenbot exchange deactivate arbitrum_uniswap_v4
 ```
 
 **Supported exchanges:**
+- Arbitrum: `arbitrum_camelot_v2`, `arbitrum_sushiswap_v2`, `arbitrum_sushiswap_v3`, `arbitrum_uniswap_v2`, `arbitrum_uniswap_v3`, `arbitrum_uniswap_v4`
 - Base: `base_aerodrome_v2`, `base_aerodrome_v3`, `base_pancakeswap_v2`, `base_pancakeswap_v3`, `base_sushiswap_v2`, `base_sushiswap_v3`, `base_swapbased_v2`, `base_uniswap_v2`, `base_uniswap_v3`, `base_uniswap_v4`
 - Ethereum: `ethereum_pancakeswap_v2`, `ethereum_pancakeswap_v3`, `ethereum_sushiswap_v2`, `ethereum_sushiswap_v3`, `ethereum_uniswap_v2`, `ethereum_uniswap_v3`, `ethereum_uniswap_v4`
+
+Camelot Algebra V3/V4 constants are pinned in the mev-arbitrum TypeScript registry. The Python
+Degenbot package tracks Camelot V2 pools today; Algebra concentrated-liquidity pool discovery needs
+a dedicated Algebra model/updater before it can be safely exposed as an activatable exchange.
+
+Curve Stableswap-NG uses the StableSwap `int128` index ABI (`exchange(int128,int128,uint256,uint256)`)
+despite the NG deployment family name. On Arbitrum, use the Curve factory for discovery and route
+plain/metapools through the stable Curve pool model unless a pool is explicitly classified as
+crypto-NG.
+
+Uniswap V4 pools are discovered from `PoolManager.initialize` events. The database stores the
+`PoolId`/pool hash plus the PoolKey fields because V4 pools are not standalone contracts: sorted
+`currency0/currency1`, fee, tick spacing, and hooks define the pool.
+For dynamic-fee pools, this stored `fee` is PoolKey identity only; live quote math must use
+`StateView` slot0 `lpFee`/`protocolFee`, and hook-return fee overrides require quoter or fork
+simulation before routing size through the pool.
 
 #### Aave State Management
 
@@ -581,6 +614,7 @@ Degenbot uses a TOML configuration file located at `~/.config/degenbot/config.to
 # Chain ID to RPC endpoint mapping
 1 = "https://eth-mainnet.example.com"
 8453 = "https://base-mainnet.example.com"
+42161 = "https://arb-mainnet.example.com"
 
 [database]
 # SQLite database path (optional, defaults to platform-specific location)

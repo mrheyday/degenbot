@@ -1,11 +1,17 @@
 import random
 
 import pytest
-from eth_typing import ChecksumAddress
+from eth_typing import ChainId, ChecksumAddress
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.exceptions import DegenbotValueError
 from degenbot.uniswap.deployments import (
+    ArbitrumCamelotV2,
+    ArbitrumSushiswapV2,
+    ArbitrumSushiswapV3,
+    ArbitrumUniswapV2,
+    ArbitrumUniswapV3,
+    ArbitrumUniswapV4,
     FACTORY_DEPLOYMENTS,
     UniswapFactoryDeployment,
     UniswapV2ExchangeDeployment,
@@ -41,6 +47,30 @@ def test_register_v2_exchange() -> None:
 
     del FACTORY_DEPLOYMENTS[deployment_chain][factory_deployment_address]
     del FACTORY_DEPLOYMENTS[deployment_chain]
+
+
+def test_arbitrum_exchange_deployments_are_registered() -> None:
+    assert ChainId.ARB1 in FACTORY_DEPLOYMENTS
+
+    for exchange in (
+        ArbitrumCamelotV2,
+        ArbitrumSushiswapV2,
+        ArbitrumSushiswapV3,
+        ArbitrumUniswapV2,
+        ArbitrumUniswapV3,
+    ):
+        assert exchange.factory.address in FACTORY_DEPLOYMENTS[ChainId.ARB1]
+        assert FACTORY_DEPLOYMENTS[ChainId.ARB1][exchange.factory.address] is exchange.factory
+
+
+def test_arbitrum_uniswap_v4_deployment_is_pinned() -> None:
+    assert ArbitrumUniswapV4.chain_id == ChainId.ARB1
+    assert ArbitrumUniswapV4.pool_manager.address == get_checksum_address(
+        "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32"
+    )
+    assert ArbitrumUniswapV4.state_view.address == get_checksum_address(
+        "0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990"
+    )
 
 
 def test_register_v3_exchange() -> None:

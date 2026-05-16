@@ -18,6 +18,8 @@
 //! - [`async_provider`] - Async Ethereum provider wrapper
 //! - [`contract`] - Smart contract interface with ABI encoding/decoding
 //! - [`contract_py`] - `PyO3` bindings for contract
+//! - [`execution`] - Executor calldata builders for the locked on-chain entrypoints
+//! - [`execution_py`] - `PyO3` bindings for executor calldata builders
 //! - [`async_contract`] - Async contract wrapper with batch calls
 //! - [`signature_parser`] - Robust function signature parsing
 //! - [`runtime`] - Shared Tokio runtime singleton
@@ -29,14 +31,16 @@
 pub mod abi_decoder;
 pub mod abi_encoder;
 pub mod abi_types;
-pub mod alloy_py;
 pub mod address_utils;
+pub mod alloy_py;
 pub mod async_contract;
 pub mod async_provider;
 
 pub mod contract;
 pub mod contract_py;
 pub mod errors;
+pub mod execution;
+pub mod execution_py;
 pub mod hex_utils;
 pub mod provider;
 pub mod provider_py;
@@ -48,13 +52,13 @@ pub mod tick_math;
 pub mod tick_math_py;
 
 // Re-export commonly used items at the crate root
-pub use address_utils::{parse_address, to_checksum_address, to_checksum_address_bytes, to_checksum_address_str};
+pub use address_utils::{
+    parse_address, to_checksum_address, to_checksum_address_bytes, to_checksum_address_str,
+};
 pub use hex_utils::{decode_hex, encode_hex};
 
 pub use errors::{AbiDecodeError, AddressError, ProviderError, TickMathError};
-pub use tick_math::{
-    get_sqrt_ratio_at_tick_internal, get_tick_at_sqrt_ratio_internal,
-};
+pub use tick_math::{get_sqrt_ratio_at_tick_internal, get_tick_at_sqrt_ratio_internal};
 pub use tick_math_py::{get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio};
 
 use pyo3::prelude::*;
@@ -93,6 +97,9 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Contract module
     contract_py::add_contract_module(m)?;
+
+    // Executor calldata module
+    execution_py::add_execution_module(m)?;
 
     // Async modules
     m.add_class::<async_provider::PyAsyncAlloyProvider>()?;

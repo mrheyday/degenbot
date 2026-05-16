@@ -28,6 +28,7 @@ from degenbot.aave.events import (
 )
 from degenbot.cli.aave.constants import LIQUIDATION_OPERATION_TYPES
 from degenbot.cli.aave.db_assets import get_contract
+from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.aave.db_users import is_discount_supported
 from degenbot.cli.aave.event_handlers import (
     _process_address_set_event,
@@ -71,6 +72,14 @@ def _process_transaction(tx_context: TransactionContext) -> None:
     """
     Process transaction using operation-based parsing.
     """
+
+    if aave_debug_logger.is_enabled():
+        aave_debug_logger.log_transaction_start(
+            tx_hash=tx_context.tx_hash,
+            block_number=tx_context.block_number,
+            event_count=len(tx_context.events),
+            context=tx_context,
+        )
 
     # Cache GHO vToken address for reuse
     gho_vtoken_address = tx_context.gho_vtoken_address
@@ -427,6 +436,13 @@ def _process_transaction(tx_context: TransactionContext) -> None:
                 event=event,
                 market_id=tx_context.market.id,
             )
+
+    if aave_debug_logger.is_enabled():
+        aave_debug_logger.log_transaction_end(
+            tx_hash=tx_context.tx_hash,
+            block_number=tx_context.block_number,
+            success=True,
+        )
 
 
 def _process_operation(

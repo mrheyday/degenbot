@@ -30,6 +30,7 @@ from degenbot.database.models.pools import (
     AbstractUniswapV4Pool,
     AerodromeV2PoolTable,
     AerodromeV3PoolTable,
+    CamelotV2PoolTable,
     InitializationMapTable,
     LiquidityPoolTable,
     LiquidityPositionTable,
@@ -185,7 +186,7 @@ UNISWAP_V3_POOLCREATED_EVENT_HASH = HexBytes(
 PANCAKESWAP_V3_POOLCREATED_EVENT_HASH = UNISWAP_V3_POOLCREATED_EVENT_HASH
 SUSHISWAP_V3_POOLCREATED_EVENT_HASH = UNISWAP_V3_POOLCREATED_EVENT_HASH
 
-UNISWAP_V4_POOLCREATED_EVENT_HASH = HexBytes(
+UNISWAP_V4_INITIALIZE_EVENT_HASH = HexBytes(
     "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
 )
 
@@ -1101,6 +1102,81 @@ def base_uniswap_v2_pool_updater(
             )
 
 
+def arbitrum_camelot_v2_pool_updater(
+    w3: Web3,
+    start_block: int,
+    end_block: int,
+    exchange: ExchangeTable,
+    session: Session,
+) -> None:
+    """
+    Fetch new Camelot V2 liquidity pools deployed on Arbitrum One and add their metadata to DB.
+    """
+
+    database_type = CamelotV2PoolTable
+
+    new_pool_events = get_events_from_contract(
+        w3=w3,
+        start_block=start_block,
+        end_block=end_block,
+        address=get_checksum_address(exchange.factory),
+        event_hash=UNISWAP_V2_PAIRCREATED_EVENT_HASH,
+    )
+
+    if new_pool_events:
+        for new_pool_event in tqdm.tqdm(
+            new_pool_events,
+            desc="Adding new pools",
+            bar_format="{desc}: {percentage:3.1f}% |{bar}| {n_fmt}/{total_fmt}",
+            leave=False,
+        ):
+            (token0,) = abi_decode(["address"], new_pool_event["topics"][1])
+            (token1,) = abi_decode(["address"], new_pool_event["topics"][2])
+            token0 = get_checksum_address(token0)
+            token1 = get_checksum_address(token1)
+
+            token0_in_db = _get_or_create_token(session, exchange.chain_id, token0)
+            token1_in_db = _get_or_create_token(session, exchange.chain_id, token1)
+
+            pool_address, _ = abi_decode(
+                types=["address", "uint256"],
+                data=new_pool_event["data"],
+            )
+            pool_address = get_checksum_address(pool_address)
+
+            _, _, fee_token0, fee_token1 = raw_call(
+                w3=w3,
+                address=pool_address,
+                calldata=encode_function_calldata(
+                    function_prototype="getReserves()",
+                    function_arguments=None,
+                ),
+                return_types=["uint256", "uint256", "uint256", "uint256"],
+            )
+            (fee_denominator,) = raw_call(
+                w3=w3,
+                address=pool_address,
+                calldata=encode_function_calldata(
+                    function_prototype="FEE_DENOMINATOR()",
+                    function_arguments=None,
+                ),
+                return_types=["uint256"],
+            )
+
+            session.add(
+                database_type(
+                    exchange_id=exchange.id,
+                    address=pool_address,
+                    chain=w3.eth.chain_id,
+                    token0_id=token0_in_db.id,
+                    token1_id=token1_in_db.id,
+                    fee_token0=fee_token0,
+                    fee_token1=fee_token1,
+                    fee_denominator=fee_denominator,
+                )
+            )
+
+
 def base_uniswap_v3_pool_updater(
     w3: Web3,
     start_block: int,
@@ -1168,8 +1244,11 @@ def base_uniswap_v4_pool_updater(
     session: Session,
 ) -> None:
     """
-    Fetch new Uniswap V4 liquidity pools deployed on Base mainnet and add their metadata to the
-    DB.
+    Fetch Uniswap V4 pools initialized on Base mainnet and add their metadata to the DB.
+
+    V4 pools do not have per-pool contracts. PoolManager.initialize emits an Initialize event
+    keyed by PoolId, where the PoolKey is sorted currency0/currency1 plus fee, tick spacing,
+    and hooks.
     """
 
     database_type = UniswapV4PoolTable
@@ -1184,7 +1263,7 @@ def base_uniswap_v4_pool_updater(
         start_block=start_block,
         end_block=end_block,
         address=get_checksum_address(exchange.factory),
-        event_hash=UNISWAP_V4_POOLCREATED_EVENT_HASH,
+        event_hash=UNISWAP_V4_INITIALIZE_EVENT_HASH,
     )
 
     if new_pool_events:
@@ -1579,8 +1658,11 @@ def ethereum_uniswap_v4_pool_updater(
     session: Session,
 ) -> None:
     """
-    Fetch new Uniswap V4 liquidity pools deployed on Ethereum mainnet and add their metadata to the
-    DB.
+    Fetch Uniswap V4 pools initialized on Ethereum mainnet and add their metadata to the DB.
+
+    V4 pools do not have per-pool contracts. PoolManager.initialize emits an Initialize event
+    keyed by PoolId, where the PoolKey is sorted currency0/currency1 plus fee, tick spacing,
+    and hooks.
     """
 
     database_type = UniswapV4PoolTable
@@ -1595,7 +1677,7 @@ def ethereum_uniswap_v4_pool_updater(
         start_block=start_block,
         end_block=end_block,
         address=get_checksum_address(exchange.factory),
-        event_hash=UNISWAP_V4_POOLCREATED_EVENT_HASH,
+        event_hash=UNISWAP_V4_INITIALIZE_EVENT_HASH,
     )
 
     if new_pool_events:
@@ -1910,6 +1992,12 @@ def get_v4_liquidity_events(
 POOL_UPDATER: dict[
     tuple[ChainId, str], Callable[[Web3, int, int, ExchangeTable, Session], None]
 ] = {
+    (eth_typing.ChainId.ARB1, "camelot_v2"): arbitrum_camelot_v2_pool_updater,
+    (eth_typing.ChainId.ARB1, "sushiswap_v2"): ethereum_sushiswap_v2_pool_updater,
+    (eth_typing.ChainId.ARB1, "sushiswap_v3"): ethereum_sushiswap_v3_pool_updater,
+    (eth_typing.ChainId.ARB1, "uniswap_v2"): ethereum_uniswap_v2_pool_updater,
+    (eth_typing.ChainId.ARB1, "uniswap_v3"): ethereum_uniswap_v3_pool_updater,
+    (eth_typing.ChainId.ARB1, "uniswap_v4"): ethereum_uniswap_v4_pool_updater,
     (eth_typing.ChainId.BASE, "aerodrome_v2"): base_aerodrome_v2_pool_updater,
     (eth_typing.ChainId.BASE, "aerodrome_v3"): base_aerodrome_v3_pool_updater,
     (eth_typing.ChainId.BASE, "pancakeswap_v2"): base_pancakeswap_v2_pool_updater,

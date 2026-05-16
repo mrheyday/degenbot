@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import click
@@ -14,6 +15,7 @@ from degenbot.aave.events import AaveV3GhoDebtTokenEvent, AaveV3PoolConfigEvent
 from degenbot.aave.position_analysis import UserPositionSummary, analyze_positions_for_market
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
+from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.aave.constants import POSITION_RISK_DISPLAY_LIMIT
 from degenbot.cli.aave.db_assets import get_contract, get_gho_asset, get_or_create_erc20_token
 from degenbot.cli.aave.event_fetchers import (
@@ -310,6 +312,12 @@ def deactivate_mainnet_aave_v3(
     envvar="DEGENBOT_BACKUP_INTERVAL",
     show_envvar=True,
 )
+@click.option(
+    "--debug-output",
+    "debug_output",
+    default=None,
+    help="Path to write structured JSON debug output for machine analysis.",
+)
 def aave_update(
     *,
     chunk_size: int,
@@ -322,6 +330,7 @@ def aave_update(
     dry_run: bool,
     enable_backup: bool,
     backup_interval: int,
+    debug_output: str | None,
 ) -> None:
     """
     Update positions for active Aave markets.
@@ -340,7 +349,12 @@ def aave_update(
         dry_run: If True, preview changes without committing to the database.
         enable_backup: If True, create database backups at verification intervals.
         backup_interval: Number of blocks between database backups.
+        debug_output: Path to write structured JSON debug output.
     """
+
+    if debug_output:
+        aave_debug_logger.configure(output_path=Path(debug_output))
+        logger.info(f"Debug output enabled: {debug_output}")
 
     with (  # noqa:PLR1702
         logging_redirect_tqdm(
@@ -464,6 +478,12 @@ def aave_update(
                     }
 
                     for market in markets_to_update:
+                        if aave_debug_logger.is_enabled():
+                            aave_debug_logger.configure(
+                                chain_id=ChainId(chain_id),
+                                market_id=market.id,
+                            )
+
                         try:
                             update_aave_market(
                                 provider=provider,
@@ -475,8 +495,20 @@ def aave_update(
                                 verify_chunk=verify_chunk,
                                 show_progress=show_progress,
                             )
-                        except Exception:  # noqa: BLE001
+                        except Exception as exc:  # noqa: BLE001
                             logger.exception("")
+                            if aave_debug_logger.is_enabled():
+                                aave_debug_logger.log_exception(
+                                    exc=exc,
+                                    extra_context={
+                                        "chain_id": chain_id,
+                                        "market_id": market.id,
+                                        "market_name": market.name,
+                                        "start_block": working_start_block,
+                                        "end_block": working_end_block,
+                                    },
+                                )
+                                aave_debug_logger.close()
                             sys.exit(1)
 
                         if dry_run:
@@ -527,6 +559,9 @@ def aave_update(
                     block_pbar.n = working_end_block - initial_start_block
 
             block_pbar.close()
+
+    if aave_debug_logger.is_enabled():
+        aave_debug_logger.close()
 
 
 @aave.group()

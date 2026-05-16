@@ -2,6 +2,7 @@ import pytest
 from click.testing import CliRunner
 
 from degenbot.cli import cli
+from degenbot.bot import BotOpportunity
 from degenbot.version import __version__
 
 
@@ -13,6 +14,7 @@ def runner() -> CliRunner:
 def test_cli_help(runner: CliRunner):
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
+    assert "bot" in result.output
 
 
 def test_cli_version(runner: CliRunner):
@@ -38,3 +40,71 @@ def test_cli_database_upgrade(runner: CliRunner):
 
     result = runner.invoke(cli, ["database", "upgrade"], input="")
     assert result.exit_code == 1
+
+
+def test_cli_bot_best(monkeypatch: pytest.MonkeyPatch, runner: CliRunner) -> None:
+    class _FakeBot:
+        def best(self, **kwargs):
+            return BotOpportunity(
+                strategy_id="WETH -> DAI -> WETH",
+                result=type(
+                    "R",
+                    (),
+                    {
+                        "profit_amount": 123,
+                        "input_amount": 456,
+                        "state_block": 789,
+                    },
+                )(),
+                payloads=("payload",),
+            )
+
+    monkeypatch.setattr(
+        "degenbot.cli.bot.DegenbotBot.from_pathfinding",
+        lambda **kwargs: _FakeBot(),
+    )
+
+    result = runner.invoke(
+        cli,
+        [
+            "bot",
+            "best",
+            "--chain-id",
+            "1",
+            "--input-token",
+            "0x0000000000000000000000000000000000000001",
+            "--from-address",
+            "0x000000000000000000000000000000000000dEaD",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "strategy: WETH -> DAI -> WETH" in result.output
+
+
+def test_cli_aave_update_help(runner: CliRunner) -> None:
+    result = runner.invoke(cli, ["aave", "update", "--help"])
+    assert result.exit_code == 0
+    assert "--debug-output" in result.output
+
+
+@pytest.mark.parametrize(
+    "exchange_command",
+    (
+        "arbitrum_camelot_v2",
+        "arbitrum_sushiswap_v2",
+        "arbitrum_sushiswap_v3",
+        "arbitrum_uniswap_v2",
+        "arbitrum_uniswap_v3",
+        "arbitrum_uniswap_v4",
+    ),
+)
+def test_cli_arbitrum_exchange_commands_are_registered(
+    runner: CliRunner,
+    exchange_command: str,
+) -> None:
+    activate_result = runner.invoke(cli, ["exchange", "activate", exchange_command, "--help"])
+    assert activate_result.exit_code == 0
+
+    deactivate_result = runner.invoke(cli, ["exchange", "deactivate", exchange_command, "--help"])
+    assert deactivate_result.exit_code == 0
