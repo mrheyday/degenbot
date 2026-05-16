@@ -3,11 +3,13 @@ import eth_typing
 from sqlalchemy import select
 
 from degenbot.cli import cli
+from degenbot.curve.deployments import ARBITRUM_CURVE_STABLESWAP_NG_FACTORY
 from degenbot.database import db_session
 from degenbot.database.models.base import ExchangeTable
 from degenbot.database.models.pools import PoolManagerTable
 from degenbot.uniswap.deployments import (
     ArbitrumCamelotV2,
+    ArbitrumCamelotV3,
     ArbitrumSushiswapV2,
     ArbitrumSushiswapV3,
     ArbitrumUniswapV2,
@@ -801,6 +803,80 @@ def activate_arbitrum_sushiswap_v2(
     click.echo(f"Activated Sushiswap V2 on Arbitrum (chain ID {chain_id}).")
 
 
+@activate.command("arbitrum_camelot_v3")
+def activate_arbitrum_camelot_v3(
+    chain_id: eth_typing.ChainId = eth_typing.ChainId.ARB1,
+    exchange_name: str = "camelot_v3",
+) -> None:
+    """
+    Activate Camelot V3 / Algebra on Arbitrum One.
+    """
+
+    with db_session() as session:
+        exchange = session.scalar(
+            select(ExchangeTable).where(
+                ExchangeTable.chain_id == chain_id,
+                ExchangeTable.name == exchange_name,
+            )
+        )
+        if exchange is not None:
+            if exchange.active:
+                click.echo("Exchange is already activated.")
+                return
+            exchange.active = True
+            session.commit()
+
+        if exchange is None:
+            session.add(
+                ExchangeTable(
+                    chain_id=chain_id,
+                    name=exchange_name,
+                    active=True,
+                    factory=ArbitrumCamelotV3.factory.address,
+                )
+            )
+            session.commit()
+
+    click.echo(f"Activated Camelot V3 on Arbitrum (chain ID {chain_id}).")
+
+
+@activate.command("arbitrum_curve_stableswap_ng")
+def activate_arbitrum_curve_stableswap_ng(
+    chain_id: eth_typing.ChainId = eth_typing.ChainId.ARB1,
+    exchange_name: str = "curve_stableswap_ng",
+) -> None:
+    """
+    Activate Curve Stableswap-NG discovery on Arbitrum One.
+    """
+
+    with db_session() as session:
+        exchange = session.scalar(
+            select(ExchangeTable).where(
+                ExchangeTable.chain_id == chain_id,
+                ExchangeTable.name == exchange_name,
+            )
+        )
+        if exchange is not None:
+            if exchange.active:
+                click.echo("Exchange is already activated.")
+                return
+            exchange.active = True
+            session.commit()
+
+        if exchange is None:
+            session.add(
+                ExchangeTable(
+                    chain_id=chain_id,
+                    name=exchange_name,
+                    active=True,
+                    factory=ARBITRUM_CURVE_STABLESWAP_NG_FACTORY,
+                )
+            )
+            session.commit()
+
+    click.echo(f"Activated Curve Stableswap-NG on Arbitrum (chain ID {chain_id}).")
+
+
 @activate.command("arbitrum_sushiswap_v3")
 def activate_arbitrum_sushiswap_v3(
     chain_id: eth_typing.ChainId = eth_typing.ChainId.ARB1,
@@ -1513,7 +1589,9 @@ def deactivate_arbitrum_camelot_v2(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Camelot V2 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Camelot V2 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:
@@ -1543,7 +1621,9 @@ def deactivate_arbitrum_sushiswap_v2(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Sushiswap V2 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Sushiswap V2 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:
@@ -1553,6 +1633,71 @@ def deactivate_arbitrum_sushiswap_v2(
         session.commit()
 
     click.echo(f"Deactivated Sushiswap V2 on Arbitrum (chain ID {chain_id}).")
+
+
+@deactivate.command("arbitrum_camelot_v3")
+def deactivate_arbitrum_camelot_v3(
+    chain_id: eth_typing.ChainId = eth_typing.ChainId.ARB1,
+    exchange_name: str = "camelot_v3",
+) -> None:
+    """
+    Deactivate Camelot V3 / Algebra on Arbitrum One.
+    """
+
+    with db_session() as session:
+        exchange = session.scalar(
+            select(ExchangeTable).where(
+                ExchangeTable.chain_id == chain_id,
+                ExchangeTable.name == exchange_name,
+            )
+        )
+
+        if exchange is None:
+            click.echo(
+                f"The database has no entry for Camelot V3 on Arbitrum (chain ID {chain_id})."
+            )
+            return
+
+        if not exchange.active:
+            click.echo("Exchange is already deactivated.")
+            return
+        exchange.active = False
+        session.commit()
+
+    click.echo(f"Deactivated Camelot V3 on Arbitrum (chain ID {chain_id}).")
+
+
+@deactivate.command("arbitrum_curve_stableswap_ng")
+def deactivate_arbitrum_curve_stableswap_ng(
+    chain_id: eth_typing.ChainId = eth_typing.ChainId.ARB1,
+    exchange_name: str = "curve_stableswap_ng",
+) -> None:
+    """
+    Deactivate Curve Stableswap-NG on Arbitrum One.
+    """
+
+    with db_session() as session:
+        exchange = session.scalar(
+            select(ExchangeTable).where(
+                ExchangeTable.chain_id == chain_id,
+                ExchangeTable.name == exchange_name,
+            )
+        )
+
+        if exchange is None:
+            click.echo(
+                "The database has no entry for Curve Stableswap-NG on "
+                f"Arbitrum (chain ID {chain_id})."
+            )
+            return
+
+        if not exchange.active:
+            click.echo("Exchange is already deactivated.")
+            return
+        exchange.active = False
+        session.commit()
+
+    click.echo(f"Deactivated Curve Stableswap-NG on Arbitrum (chain ID {chain_id}).")
 
 
 @deactivate.command("arbitrum_sushiswap_v3")
@@ -1573,7 +1718,9 @@ def deactivate_arbitrum_sushiswap_v3(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Sushiswap V3 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Sushiswap V3 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:
@@ -1603,7 +1750,9 @@ def deactivate_arbitrum_uniswap_v2(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Uniswap V2 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Uniswap V2 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:
@@ -1633,7 +1782,9 @@ def deactivate_arbitrum_uniswap_v3(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Uniswap V3 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Uniswap V3 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:
@@ -1663,7 +1814,9 @@ def deactivate_arbitrum_uniswap_v4(
         )
 
         if exchange is None:
-            click.echo(f"The database has no entry for Uniswap V4 on Arbitrum (chain ID {chain_id}).")
+            click.echo(
+                f"The database has no entry for Uniswap V4 on Arbitrum (chain ID {chain_id})."
+            )
             return
 
         if not exchange.active:

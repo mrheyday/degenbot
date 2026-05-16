@@ -231,6 +231,41 @@ class SushiswapV3PoolTable(AbstractUniswapV3Pool):
     pool_id: Mapped[PrimaryForeignKeyPoolId]
 
 
+class CamelotV3PoolTable(AbstractUniswapV3Pool):
+    __tablename__ = "camelot_v3_pools"
+    __mapper_args__ = {  # noqa: RUF012
+        "polymorphic_identity": "camelot_v3",
+    }
+
+    pool_id: Mapped[PrimaryForeignKeyPoolId]
+
+
+class CurveStableswapNgPoolTable(Base):
+    __tablename__ = "curve_stableswap_ng_pools"
+
+    id: Mapped[PrimaryKeyInt]
+    address: Mapped[Address]
+    chain: Mapped[int]
+    exchange_id: Mapped[int] = mapped_column(ForeignKey("exchanges.id"), index=True)
+    exchange: Mapped[ExchangeTable] = relationship("ExchangeTable")
+    implementation: Mapped[Address | None]
+    is_meta: Mapped[bool]
+    n_coins: Mapped[int]
+    coins_json: Mapped[str]
+    decimals_json: Mapped[str]
+    asset_types_json: Mapped[str]
+    balances_json: Mapped[str]
+    last_updated_block: Mapped[int | None]
+
+
+Index(
+    "ix_curve_stableswap_ng_pool_address_chain",
+    CurveStableswapNgPoolTable.address,
+    CurveStableswapNgPoolTable.chain,
+    unique=True,
+)
+
+
 class ManagedPoolLiquidityPositionTable(Base):
     __tablename__ = "managed_pool_liquidity_positions"
 

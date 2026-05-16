@@ -1,8 +1,8 @@
 import pytest
 from click.testing import CliRunner
 
-from degenbot.cli import cli
 from degenbot.bot import BotOpportunity
+from degenbot.cli import cli
 from degenbot.version import __version__
 
 
@@ -89,15 +89,35 @@ def test_cli_aave_update_help(runner: CliRunner) -> None:
 
 
 @pytest.mark.parametrize(
-    "exchange_command",
-    (
-        "arbitrum_camelot_v2",
-        "arbitrum_sushiswap_v2",
-        "arbitrum_sushiswap_v3",
-        "arbitrum_uniswap_v2",
-        "arbitrum_uniswap_v3",
-        "arbitrum_uniswap_v4",
-    ),
+    ("aave_command",),
+    [
+        ("ethereum_aave_v3",),
+        ("arbitrum_aave_v3",),
+    ],
+)
+def test_cli_aave_activation_commands_are_registered(
+    runner: CliRunner,
+    aave_command: str,
+) -> None:
+    activate_result = runner.invoke(cli, ["aave", "activate", aave_command, "--help"])
+    assert activate_result.exit_code == 0
+
+    deactivate_result = runner.invoke(cli, ["aave", "deactivate", aave_command, "--help"])
+    assert deactivate_result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("exchange_command",),
+    [
+        ("arbitrum_camelot_v2",),
+        ("arbitrum_camelot_v3",),
+        ("arbitrum_curve_stableswap_ng",),
+        ("arbitrum_sushiswap_v2",),
+        ("arbitrum_sushiswap_v3",),
+        ("arbitrum_uniswap_v2",),
+        ("arbitrum_uniswap_v3",),
+        ("arbitrum_uniswap_v4",),
+    ],
 )
 def test_cli_arbitrum_exchange_commands_are_registered(
     runner: CliRunner,

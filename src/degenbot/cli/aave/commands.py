@@ -10,12 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from degenbot.aave.deployments import EthereumMainnetAaveV3
+from degenbot.aave.deployments import AaveV3Deployment, ArbitrumAaveV3, EthereumMainnetAaveV3
 from degenbot.aave.events import AaveV3GhoDebtTokenEvent, AaveV3PoolConfigEvent
 from degenbot.aave.position_analysis import UserPositionSummary, analyze_positions_for_market
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
-from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.aave.constants import POSITION_RISK_DISPLAY_LIMIT
 from degenbot.cli.aave.db_assets import get_contract, get_gho_asset, get_or_create_erc20_token
 from degenbot.cli.aave.event_fetchers import (
@@ -44,6 +43,7 @@ from degenbot.cli.aave.verification import (
     verify_all_positions,
     verify_positions_for_users,
 )
+from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.utils import get_web3_from_config
 from degenbot.database import db_session
 from degenbot.database.models.aave import (
@@ -70,8 +70,10 @@ __all__ = [
     "aave",
     "aave_update",
     "activate",
+    "activate_arbitrum_aave_v3",
     "activate_ethereum_aave_v3",
     "deactivate",
+    "deactivate_arbitrum_aave_v3",
     "deactivate_mainnet_aave_v3",
     "market",
     "market_show",
@@ -104,11 +106,42 @@ def activate_ethereum_aave_v3(chain_id: ChainId = ChainId.ETH) -> None:
     Activate Aave V3 on Ethereum mainnet.
     """
 
-    # GHO Token Address (Ethereum Mainnet) - only needed for market activation
-    gho_token_address = get_checksum_address("0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f")
+    _activate_aave_v3_market(
+        deployment=EthereumMainnetAaveV3,
+        chain_id=chain_id,
+        start_block=16_291_070,
+        gho_token_address=get_checksum_address("0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"),
+    )
+    click.echo(f"Activated Aave V3 on Ethereum (chain ID {chain_id}).")
 
-    pool_address_provider = EthereumMainnetAaveV3.pool_address_provider
 
+@activate.command("arbitrum_aave_v3")
+def activate_arbitrum_aave_v3(chain_id: ChainId = ChainId.ARB1) -> None:
+    """
+    Activate Aave V3 on Arbitrum One.
+    """
+
+    _activate_aave_v3_market(
+        deployment=ArbitrumAaveV3,
+        chain_id=chain_id,
+        start_block=7_742_429,
+        gho_token_address=None,
+    )
+    click.echo(f"Activated Aave V3 on Arbitrum (chain ID {chain_id}).")
+
+
+def _activate_aave_v3_market(
+    *,
+    deployment: AaveV3Deployment,
+    chain_id: ChainId,
+    start_block: int,
+    gho_token_address: ChecksumAddress | None,
+) -> None:
+    if chain_id != deployment.chain_id:
+        msg = f"{deployment.name} expects chain ID {deployment.chain_id}, got {chain_id}."
+        raise click.ClickException(msg)
+
+    pool_address_provider = deployment.pool_address_provider
     provider = get_web3_from_config(chain_id=chain_id)
 
     (market_name,) = raw_call(
@@ -136,9 +169,7 @@ def activate_ethereum_aave_v3(chain_id: ChainId = ChainId.ETH) -> None:
                 chain_id=chain_id,
                 name=market_name,
                 active=True,
-                # The pool address provider was deployed on block 16,291,071 by TX
-                # 0x75fb6e6be55226712f896ae81bbfc86005b2521adb7555d28ce6fe8ab495ef73
-                last_update_block=16_291_070,
+                last_update_block=start_block,
             )
             session.add(market)
             session.flush()
@@ -146,9 +177,13 @@ def activate_ethereum_aave_v3(chain_id: ChainId = ChainId.ETH) -> None:
                 AaveV3Contract(
                     market_id=market.id,
                     name="POOL_ADDRESS_PROVIDER",
-                    address=EthereumMainnetAaveV3.pool_address_provider,
+                    address=deployment.pool_address_provider,
                 )
             )
+
+            if gho_token_address is None:
+                session.commit()
+                return
 
             # GHO tokens are chain-unique, so create a single entry that all markets on this chain
             # will share.
@@ -170,8 +205,6 @@ def activate_ethereum_aave_v3(chain_id: ChainId = ChainId.ETH) -> None:
                 session.add(AaveGhoToken(token_id=gho_asset_token.id))
 
         session.commit()
-
-    click.echo(f"Activated Aave V3 on Ethereum (chain ID {chain_id}).")
 
 
 @aave.group
@@ -210,6 +243,35 @@ def deactivate_mainnet_aave_v3(
         session.commit()
 
     click.echo(f"Deactivated Aave V3 on {chain_id.name} (chain ID {chain_id}).")
+
+
+@deactivate.command("arbitrum_aave_v3")
+def deactivate_arbitrum_aave_v3(
+    chain_id: ChainId = ChainId.ARB1,
+    market_name: str = "Aave Arbitrum Market",
+) -> None:
+    """
+    Deactivate the Aave V3 Arbitrum market.
+    """
+
+    with db_session() as session:
+        market = session.scalar(
+            select(AaveV3Market).where(
+                AaveV3Market.chain_id == chain_id,
+                AaveV3Market.name == market_name,
+            )
+        )
+
+        if market is None:
+            click.echo(f"The database has no entry for Aave V3 on Arbitrum (chain ID {chain_id}).")
+            return
+
+        if not market.active:
+            return
+        market.active = False
+        session.commit()
+
+    click.echo(f"Deactivated Aave V3 on Arbitrum (chain ID {chain_id}).")
 
 
 @aave.command(

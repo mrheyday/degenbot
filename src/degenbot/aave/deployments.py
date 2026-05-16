@@ -18,3 +18,9 @@ EthereumMainnetAaveV3 = AaveV3Deployment(
     chain_id=eth_typing.ChainId.ETH,
     pool_address_provider=get_checksum_address("0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e"),
 )
+
+ArbitrumAaveV3 = AaveV3Deployment(
+    name="Arbitrum Aave V3",
+    chain_id=eth_typing.ChainId.ARB1,
+    pool_address_provider=get_checksum_address("0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"),
+)

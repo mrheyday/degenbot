@@ -68,6 +68,8 @@ def database_reset(*, force: bool) -> None:
 @database.command("upgrade")
 @click.option(
     "--force",
+    "-y",
+    "--yes",
     is_flag=True,
     help="Skip confirmation prompt",
 )

@@ -224,6 +224,15 @@ ArbitrumCamelotV2 = UniswapV2ExchangeDeployment(
         pool_init_hash="0xa856464ae65f7619087bc369daaf7e387dae1e5af69cfa7935850ebf754b04c1",
     ),
 )
+ArbitrumCamelotV3 = UniswapV3ExchangeDeployment(
+    name="Arbitrum Camelot V3",
+    chain_id=eth_typing.ChainId.ARB1,
+    factory=UniswapFactoryDeployment(
+        address=get_checksum_address("0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"),
+        deployer=None,
+        pool_init_hash="",
+    ),
+)
 ArbitrumSushiswapV2 = UniswapV2ExchangeDeployment(
     name="Arbitrum Sushiswap V2",
     chain_id=eth_typing.ChainId.ARB1,
@@ -296,6 +305,7 @@ FACTORY_DEPLOYMENTS: dict[
     },
     eth_typing.ChainId.ARB1: {
         ArbitrumCamelotV2.factory.address: ArbitrumCamelotV2.factory,
+        ArbitrumCamelotV3.factory.address: ArbitrumCamelotV3.factory,
         ArbitrumSushiswapV2.factory.address: ArbitrumSushiswapV2.factory,
         ArbitrumSushiswapV3.factory.address: ArbitrumSushiswapV3.factory,
         ArbitrumUniswapV2.factory.address: ArbitrumUniswapV2.factory,

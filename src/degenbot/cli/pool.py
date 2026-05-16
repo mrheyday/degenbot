@@ -1,5 +1,6 @@
 import contextlib
 import itertools
+import json
 from collections import defaultdict, deque
 from collections.abc import Callable
 from typing import Any, cast
@@ -8,6 +9,7 @@ import click
 import eth_typing
 import pydantic
 import tqdm
+from eth_abi.exceptions import DecodingError
 from eth_typing.evm import BlockParams, ChecksumAddress
 from hexbytes import HexBytes
 from sqlalchemy import delete, select
@@ -15,6 +17,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 from sqlalchemy.orm import Session
 from tqdm.contrib.logging import logging_redirect_tqdm
 from web3 import Web3
+from web3.exceptions import Web3Exception
 from web3.types import LogReceipt
 
 from degenbot import abi_decode
@@ -31,6 +34,8 @@ from degenbot.database.models.pools import (
     AerodromeV2PoolTable,
     AerodromeV3PoolTable,
     CamelotV2PoolTable,
+    CamelotV3PoolTable,
+    CurveStableswapNgPoolTable,
     InitializationMapTable,
     LiquidityPoolTable,
     LiquidityPositionTable,
@@ -185,6 +190,9 @@ UNISWAP_V3_POOLCREATED_EVENT_HASH = HexBytes(
 )
 PANCAKESWAP_V3_POOLCREATED_EVENT_HASH = UNISWAP_V3_POOLCREATED_EVENT_HASH
 SUSHISWAP_V3_POOLCREATED_EVENT_HASH = UNISWAP_V3_POOLCREATED_EVENT_HASH
+ALGEBRA_POOL_EVENT_HASH = HexBytes(
+    "0x91ccaa7a278130b65168c3a0c8d3bcae84cf5e43704342bd3ec0b59e59c036db"
+)
 
 UNISWAP_V4_INITIALIZE_EVENT_HASH = HexBytes(
     "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
@@ -1177,6 +1185,235 @@ def arbitrum_camelot_v2_pool_updater(
             )
 
 
+def arbitrum_camelot_v3_pool_updater(
+    w3: Web3,
+    start_block: int,
+    end_block: int,
+    exchange: ExchangeTable,
+    session: Session,
+) -> None:
+    """
+    Fetch Camelot V3 / Algebra pools on Arbitrum One and add their metadata to DB.
+
+    Camelot V3 is Algebra-based, not a vanilla Uniswap V3 factory. Pool creation is emitted as
+    `Pool(address indexed token0,address indexed token1,address pool)`, and pool fees are dynamic.
+    The database fee columns store the current `globalState().fee` snapshot when available.
+    """
+
+    new_pool_events = get_events_from_contract(
+        w3=w3,
+        start_block=start_block,
+        end_block=end_block,
+        address=get_checksum_address(exchange.factory),
+        event_hash=ALGEBRA_POOL_EVENT_HASH,
+    )
+
+    if new_pool_events:
+        for new_pool_event in tqdm.tqdm(
+            new_pool_events,
+            desc="Adding new Camelot V3 pools",
+            bar_format="{desc}: {percentage:3.1f}% |{bar}| {n_fmt}/{total_fmt}",
+            leave=False,
+        ):
+            (token0,) = abi_decode(["address"], new_pool_event["topics"][1])
+            (token1,) = abi_decode(["address"], new_pool_event["topics"][2])
+            token0 = get_checksum_address(token0)
+            token1 = get_checksum_address(token1)
+
+            (pool_address,) = abi_decode(["address"], new_pool_event["data"])
+            pool_address = get_checksum_address(pool_address)
+
+            if session.scalar(
+                select(LiquidityPoolTable).where(
+                    LiquidityPoolTable.address == pool_address,
+                    LiquidityPoolTable.chain == exchange.chain_id,
+                )
+            ):
+                continue
+
+            token0_in_db = _get_or_create_token(session, exchange.chain_id, token0)
+            token1_in_db = _get_or_create_token(session, exchange.chain_id, token1)
+            fee, tick_spacing = _read_algebra_pool_fee_and_tick_spacing(w3, pool_address)
+
+            session.add(
+                CamelotV3PoolTable(
+                    exchange_id=exchange.id,
+                    address=pool_address,
+                    chain=exchange.chain_id,
+                    token0_id=token0_in_db.id,
+                    token1_id=token1_in_db.id,
+                    fee_token0=fee,
+                    fee_token1=fee,
+                    fee_denominator=1_000_000,
+                    tick_spacing=tick_spacing,
+                )
+            )
+
+
+def _read_algebra_pool_fee_and_tick_spacing(
+    w3: Web3,
+    pool_address: ChecksumAddress,
+) -> tuple[int, int]:
+    try:
+        _, _, fee, *_ = raw_call(
+            w3=w3,
+            address=pool_address,
+            calldata=encode_function_calldata(
+                function_prototype="globalState()",
+                function_arguments=None,
+            ),
+            return_types=["uint160", "int24", "uint16", "uint16", "uint8", "uint8", "bool"],
+        )
+    except (DecodingError, Web3Exception, ValueError):
+        fee = 0
+
+    try:
+        (tick_spacing,) = raw_call(
+            w3=w3,
+            address=pool_address,
+            calldata=encode_function_calldata(
+                function_prototype="tickSpacing()",
+                function_arguments=None,
+            ),
+            return_types=["int24"],
+        )
+    except (DecodingError, Web3Exception, ValueError):
+        tick_spacing = 60
+
+    return int(fee), int(tick_spacing)
+
+
+def arbitrum_curve_stableswap_ng_pool_updater(
+    w3: Web3,
+    start_block: int,  # noqa: ARG001
+    end_block: int,
+    exchange: ExchangeTable,
+    session: Session,
+) -> None:
+    """
+    Discover Curve Stableswap-NG pool metadata from the Arbitrum factory.
+
+    Stableswap-NG supports two to eight coins, so it is intentionally stored in a dedicated metadata
+    table instead of the two-token `pools` polymorphic table.
+    """
+
+    factory = get_checksum_address(exchange.factory)
+    (pool_count,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("pool_count()", None),
+        return_types=["uint256"],
+    )
+
+    for pool_idx in tqdm.tqdm(
+        range(int(pool_count)),
+        desc="Discovering Curve Stableswap-NG pools",
+        bar_format="{desc}: {percentage:3.1f}% |{bar}| {n_fmt}/{total_fmt}",
+        leave=False,
+    ):
+        (pool_address,) = raw_call(
+            w3=w3,
+            address=factory,
+            calldata=encode_function_calldata("pool_list(uint256)", [pool_idx]),
+            return_types=["address"],
+        )
+        metadata = _read_curve_stableswap_ng_metadata(
+            w3,
+            factory,
+            get_checksum_address(pool_address),
+        )
+        session.execute(
+            sqlite_upsert(CurveStableswapNgPoolTable)
+            .values(
+                address=metadata["address"],
+                chain=exchange.chain_id,
+                exchange_id=exchange.id,
+                implementation=metadata["implementation"],
+                is_meta=metadata["is_meta"],
+                n_coins=metadata["n_coins"],
+                coins_json=json.dumps(metadata["coins"], separators=(",", ":")),
+                decimals_json=json.dumps(metadata["decimals"], separators=(",", ":")),
+                asset_types_json=json.dumps(metadata["asset_types"], separators=(",", ":")),
+                balances_json=json.dumps(metadata["balances"], separators=(",", ":")),
+                last_updated_block=end_block,
+            )
+            .on_conflict_do_update(
+                index_elements=["address", "chain"],
+                set_={
+                    "exchange_id": exchange.id,
+                    "implementation": metadata["implementation"],
+                    "is_meta": metadata["is_meta"],
+                    "n_coins": metadata["n_coins"],
+                    "coins_json": json.dumps(metadata["coins"], separators=(",", ":")),
+                    "decimals_json": json.dumps(metadata["decimals"], separators=(",", ":")),
+                    "asset_types_json": json.dumps(metadata["asset_types"], separators=(",", ":")),
+                    "balances_json": json.dumps(metadata["balances"], separators=(",", ":")),
+                    "last_updated_block": end_block,
+                },
+            )
+        )
+
+
+def _read_curve_stableswap_ng_metadata(
+    w3: Web3,
+    factory: ChecksumAddress,
+    pool_address: ChecksumAddress,
+) -> dict[str, Any]:
+    (n_coins,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_n_coins(address)", [pool_address]),
+        return_types=["uint256"],
+    )
+    (coins,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_coins(address)", [pool_address]),
+        return_types=["address[]"],
+    )
+    (decimals,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_decimals(address)", [pool_address]),
+        return_types=["uint256[]"],
+    )
+    (balances,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_balances(address)", [pool_address]),
+        return_types=["uint256[]"],
+    )
+    (is_meta,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("is_meta(address)", [pool_address]),
+        return_types=["bool"],
+    )
+    (asset_types,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_pool_asset_types(address)", [pool_address]),
+        return_types=["uint8[]"],
+    )
+    (implementation,) = raw_call(
+        w3=w3,
+        address=factory,
+        calldata=encode_function_calldata("get_implementation_address(address)", [pool_address]),
+        return_types=["address"],
+    )
+
+    return {
+        "address": pool_address,
+        "implementation": get_checksum_address(implementation),
+        "is_meta": bool(is_meta),
+        "n_coins": int(n_coins),
+        "coins": [get_checksum_address(coin) for coin in coins[: int(n_coins)]],
+        "decimals": [int(decimal) for decimal in decimals[: int(n_coins)]],
+        "asset_types": [int(asset_type) for asset_type in asset_types[: int(n_coins)]],
+        "balances": [int(balance) for balance in balances[: int(n_coins)]],
+    }
+
+
 def base_uniswap_v3_pool_updater(
     w3: Web3,
     start_block: int,
@@ -1993,6 +2230,8 @@ POOL_UPDATER: dict[
     tuple[ChainId, str], Callable[[Web3, int, int, ExchangeTable, Session], None]
 ] = {
     (eth_typing.ChainId.ARB1, "camelot_v2"): arbitrum_camelot_v2_pool_updater,
+    (eth_typing.ChainId.ARB1, "camelot_v3"): arbitrum_camelot_v3_pool_updater,
+    (eth_typing.ChainId.ARB1, "curve_stableswap_ng"): arbitrum_curve_stableswap_ng_pool_updater,
     (eth_typing.ChainId.ARB1, "sushiswap_v2"): ethereum_sushiswap_v2_pool_updater,
     (eth_typing.ChainId.ARB1, "sushiswap_v3"): ethereum_sushiswap_v3_pool_updater,
     (eth_typing.ChainId.ARB1, "uniswap_v2"): ethereum_uniswap_v2_pool_updater,
