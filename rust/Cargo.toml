@@ -36,6 +36,12 @@ serde_json = { version = "^1.0" }
 thiserror = { version = "^2.0" }
 tokio = { version = "^1", features = ["rt-multi-thread", "time"] }
 
+# mev-arbitrum forked crates, ported to alloy 2.x / revm 38 (see the
+# mev-arbitrum workspace Cargo.toml). Available to the degenbot Rust
+# extension for CoW solver-engine DTOs and swap-path route storage.
+cowprotocol-solvers-dto-alloy = { git = "https://github.com/mrheyday/cowprotocol-solvers-dto-alloy", branch = "main" }
+swap-path = { git = "https://github.com/mrheyday/swap-path", branch = "main" }
+
 [features]
 default = []
 extension-module = ["pyo3/extension-module"]
