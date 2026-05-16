@@ -215,6 +215,24 @@ BaseUniswapV4 = UniswapV4ExchangeDeployment(
 
 
 # Arbitrum DEX -------------- START
+ArbitrumCamelotV2 = UniswapV2ExchangeDeployment(
+    name="Arbitrum Camelot V2",
+    chain_id=eth_typing.ChainId.ARB1,
+    factory=UniswapFactoryDeployment(
+        address=get_checksum_address("0x6EcCab422D763aC031210895C81787E87B43A652"),
+        deployer=None,
+        pool_init_hash="0xa856464ae65f7619087bc369daaf7e387dae1e5af69cfa7935850ebf754b04c1",
+    ),
+)
+ArbitrumCamelotV3 = UniswapV3ExchangeDeployment(
+    name="Arbitrum Camelot V3",
+    chain_id=eth_typing.ChainId.ARB1,
+    factory=UniswapFactoryDeployment(
+        address=get_checksum_address("0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"),
+        deployer=None,
+        pool_init_hash="",
+    ),
+)
 ArbitrumSushiswapV2 = UniswapV2ExchangeDeployment(
     name="Arbitrum Sushiswap V2",
     chain_id=eth_typing.ChainId.ARB1,
@@ -222,6 +240,15 @@ ArbitrumSushiswapV2 = UniswapV2ExchangeDeployment(
         address=get_checksum_address("0xc35DADB65012eC5796536bD9864eD8773aBc74C4"),
         deployer=None,
         pool_init_hash="0xe18a34eb0e04b04f7a0ac29a6e80748dca96319b42c54d679cb821dca90c6303",
+    ),
+)
+ArbitrumUniswapV2 = UniswapV2ExchangeDeployment(
+    name="Arbitrum Uniswap V2",
+    chain_id=eth_typing.ChainId.ARB1,
+    factory=UniswapFactoryDeployment(
+        address=get_checksum_address("0xf1D7CC64Fb4452F05c498126312eBE29f30Fbcf9"),
+        deployer=None,
+        pool_init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
     ),
 )
 ArbitrumUniswapV3 = UniswapV3ExchangeDeployment(
@@ -240,6 +267,16 @@ ArbitrumSushiswapV3 = UniswapV3ExchangeDeployment(
         address=get_checksum_address("0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"),
         deployer=None,
         pool_init_hash="0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
+    ),
+)
+ArbitrumUniswapV4 = UniswapV4ExchangeDeployment(
+    name="Arbitrum Uniswap V4",
+    chain_id=eth_typing.ChainId.ARB1,
+    pool_manager=UniswapPoolManagerDeployment(
+        address=get_checksum_address("0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32"),
+    ),
+    state_view=UniswapStateViewDeployment(
+        address=get_checksum_address("0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990")
     ),
 )
 # ----------------------------- END
@@ -267,8 +304,11 @@ FACTORY_DEPLOYMENTS: dict[
         BaseUniswapV3.factory.address: BaseUniswapV3.factory,
     },
     eth_typing.ChainId.ARB1: {
+        ArbitrumCamelotV2.factory.address: ArbitrumCamelotV2.factory,
+        ArbitrumCamelotV3.factory.address: ArbitrumCamelotV3.factory,
         ArbitrumSushiswapV2.factory.address: ArbitrumSushiswapV2.factory,
         ArbitrumSushiswapV3.factory.address: ArbitrumSushiswapV3.factory,
+        ArbitrumUniswapV2.factory.address: ArbitrumUniswapV2.factory,
         ArbitrumUniswapV3.factory.address: ArbitrumUniswapV3.factory,
     },
 }
