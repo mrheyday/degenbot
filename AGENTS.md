@@ -31,6 +31,21 @@ Uses `just` (see justfile) and `uv` as the package runner. Key commands:
 
 ## Python Design
 
+## MEV-Arbitrum Code Home
+
+For the MEV-Arbitrum integration, this repository is the canonical home for Python market
+intelligence and Rust latency helpers:
+
+- put protocol adapters, signal emitters, trigger analysis, and strategy-candidate scoring under
+  `src/degenbot`;
+- put hot-path Rust helpers under `rust/src` and expose them through the maturin `degenbot_rs`
+  binding;
+- keep parent-repo `solver/driver` code as thin integration glue unless a file is explicitly
+  retained there;
+- keep parent-repo TypeScript decisions in `coordinator/` and Solidity execution in `contracts/`.
+
+See `docs/architecture/mev-arbitrum-code-home.md`.
+
 ### Patterns
 - Prefer frozen `dataclass` for value objects passed between functions
 - Prefer `TypedDict` if key and value types are known
