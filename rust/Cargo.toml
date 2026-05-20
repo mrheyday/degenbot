@@ -35,6 +35,7 @@ serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 thiserror = { version = "^2.0" }
 tokio = { version = "^1", features = ["rt-multi-thread", "time"] }
+hotpath = { version = "0.16.1", optional = true }
 
 # mev-arbitrum forked crates, ported to alloy 2.x / revm 38 (see the
 # mev-arbitrum workspace Cargo.toml). Available to the degenbot Rust
@@ -46,6 +47,9 @@ swap-path = { git = "https://github.com/mrheyday/swap-path", branch = "main" }
 default = []
 extension-module = ["pyo3/extension-module"]
 auto-initialize = ["pyo3/auto-initialize"]
+hotpath = ["dep:hotpath", "hotpath/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+hotpath-cpu = ["hotpath", "hotpath/hotpath-cpu"]
 
 [dev-dependencies]
 proptest = "^1.10"

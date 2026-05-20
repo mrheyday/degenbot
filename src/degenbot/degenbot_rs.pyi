@@ -273,6 +273,21 @@ def encode_compose_four_leg_calldata(
     Encode calldata for `Executor.composeFourLeg`.
     """
 
+def compose_engine_job_json(
+    plan_json: str,
+    policy_json: str,
+    sources_json: str,
+    gates_json: str,
+    simulation_json: str,
+    now_ms: int,
+) -> str:
+    """
+    Compose and validate a deterministic Rust/Alloy execution-engine job.
+
+    Returns a JSON report containing the plan hash and broadcast decision.
+    Raises ValueError if policy, gate, or simulation admission fails.
+    """
+
 class Contract:
     """
     Synchronous wrapper for smart contract interactions.
@@ -416,6 +431,7 @@ __all__ = [
     "decode",
     "decode_return_data",
     "decode_single",
+    "compose_engine_job_json",
     "encode_function_call",
     "encode_compose_four_leg_calldata",
     "encode_match_internal_calldata",

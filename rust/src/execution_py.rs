@@ -363,7 +363,10 @@ mod tests {
 
             let expected_token_inflows = PyList::empty(py);
             expected_token_inflows
-                .append(PyString::new(py, &format!("{:#x}", params.expected_token_inflows[0])))
+                .append(PyString::new(
+                    py,
+                    &format!("{:#x}", params.expected_token_inflows[0]),
+                ))
                 .unwrap();
 
             let expected_token_inflow_min = PyList::empty(py);

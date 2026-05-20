@@ -33,6 +33,7 @@ from .execution import (
     encode_match_internal_calldata,
     encode_native_arb_calldata,
 )
+from .execution_engine import compose_engine_job
 from .version import __version__
 
 # isort: split
@@ -150,6 +151,7 @@ __all__ = (
     "async_connection_manager",
     "connection_manager",
     "decode_return_data",
+    "compose_engine_job",
     "encode_compose_four_leg_calldata",
     "encode_function_call",
     "encode_match_internal_calldata",

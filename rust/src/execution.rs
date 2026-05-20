@@ -408,7 +408,10 @@ mod tests {
         match decoded {
             DynSolValue::Tuple(fields) => {
                 assert_eq!(fields.len(), 10);
-                assert_eq!(fields[0], DynSolValue::Bytes(params.cow_settlement_calldata.to_vec()));
+                assert_eq!(
+                    fields[0],
+                    DynSolValue::Bytes(params.cow_settlement_calldata.to_vec())
+                );
                 assert_eq!(
                     fields[5],
                     DynSolValue::Uint(U256::from(FlashProtocol::Morpho as u8), 8)
@@ -423,7 +426,10 @@ mod tests {
         let params = sample_compose_params();
 
         let calldata = encode_compose_four_leg_calldata(&params).unwrap();
-        assert_eq!(&calldata[..4], &function_selector(COMPOSE_FOUR_LEG_SIGNATURE));
+        assert_eq!(
+            &calldata[..4],
+            &function_selector(COMPOSE_FOUR_LEG_SIGNATURE)
+        );
 
         let decoded = DynSolType::Tuple(vec![
             DynSolType::Bytes,
@@ -451,7 +457,10 @@ mod tests {
         match decoded {
             DynSolValue::Tuple(fields) => {
                 assert_eq!(fields.len(), 10);
-                assert_eq!(fields[0], DynSolValue::Bytes(params.across_fill_calldata.to_vec()));
+                assert_eq!(
+                    fields[0],
+                    DynSolValue::Bytes(params.across_fill_calldata.to_vec())
+                );
                 assert_eq!(
                     fields[5],
                     DynSolValue::Uint(U256::from(FlashProtocol::ERC3156 as u8), 8)

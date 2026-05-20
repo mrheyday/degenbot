@@ -20,6 +20,8 @@
 //! - [`contract_py`] - `PyO3` bindings for contract
 //! - [`execution`] - Executor calldata builders for the locked on-chain entrypoints
 //! - [`execution_py`] - `PyO3` bindings for executor calldata builders
+//! - [`execution_engine`] - Deterministic Rust/Alloy execution-job composition
+//! - [`execution_engine_py`] - `PyO3` bindings for execution-job composition
 //! - [`async_contract`] - Async contract wrapper with batch calls
 //! - [`signature_parser`] - Robust function signature parsing
 //! - [`runtime`] - Shared Tokio runtime singleton
@@ -40,6 +42,8 @@ pub mod contract;
 pub mod contract_py;
 pub mod errors;
 pub mod execution;
+pub mod execution_engine;
+pub mod execution_engine_py;
 pub mod execution_py;
 pub mod hex_utils;
 pub mod provider;
@@ -100,6 +104,9 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Executor calldata module
     execution_py::add_execution_module(m)?;
+
+    // Execution-engine composition module
+    execution_engine_py::add_execution_engine_module(m)?;
 
     // Async modules
     m.add_class::<async_provider::PyAsyncAlloyProvider>()?;
