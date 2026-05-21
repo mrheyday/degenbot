@@ -52,6 +52,7 @@ swap-path = { git = "https://github.com/mrheyday/swap-path", branch = "main" }
 # direct dependency above. Without these patches, Cargo resolves a mixed graph
 # of registry and git Alloy crates with identical versions but distinct types.
 [patch.crates-io]
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
 alloy = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
 alloy-consensus = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
 alloy-consensus-any = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }

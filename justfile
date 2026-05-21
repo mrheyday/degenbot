@@ -31,11 +31,11 @@ build-rust-extension:
 
 # Build and install Python extension in development mode
 dev:
-    uv run --no-project maturin develop
+    uv run --no-project maturin develop --manifest-path rust/Cargo.toml
 
 # Build Python extension wheels
 build-wheels:
-    uv run --no-project maturin build --release
+    uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
 # Compile Solidity test contracts
 compile-test-contracts:
