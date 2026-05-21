@@ -22,43 +22,11 @@ name = "degenbot_rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-alloy = { version = "2.0.4", default-features = false, features = [
-    "consensus",
-    "contract",
-    "dyn-abi",
+alloy = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4", version = "2.0.4", default-features = false, features = [
     "eip712",
-    "eips",
-    "json",
-    "json-abi",
-    "json-rpc",
-    "network",
-    "provider-http",
-    "provider-ipc",
-    "provider-mev-api",
-    "provider-ws",
-    "provider-ws-ring",
-    "pubsub",
+    "full",
     "reqwest",
     "reqwest-rustls-tls",
-    "rlp",
-    "rpc-client",
-    "rpc-client-ipc",
-    "rpc-client-ws",
-    "rpc-client-ws-ring",
-    "rpc-types",
-    "rpc-types-any",
-    "rpc-types-eth",
-    "rpc-types-mev",
-    "serde",
-    "signer-local",
-    "sol-types",
-    "std",
-    "transport-http",
-    "transport-ipc",
-    "transport-ws",
-    "transport-ws-base",
-    "transport-ws-ring",
-    "transports",
 ] }
 futures = { version = "^0.3" }
 log = { version = "^0.4" }
@@ -79,6 +47,42 @@ hotpath = { version = "0.16.1", optional = true }
 # extension for CoW solver-engine DTOs and swap-path route storage.
 cowprotocol-solvers-dto-alloy = { git = "https://github.com/mrheyday/cowprotocol-solvers-dto-alloy", branch = "main" }
 swap-path = { git = "https://github.com/mrheyday/swap-path", branch = "main" }
+
+# Keep transitive Alloy 2.0.4 dependencies on the same pinned git source as the
+# direct dependency above. Without these patches, Cargo resolves a mixed graph
+# of registry and git Alloy crates with identical versions but distinct types.
+[patch.crates-io]
+alloy = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-consensus-any = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-contract = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-eips = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-json-rpc = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-network = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-network-primitives = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-provider = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-pubsub = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-client = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-anvil = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-any = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-debug = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-engine = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-eth = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-trace = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-rpc-types-txpool = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-serde = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer-aws = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer-gcp = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer-ledger = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer-local = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-signer-turnkey = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-transport = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-transport-http = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-transport-ipc = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-transport-ws = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
+alloy-tx-macros = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.4" }
 
 [features]
 default = []
