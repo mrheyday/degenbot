@@ -12,6 +12,8 @@ import pytest
 from degenbot.anvil_fork import AnvilFork
 from degenbot.provider import AlloyProvider
 
+WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+
 
 @pytest.fixture
 def alloy_provider(fork_mainnet_full: AnvilFork) -> AlloyProvider:
@@ -42,12 +44,16 @@ class TestAlloyProviderInterface:
         assert callable(alloy_provider.get_code)
         assert callable(alloy_provider.is_connected)
 
-    def test_provider_has_stub_methods(self, alloy_provider: AlloyProvider):
-        """Test that AlloyProvider has stub methods for unimplemented operations."""
-        # These methods exist but raise NotImplementedError
+    def test_provider_has_account_methods(self, alloy_provider: AlloyProvider):
+        """Test that AlloyProvider has account-state methods."""
         assert callable(alloy_provider.get_balance)
         assert callable(alloy_provider.get_storage_at)
         assert callable(alloy_provider.get_transaction_count)
+
+    def test_provider_accepts_any_network(self, fork_mainnet_full: AnvilFork):
+        """Test provider can be constructed with the permissive Alloy network type."""
+        provider = AlloyProvider(fork_mainnet_full.http_url, network="any")
+        assert provider.network == "any"
 
 
 class TestAlloyProviderMethodSignatures:
@@ -82,27 +88,36 @@ class TestAlloyProviderMethodSignatures:
         assert "filter_param" in params or "from_block" in params
 
 
-class TestAlloyProviderStubMethods:
-    """Test stub methods that raise NotImplementedError."""
+class TestAlloyProviderAccountMethods:
+    """Test account-state methods backed by Alloy RPC calls."""
 
-    def test_get_balance_raises_not_implemented(self, alloy_provider: AlloyProvider):
-        """Test get_balance raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="get_balance not implemented"):
-            alloy_provider.get_balance("0x742d35Cc6634C0532925a3b8D4C9db96590d6B75")
+    def test_get_balance(self, alloy_provider: AlloyProvider):
+        """Test get_balance returns a native balance."""
+        balance = alloy_provider.get_balance(WETH_ADDRESS)
+        assert isinstance(balance, int)
+        assert balance >= 0
 
-    def test_get_balance_with_block_raises_not_implemented(self, alloy_provider: AlloyProvider):
-        """Test get_balance with block raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="get_balance not implemented"):
-            alloy_provider.get_balance("0x742d35Cc6634C0532925a3b8D4C9db96590d6B75", 18000000)
+    def test_get_balance_with_block(self, alloy_provider: AlloyProvider):
+        """Test get_balance supports an explicit block."""
+        balance = alloy_provider.get_balance(WETH_ADDRESS, 18_000_000)
+        assert isinstance(balance, int)
+        assert balance >= 0
 
     def test_get_storage_at_is_callable(self, alloy_provider: AlloyProvider):
         """Test get_storage_at is callable (now implemented)."""
         assert callable(alloy_provider.get_storage_at)
 
-    def test_get_transaction_count_raises_not_implemented(self, alloy_provider: AlloyProvider):
-        """Test get_transaction_count raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="get_transaction_count not implemented"):
-            alloy_provider.get_transaction_count("0x742d35Cc6634C0532925a3b8D4C9db96590d6B75")
+    def test_get_transaction_count(self, alloy_provider: AlloyProvider):
+        """Test get_transaction_count returns a nonce."""
+        nonce = alloy_provider.get_transaction_count(WETH_ADDRESS)
+        assert isinstance(nonce, int)
+        assert nonce >= 0
+
+    def test_get_transaction_count_with_block(self, alloy_provider: AlloyProvider):
+        """Test get_transaction_count supports an explicit block."""
+        nonce = alloy_provider.get_transaction_count(WETH_ADDRESS, 18_000_000)
+        assert isinstance(nonce, int)
+        assert nonce >= 0
 
 
 class TestAlloyProviderConnection:
@@ -151,5 +166,17 @@ class TestProviderDefaults:
     def test_get_storage_at_default_block_number(self, alloy_provider: AlloyProvider):
         """Test get_storage_at has None default for block_number (latest)."""
         sig = inspect.signature(alloy_provider.get_storage_at)
+        default = sig.parameters["block_number"].default
+        assert default is None
+
+    def test_get_balance_default_block_number(self, alloy_provider: AlloyProvider):
+        """Test get_balance has None default for block_number (latest)."""
+        sig = inspect.signature(alloy_provider.get_balance)
+        default = sig.parameters["block_number"].default
+        assert default is None
+
+    def test_get_transaction_count_default_block_number(self, alloy_provider: AlloyProvider):
+        """Test get_transaction_count has None default for block_number (latest)."""
+        sig = inspect.signature(alloy_provider.get_transaction_count)
         default = sig.parameters["block_number"].default
         assert default is None

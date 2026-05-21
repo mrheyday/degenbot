@@ -117,6 +117,11 @@ impl AbiValue {
                 let values: Result<Vec<Self>, _> = vals.into_iter().map(Self::from_alloy).collect();
                 Ok(Self::Array(values?))
             }
+            DynSolValue::CustomStruct { tuple, .. } => {
+                let values: Result<Vec<Self>, _> =
+                    tuple.into_iter().map(Self::from_alloy).collect();
+                Ok(Self::Array(values?))
+            }
             DynSolValue::Function(_) => Err(AbiDecodeError::UnsupportedType(
                 "function type not supported".to_string(),
             )),

@@ -22,7 +22,44 @@ name = "degenbot_rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-alloy = { version = "^2.0", features = ["full"] }
+alloy = { version = "2.0.4", default-features = false, features = [
+    "consensus",
+    "contract",
+    "dyn-abi",
+    "eip712",
+    "eips",
+    "json",
+    "json-abi",
+    "json-rpc",
+    "network",
+    "provider-http",
+    "provider-ipc",
+    "provider-mev-api",
+    "provider-ws",
+    "provider-ws-ring",
+    "pubsub",
+    "reqwest",
+    "reqwest-rustls-tls",
+    "rlp",
+    "rpc-client",
+    "rpc-client-ipc",
+    "rpc-client-ws",
+    "rpc-client-ws-ring",
+    "rpc-types",
+    "rpc-types-any",
+    "rpc-types-eth",
+    "rpc-types-mev",
+    "serde",
+    "signer-local",
+    "sol-types",
+    "std",
+    "transport-http",
+    "transport-ipc",
+    "transport-ws",
+    "transport-ws-base",
+    "transport-ws-ring",
+    "transports",
+] }
 futures = { version = "^0.3" }
 log = { version = "^0.4" }
 lru = { version = "^0.16" }

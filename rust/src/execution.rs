@@ -106,7 +106,7 @@ pub struct NativeArbParams {
 }
 
 impl NativeArbParams {
-    pub fn validate(&self) -> ExecutionResult<()> {
+    pub const fn validate(&self) -> ExecutionResult<()> {
         if self.swaps.is_empty() {
             return Err(ExecutionError::EmptySwapChain {
                 strategy: "native arb",
@@ -145,7 +145,7 @@ pub struct MatchParams {
 }
 
 impl MatchParams {
-    pub fn validate(&self) -> ExecutionResult<()> {
+    pub const fn validate(&self) -> ExecutionResult<()> {
         if self.expected_token_inflows.len() != self.expected_token_inflow_min.len() {
             return Err(ExecutionError::LengthMismatch {
                 left: "expected_token_inflows",
@@ -202,7 +202,7 @@ pub struct ComposeParams {
 }
 
 impl ComposeParams {
-    pub fn validate(&self) -> ExecutionResult<()> {
+    pub const fn validate(&self) -> ExecutionResult<()> {
         if self.arb_swaps.is_empty() {
             return Err(ExecutionError::EmptySwapChain {
                 strategy: "four-leg composition",
@@ -237,7 +237,7 @@ pub fn function_selector(signature: &str) -> [u8; 4] {
     selector
 }
 
-fn encode_calldata(signature: &str, value: DynSolValue) -> Bytes {
+fn encode_calldata(signature: &str, value: &DynSolValue) -> Bytes {
     let encoded = value.abi_encode_params();
     let mut calldata = Vec::with_capacity(4 + encoded.len());
     calldata.extend_from_slice(&function_selector(signature));
@@ -250,14 +250,17 @@ pub fn encode_native_arb_calldata(params: &NativeArbParams) -> ExecutionResult<B
     params.validate()?;
     Ok(encode_calldata(
         EXECUTE_NATIVE_ARB_SIGNATURE,
-        params.to_alloy(),
+        &params.to_alloy(),
     ))
 }
 
 /// Encode `Executor.matchInternal`.
 pub fn encode_match_internal_calldata(params: &MatchParams) -> ExecutionResult<Bytes> {
     params.validate()?;
-    Ok(encode_calldata(MATCH_INTERNAL_SIGNATURE, params.to_alloy()))
+    Ok(encode_calldata(
+        MATCH_INTERNAL_SIGNATURE,
+        &params.to_alloy(),
+    ))
 }
 
 /// Encode `Executor.composeFourLeg`.
@@ -265,7 +268,7 @@ pub fn encode_compose_four_leg_calldata(params: &ComposeParams) -> ExecutionResu
     params.validate()?;
     Ok(encode_calldata(
         COMPOSE_FOUR_LEG_SIGNATURE,
-        params.to_alloy(),
+        &params.to_alloy(),
     ))
 }
 

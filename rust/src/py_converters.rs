@@ -22,6 +22,7 @@ use alloy::consensus::{
 };
 use alloy::eips::eip4895::Withdrawal;
 use alloy::network::primitives::BlockTransactions;
+use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcTransaction};
 use alloy::primitives::{Address, TxKind, B256, U256};
 use alloy::rpc::types::eth::{Block, Header as RpcHeader, Transaction};
 use alloy::rpc::types::Log;
@@ -593,6 +594,70 @@ fn consensus_header_to_py_dict<'py>(
     Ok(dict)
 }
 
+fn any_header_to_py_dict<'py>(py: Python<'py>, header: &AnyHeader) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+
+    dict.set_item(
+        "parent_hash",
+        create_hexbytes(py, header.parent_hash.as_ref())?,
+    )?;
+    dict.set_item(
+        "sha3_uncles",
+        create_hexbytes(py, header.ommers_hash.as_ref())?,
+    )?;
+    dict.set_item("miner", address_to_checksum_string(&header.beneficiary))?;
+    dict.set_item(
+        "state_root",
+        create_hexbytes(py, header.state_root.as_ref())?,
+    )?;
+    dict.set_item(
+        "transactions_root",
+        create_hexbytes(py, header.transactions_root.as_ref())?,
+    )?;
+    dict.set_item(
+        "receipts_root",
+        create_hexbytes(py, header.receipts_root.as_ref())?,
+    )?;
+    dict.set_item(
+        "logs_bloom",
+        create_hexbytes(py, header.logs_bloom.as_ref())?,
+    )?;
+    dict.set_item(
+        "difficulty",
+        crate::alloy_py::u256_to_py(py, &header.difficulty)?,
+    )?;
+    dict.set_item("number", header.number)?;
+    dict.set_item("gas_limit", header.gas_limit)?;
+    dict.set_item("gas_used", header.gas_used)?;
+    dict.set_item("timestamp", header.timestamp)?;
+    dict.set_item("extra_data", create_hexbytes(py, &header.extra_data)?)?;
+
+    set_opt_b256(&dict, "mix_hash", header.mix_hash)?;
+    match header.nonce {
+        Some(nonce) => dict.set_item("nonce", create_hexbytes(py, nonce.as_ref())?)?,
+        None => dict.set_item("nonce", py.None())?,
+    }
+
+    set_opt_u64(&dict, "base_fee_per_gas", header.base_fee_per_gas)?;
+    set_opt_b256(&dict, "withdrawals_root", header.withdrawals_root)?;
+    set_opt_u64(&dict, "blob_gas_used", header.blob_gas_used)?;
+    set_opt_u64(&dict, "excess_blob_gas", header.excess_blob_gas)?;
+    set_opt_b256(
+        &dict,
+        "parent_beacon_block_root",
+        header.parent_beacon_block_root,
+    )?;
+    set_opt_b256(&dict, "requests_hash", header.requests_hash)?;
+    set_opt_b256(
+        &dict,
+        "block_access_list_hash",
+        header.block_access_list_hash,
+    )?;
+    set_opt_u64(&dict, "slot_number", header.slot_number)?;
+
+    Ok(dict)
+}
+
 fn withdrawal_to_py_dict<'py>(
     py: Python<'py>,
     withdrawal: &Withdrawal,
@@ -652,6 +717,77 @@ pub fn block_to_py_dict<'py>(
     }
 
     if let Some(withdrawals) = &block.withdrawals {
+        let w_list = PyList::empty(py);
+        for w in withdrawals {
+            w_list.append(withdrawal_to_py_dict(py, w)?)?;
+        }
+        dict.set_item("withdrawals", w_list)?;
+    } else {
+        dict.set_item("withdrawals", py.None())?;
+    }
+
+    Ok(dict)
+}
+
+fn any_transaction_to_py<'py>(
+    py: Python<'py>,
+    tx: &AnyRpcTransaction,
+) -> PyResult<Bound<'py, PyAny>> {
+    let json_value = serde_json::to_value(tx).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Failed to serialize transaction: {e}"))
+    })?;
+    json_to_py_with_hexbytes(py, json_value)
+}
+
+pub fn any_block_to_py_dict<'py>(
+    py: Python<'py>,
+    block: &AnyRpcBlock,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    let block = block.as_ref();
+    let inner = &block.inner;
+
+    dict.set_item("hash", create_hexbytes(py, inner.header.hash.as_ref())?)?;
+
+    let inner_dict = any_header_to_py_dict(py, &inner.header.inner)?;
+    for (key, val) in inner_dict.iter() {
+        dict.set_item(&key, val)?;
+    }
+
+    set_opt_u256(
+        &dict,
+        "total_difficulty",
+        inner.header.total_difficulty.as_ref(),
+    )?;
+    set_opt_u256(&dict, "size", inner.header.size.as_ref())?;
+
+    let uncles_list = PyList::empty(py);
+    for uncle in &inner.uncles {
+        uncles_list.append(create_hexbytes(py, uncle.as_ref())?)?;
+    }
+    dict.set_item("uncles", uncles_list)?;
+
+    match &inner.transactions {
+        BlockTransactions::Full(txs) => {
+            let tx_list = PyList::empty(py);
+            for tx in txs {
+                tx_list.append(any_transaction_to_py(py, tx)?)?;
+            }
+            dict.set_item("transactions", tx_list)?;
+        }
+        BlockTransactions::Hashes(hashes) => {
+            let hash_list = PyList::empty(py);
+            for hash in hashes {
+                hash_list.append(create_hexbytes(py, hash.as_ref())?)?;
+            }
+            dict.set_item("transactions", hash_list)?;
+        }
+        BlockTransactions::Uncle => {
+            dict.set_item("transactions", py.None())?;
+        }
+    }
+
+    if let Some(withdrawals) = &inner.withdrawals {
         let w_list = PyList::empty(py);
         for w in withdrawals {
             w_list.append(withdrawal_to_py_dict(py, w)?)?;

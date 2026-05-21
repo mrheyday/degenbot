@@ -104,16 +104,19 @@ class AlloyProvider:
         rpc_url: str,
         max_retries: int = 10,
         max_blocks_per_request: int = 5000,
+        network: str = "any",
     ) -> None:
         self._rpc_url = rpc_url
         self._max_retries = max_retries
         self._max_blocks_per_request = max_blocks_per_request
+        self._network = network
 
         # Initialize Rust provider
         self._provider = _AlloyProvider(
             rpc_url=rpc_url,
             max_retries=max_retries,
             max_blocks_per_request=max_blocks_per_request,
+            network=network,
         )
 
     # =========================================================================
@@ -124,6 +127,11 @@ class AlloyProvider:
     def rpc_url(self) -> str:
         """Get the RPC URL."""
         return self._rpc_url
+
+    @property
+    def network(self) -> str:
+        """Get the configured Alloy network type."""
+        return cast("str", self._provider.network)
 
     @property
     def chain_id(self) -> int:
@@ -292,10 +300,14 @@ class AlloyProvider:
     ) -> int:
         """Get the balance of an address in wei.
 
-        Not yet implemented for AlloyProvider.
+        Args:
+            address: Ethereum address
+            block_number: Block number to get balance at (default: latest)
+
+        Returns:
+            Native balance in wei.
         """
-        msg = "get_balance not implemented for AlloyProvider"
-        raise NotImplementedError(msg)
+        return cast("int", self._provider.get_balance(address, block_number))
 
     def get_storage_at(
         self,
@@ -322,10 +334,14 @@ class AlloyProvider:
     ) -> int:
         """Get the transaction count (nonce) for an address.
 
-        Not yet implemented for AlloyProvider.
+        Args:
+            address: Ethereum address
+            block_number: Block number to query at (default: latest)
+
+        Returns:
+            Account transaction count.
         """
-        msg = "get_transaction_count not implemented for AlloyProvider"
-        raise NotImplementedError(msg)
+        return self._provider.get_transaction_count(address, block_number)
 
     def __enter__(self) -> Self:
         """Context manager entry."""

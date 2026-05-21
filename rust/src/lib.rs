@@ -22,6 +22,9 @@
 //! - [`execution_py`] - `PyO3` bindings for executor calldata builders
 //! - [`execution_engine`] - Deterministic Rust/Alloy execution-job composition
 //! - [`execution_engine_py`] - `PyO3` bindings for execution-job composition
+//! - [`signed_order_admission`] - Deterministic signed-order hashing, fill-capacity, and min-output admission
+//! - [`signed_order_admission_py`] - `PyO3` bindings for signed-order admission
+//! - [`fixed_abi`] - `sol!`-checked bindings for stable hot-path contract interfaces
 //! - [`async_contract`] - Async contract wrapper with batch calls
 //! - [`signature_parser`] - Robust function signature parsing
 //! - [`runtime`] - Shared Tokio runtime singleton
@@ -45,6 +48,7 @@ pub mod execution;
 pub mod execution_engine;
 pub mod execution_engine_py;
 pub mod execution_py;
+pub mod fixed_abi;
 pub mod hex_utils;
 pub mod provider;
 pub mod provider_py;
@@ -52,6 +56,8 @@ pub mod py_cache;
 pub mod py_converters;
 pub mod runtime;
 pub mod signature_parser;
+pub mod signed_order_admission;
+pub mod signed_order_admission_py;
 pub mod tick_math;
 pub mod tick_math_py;
 
@@ -107,6 +113,9 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Execution-engine composition module
     execution_engine_py::add_execution_engine_module(m)?;
+
+    // Signed-order admission module
+    signed_order_admission_py::add_signed_order_admission_module(m)?;
 
     // Async modules
     m.add_class::<async_provider::PyAsyncAlloyProvider>()?;

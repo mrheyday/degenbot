@@ -138,6 +138,22 @@ class TestProviderAdapterWithLiveConnection:
             assert isinstance(storage, (bytes, HexBytes))
             assert len(storage) == 32  # Always 32 bytes
 
+    def test_alloy_adapter_get_balance(self):
+        """Test get_balance through Alloy adapter."""
+        with AlloyProvider(ETHEREUM_ARCHIVE_NODE_HTTP_URI) as alloy:
+            adapter = ProviderAdapter.from_alloy(alloy)
+            balance = adapter.get_balance(WETH_ADDRESS, 18_000_000)
+            assert isinstance(balance, int)
+            assert balance >= 0
+
+    def test_alloy_adapter_get_transaction_count(self):
+        """Test get_transaction_count through Alloy adapter."""
+        with AlloyProvider(ETHEREUM_ARCHIVE_NODE_HTTP_URI) as alloy:
+            adapter = ProviderAdapter.from_alloy(alloy)
+            count = adapter.get_transaction_count(WETH_ADDRESS, 18_000_000)
+            assert isinstance(count, int)
+            assert count >= 0
+
     def test_alloy_adapter_properties(self):
         """Test adapter properties with live connection."""
         with AlloyProvider(ETHEREUM_ARCHIVE_NODE_HTTP_URI) as alloy:

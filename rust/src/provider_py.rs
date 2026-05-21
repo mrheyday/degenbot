@@ -6,9 +6,11 @@
 //! - Input validation errors (invalid address, invalid position) → `PyValueError`
 //! - Serialization/conversion errors during Python object creation → `PyValueError`
 
-use crate::provider::{AlloyProvider, LogFetcher, LogFilter};
+use crate::provider::{AlloyProvider, LogFetcher, LogFilter, ProviderBlock, ProviderNetwork};
 use crate::py_cache::create_hexbytes;
-use crate::py_converters::{block_to_py_dict, json_to_py_with_hexbytes, log_to_py_dict};
+use crate::py_converters::{
+    any_block_to_py_dict, block_to_py_dict, json_to_py_with_hexbytes, log_to_py_dict,
+};
 use crate::runtime::get_runtime;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -78,20 +80,24 @@ impl PyAlloyProvider {
     /// - WS/WSS URLs use WebSocket transport
     /// - File paths (Unix: /path, Windows: \\.\pipe\...) use IPC transport
     #[new]
-    #[pyo3(signature = (rpc_url, max_retries=10, max_blocks_per_request=5000))]
+    #[pyo3(signature = (rpc_url, max_retries=10, max_blocks_per_request=5000, network="any"))]
     fn new(
         py: Python<'_>,
         rpc_url: &str,
         max_retries: u32,
         max_blocks_per_request: u64,
+        network: &str,
     ) -> PyResult<Self> {
         // Copy string before detaching from GIL
         let rpc_url = rpc_url.to_string();
+        let network = ProviderNetwork::parse(network).map_err(Into::<PyErr>::into)?;
 
         // Release GIL during provider creation to allow parallel instantiation
         let provider = py
             .detach(|| {
-                get_runtime().block_on(async { AlloyProvider::new(&rpc_url, max_retries).await })
+                get_runtime().block_on(async {
+                    AlloyProvider::new_with_network(&rpc_url, max_retries, network).await
+                })
             })
             .map_err(Into::<PyErr>::into)?;
 
@@ -241,7 +247,10 @@ impl PyAlloyProvider {
 
         match block {
             Some(block) => {
-                let py_dict = block_to_py_dict(py, &block)?;
+                let py_dict = match block {
+                    ProviderBlock::Ethereum(block) => block_to_py_dict(py, &block)?,
+                    ProviderBlock::Any(block) => any_block_to_py_dict(py, &block)?,
+                };
                 Ok(Some(py_dict.into_any()))
             }
             None => Ok(None),
@@ -258,6 +267,11 @@ impl PyAlloyProvider {
     #[getter]
     fn rpc_url(&self) -> String {
         self.provider.rpc_url().to_string()
+    }
+
+    #[getter]
+    fn network(&self) -> &'static str {
+        self.provider.network()
     }
 
     /// Get current gas price.
@@ -400,6 +414,48 @@ impl PyAlloyProvider {
         let result_hb = create_hexbytes(py, result.as_slice())?;
 
         Ok(result_hb.into())
+    }
+
+    /// Get the native balance for an address.
+    #[pyo3(signature = (address, block_number=None))]
+    fn get_balance(
+        &self,
+        py: Python<'_>,
+        address: &str,
+        block_number: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        let addr = crate::address_utils::parse_address(address)
+            .map_err(|e| PyValueError::new_err(format!("Invalid address: {e}")))?;
+
+        let provider = Arc::clone(&self.provider);
+
+        let result = py
+            .detach(|| {
+                get_runtime().block_on(async { provider.get_balance(&addr, block_number).await })
+            })
+            .map_err(Into::<PyErr>::into)?;
+
+        Ok(crate::alloy_py::u256_to_py(py, &result)?.unbind())
+    }
+
+    /// Get the transaction count, also known as account nonce.
+    #[pyo3(signature = (address, block_number=None))]
+    fn get_transaction_count(
+        &self,
+        py: Python<'_>,
+        address: &str,
+        block_number: Option<u64>,
+    ) -> PyResult<u64> {
+        let addr = crate::address_utils::parse_address(address)
+            .map_err(|e| PyValueError::new_err(format!("Invalid address: {e}")))?;
+
+        let provider = Arc::clone(&self.provider);
+
+        py.detach(|| {
+            get_runtime()
+                .block_on(async { provider.get_transaction_count(&addr, block_number).await })
+        })
+        .map_err(Into::<PyErr>::into)
     }
 }
 

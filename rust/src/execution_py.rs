@@ -84,15 +84,15 @@ fn required_item<'py>(dict: &'py Bound<'py, PyDict>, key: &str) -> PyResult<Boun
 fn parse_swap_step(step: &Bound<'_, PyAny>) -> PyResult<SwapStep> {
     let dict = step.cast::<PyDict>()?;
 
-    let dex_kind = required_item(&dict, "dex_kind")?
+    let dex_kind = required_item(dict, "dex_kind")?
         .extract::<String>()
         .and_then(|s| parse_dex_kind(&s))?;
-    let router = parse_address(&required_item(&dict, "router")?)?;
-    let call_data = parse_bytes(&required_item(&dict, "call_data")?)?;
-    let token_in = parse_address(&required_item(&dict, "token_in")?)?;
-    let token_out = parse_address(&required_item(&dict, "token_out")?)?;
-    let amount_in = extract_python_u256(&required_item(&dict, "amount_in")?)?;
-    let amount_out_min = extract_python_u256(&required_item(&dict, "amount_out_min")?)?;
+    let router = parse_address(&required_item(dict, "router")?)?;
+    let call_data = parse_bytes(&required_item(dict, "call_data")?)?;
+    let token_in = parse_address(&required_item(dict, "token_in")?)?;
+    let token_out = parse_address(&required_item(dict, "token_out")?)?;
+    let amount_in = extract_python_u256(&required_item(dict, "amount_in")?)?;
+    let amount_out_min = extract_python_u256(&required_item(dict, "amount_out_min")?)?;
 
     Ok(SwapStep {
         dex_kind,
@@ -109,12 +109,13 @@ fn parse_swap_steps(swaps: &Bound<'_, PyList>) -> PyResult<Vec<SwapStep>> {
     swaps.iter().map(|step| parse_swap_step(&step)).collect()
 }
 
-fn execution_error_to_py(err: crate::errors::ExecutionError) -> PyErr {
+fn execution_error_to_py(err: &crate::errors::ExecutionError) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
 
 /// Encode `Executor.executeNativeArb` calldata from Python values.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_native_arb_calldata")]
 #[pyo3(signature = (
     flash_lender,
@@ -147,12 +148,13 @@ pub fn encode_native_arb_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_native_arb_calldata(&params))
-        .map_err(execution_error_to_py)?;
+        .map_err(|err| execution_error_to_py(&err))?;
     Ok(PyBytes::new(py, calldata.as_ref()))
 }
 
 /// Encode `Executor.matchInternal` calldata from Python values.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_match_internal_calldata")]
 #[pyo3(signature = (
     cow_settlement_calldata,
@@ -203,12 +205,13 @@ pub fn encode_match_internal_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_match_internal_calldata(&params))
-        .map_err(execution_error_to_py)?;
+        .map_err(|err| execution_error_to_py(&err))?;
     Ok(PyBytes::new(py, calldata.as_ref()))
 }
 
 /// Encode `Executor.composeFourLeg` calldata from Python values.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_compose_four_leg_calldata")]
 #[pyo3(signature = (
     across_fill_calldata,
@@ -250,7 +253,7 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_compose_four_leg_calldata(&params))
-        .map_err(execution_error_to_py)?;
+        .map_err(|err| execution_error_to_py(&err))?;
     Ok(PyBytes::new(py, calldata.as_ref()))
 }
 

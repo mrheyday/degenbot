@@ -41,7 +41,7 @@ class AsyncAlloyProvider:
         >>> asyncio.run(main())
     """
 
-    def __init__(self, provider: _AsyncAlloyProvider, rpc_url: str) -> None:
+    def __init__(self, provider: _AsyncAlloyProvider, rpc_url: str, network: str) -> None:
         """Initialize with an existing provider instance.
 
         Use `create()` to instantiate new providers.
@@ -52,29 +52,44 @@ class AsyncAlloyProvider:
         """
         self._provider = provider
         self._rpc_url = rpc_url
+        self._network = network
 
     @classmethod
     async def create(
         cls,
         rpc_url: str,
         max_retries: int = 10,
+        max_blocks_per_request: int = 5000,
+        network: str = "any",
     ) -> Self:
         """Create a new async provider.
 
         Args:
             rpc_url: RPC endpoint URL
             max_retries: Max retry attempts
+            max_blocks_per_request: Maximum blocks per log request
+            network: Alloy network type ("any" or "ethereum")
 
         Returns:
             A new AsyncAlloyProvider instance
         """
-        provider = await _AsyncAlloyProvider.create(rpc_url, max_retries)
-        return cls(provider, rpc_url)
+        provider = await _AsyncAlloyProvider.create(
+            rpc_url,
+            max_retries,
+            max_blocks_per_request,
+            network,
+        )
+        return cls(provider, rpc_url, network)
 
     @property
     def rpc_url(self) -> str:
         """Get the RPC URL."""
         return self._rpc_url
+
+    @property
+    def network(self) -> str:
+        """Get the configured Alloy network type."""
+        return self._network
 
     async def get_block_number(self) -> int:
         """Get current block number asynchronously.
@@ -150,6 +165,14 @@ class AsyncAlloyProvider:
             ValueError: If the RPC call fails
         """
         return await self._provider.get_block(block_number)
+
+    async def get_balance(self, address: str, block_number: int | None = None) -> int:
+        """Get the native balance for an address asynchronously."""
+        return await self._provider.get_balance(address, block_number)
+
+    async def get_transaction_count(self, address: str, block_number: int | None = None) -> int:
+        """Get the account transaction count asynchronously."""
+        return await self._provider.get_transaction_count(address, block_number)
 
 
 __all__ = ["AsyncAlloyProvider"]

@@ -324,9 +324,7 @@ class ProviderAdapter:
             if block is not None:
                 return self._provider.eth.get_balance(address, block)
             return self._provider.eth.get_balance(address)
-        # AlloyProvider doesn't have get_balance yet
-        msg = "get_balance not implemented for AlloyProvider"
-        raise NotImplementedError(msg)
+        return self._provider.get_balance(address, block)
 
     def get_storage_at(
         self,
@@ -368,9 +366,7 @@ class ProviderAdapter:
             if block is not None:
                 return self._provider.eth.get_transaction_count(address, block)
             return self._provider.eth.get_transaction_count(address)
-        # AlloyProvider doesn't have get_transaction_count yet
-        msg = "get_transaction_count not implemented for AlloyProvider"
-        raise NotImplementedError(msg)
+        return self._provider.get_transaction_count(address, block)
 
     def is_connected(self) -> bool:
         """Check if the provider is connected."""

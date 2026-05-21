@@ -3,10 +3,12 @@
 //! Provides a Python-facing async provider that wraps `AlloyProvider`
 //! methods for non-blocking Ethereum RPC operations via `PyO3`.
 
-use crate::provider::{AlloyProvider, LogFetcher};
+use crate::provider::{AlloyProvider, LogFetcher, ProviderBlock, ProviderNetwork};
 use crate::provider_py::PyAlloyProvider;
 use crate::py_cache::create_hexbytes;
-use crate::py_converters::{block_to_py_dict, json_to_py_with_hexbytes, log_to_py_dict};
+use crate::py_converters::{
+    any_block_to_py_dict, block_to_py_dict, json_to_py_with_hexbytes, log_to_py_dict,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -44,15 +46,18 @@ impl PyAsyncAlloyProvider {
     /// * `rpc_url` - The RPC endpoint URL
     /// * `max_retries` - Maximum retry attempts (default: 10)
     #[staticmethod]
-    #[pyo3(signature = (rpc_url, max_retries=10, max_blocks_per_request=5000))]
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (rpc_url, max_retries=10, max_blocks_per_request=5000, network=String::from("any")))]
     fn create(
         py: Python<'_>,
         rpc_url: String,
         max_retries: u32,
         max_blocks_per_request: u64,
+        network: String,
     ) -> PyResult<Bound<'_, PyAny>> {
+        let network = ProviderNetwork::parse(&network).map_err(Into::<PyErr>::into)?;
         future_into_py(py, async move {
-            let provider = AlloyProvider::new(&rpc_url, max_retries)
+            let provider = AlloyProvider::new_with_network(&rpc_url, max_retries, network)
                 .await
                 .map_err(Into::<PyErr>::into)?;
 
@@ -132,7 +137,10 @@ impl PyAsyncAlloyProvider {
 
             let result = Python::attach(|py| match block {
                 Some(block_val) => {
-                    let py_dict = block_to_py_dict(py, &block_val)?;
+                    let py_dict = match block_val {
+                        ProviderBlock::Ethereum(block) => block_to_py_dict(py, &block)?,
+                        ProviderBlock::Any(block) => any_block_to_py_dict(py, &block)?,
+                    };
                     Ok::<_, PyErr>(Some(py_dict.into_any().unbind()))
                 }
                 None => Ok(None),
@@ -190,6 +198,48 @@ impl PyAsyncAlloyProvider {
                 .map_err(Into::<PyErr>::into)?;
 
             Python::attach(|py| create_hexbytes(py, &result).map(Bound::unbind))
+        })
+    }
+
+    /// Get the native balance for an address asynchronously.
+    #[pyo3(signature = (address, block_number=None))]
+    fn get_balance<'py>(
+        &self,
+        py: Python<'py>,
+        address: &str,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let addr = crate::address_utils::parse_address(address)
+            .map_err(|e| PyValueError::new_err(format!("Invalid address: {e}")))?;
+        let provider = Arc::clone(&self.provider);
+
+        future_into_py(py, async move {
+            let result = provider
+                .get_balance(&addr, block_number)
+                .await
+                .map_err(Into::<PyErr>::into)?;
+
+            Python::attach(|py| crate::alloy_py::u256_to_py(py, &result).map(Bound::unbind))
+        })
+    }
+
+    /// Get the transaction count, also known as account nonce, asynchronously.
+    #[pyo3(signature = (address, block_number=None))]
+    fn get_transaction_count<'py>(
+        &self,
+        py: Python<'py>,
+        address: &str,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let addr = crate::address_utils::parse_address(address)
+            .map_err(|e| PyValueError::new_err(format!("Invalid address: {e}")))?;
+        let provider = Arc::clone(&self.provider);
+
+        future_into_py(py, async move {
+            provider
+                .get_transaction_count(&addr, block_number)
+                .await
+                .map_err(Into::<PyErr>::into)
         })
     }
 

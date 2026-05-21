@@ -127,7 +127,7 @@ pub enum StrategyKind {
     InternalMatch,
     /// Across/native-arb/CoW/UniswapX composition.
     FourLeg,
-    /// UniswapX reactor callback flash fill.
+    /// `UniswapX` reactor callback flash fill.
     UniswapXFlashFill,
     /// Across/EIP-7683 destination intent fill.
     AcrossIntentFill,
@@ -199,7 +199,7 @@ impl BroadcastLane {
         }
     }
 
-    fn as_wire(self) -> &'static str {
+    const fn as_wire(self) -> &'static str {
         match self {
             Self::PublicRpc => "public_rpc",
             Self::PrivateRelay => "private_relay",
@@ -336,6 +336,7 @@ pub struct ComposedEngineJob {
 
 /// JSON-safe report returned to Python/control-plane code.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct EngineJobReport {
     /// Hex plan hash.
     pub plan_hash: String,
@@ -406,13 +407,13 @@ impl ComposedEngineJob {
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn compose_engine_job(
     plan: ExecutionPlan,
-    policy: EnginePolicy,
+    policy: &EnginePolicy,
     sources: Vec<SourceArtifact>,
     gates: Vec<GateArtifact>,
     simulation: SimulationArtifact,
     now_ms: u64,
 ) -> EngineResult<ComposedEngineJob> {
-    validate_plan(&plan, &policy, &sources, &gates, &simulation, now_ms)?;
+    validate_plan(&plan, policy, &sources, &gates, &simulation, now_ms)?;
     let broadcast = BroadcastEnvelope {
         lane: plan.broadcast_lane,
         submit: !plan.dry_run,
@@ -422,7 +423,7 @@ pub fn compose_engine_job(
         ),
         require_preflight: plan.require_preflight || policy.require_preflight || plan.dry_run,
     };
-    let plan_hash = compute_plan_hash(&plan, &policy, &sources, &gates, &simulation, &broadcast);
+    let plan_hash = compute_plan_hash(&plan, policy, &sources, &gates, &simulation, &broadcast);
     Ok(ComposedEngineJob {
         plan_hash,
         plan,
@@ -442,12 +443,12 @@ pub fn compose_engine_job_json(
     simulation_json: &str,
     now_ms: u64,
 ) -> EngineResult<String> {
-    let plan = parse_plan(parse_json("plan", plan_json)?)?;
-    let policy = parse_policy(parse_json("policy", policy_json)?)?;
-    let sources = parse_sources(parse_json("sources", sources_json)?)?;
-    let gates = parse_gates(parse_json("gates", gates_json)?)?;
-    let simulation = parse_simulation(parse_json("simulation", simulation_json)?)?;
-    let job = compose_engine_job(plan, policy.clone(), sources, gates, simulation, now_ms)?;
+    let plan = parse_plan(&parse_json("plan", plan_json)?)?;
+    let policy = parse_policy(&parse_json("policy", policy_json)?)?;
+    let sources = parse_sources(&parse_json("sources", sources_json)?)?;
+    let gates = parse_gates(&parse_json("gates", gates_json)?)?;
+    let simulation = parse_simulation(&parse_json("simulation", simulation_json)?)?;
+    let job = compose_engine_job(plan, &policy, sources, gates, simulation, now_ms)?;
     serde_json::to_string(&job.to_report(&policy)).map_err(|err| EngineError::InvalidJson {
         field: "report",
         message: err.to_string(),
@@ -460,6 +461,18 @@ fn validate_plan(
     sources: &[SourceArtifact],
     gates: &[GateArtifact],
     simulation: &SimulationArtifact,
+    now_ms: u64,
+) -> EngineResult<()> {
+    validate_plan_core(plan, policy, now_ms)?;
+    validate_sources(policy, sources)?;
+    validate_gates(policy, gates)?;
+    validate_simulation(plan, policy, simulation)?;
+    Ok(())
+}
+
+fn validate_plan_core(
+    plan: &ExecutionPlan,
+    policy: &EnginePolicy,
     now_ms: u64,
 ) -> EngineResult<()> {
     if plan.chain_id != policy.expected_chain_id {
@@ -515,6 +528,10 @@ fn validate_plan(
     if policy.require_preflight && !plan.require_preflight {
         return Err(EngineError::PreflightRequired);
     }
+    Ok(())
+}
+
+fn validate_sources(policy: &EnginePolicy, sources: &[SourceArtifact]) -> EngineResult<()> {
     if policy.require_live_sources && sources.is_empty() {
         return Err(EngineError::MissingLiveSources);
     }
@@ -534,6 +551,10 @@ fn validate_plan(
             });
         }
     }
+    Ok(())
+}
+
+fn validate_gates(policy: &EnginePolicy, gates: &[GateArtifact]) -> EngineResult<()> {
     if gates.len() < policy.min_gate_count {
         return Err(EngineError::GateCountTooLow {
             actual: gates.len(),
@@ -558,6 +579,14 @@ fn validate_plan(
             });
         }
     }
+    Ok(())
+}
+
+fn validate_simulation(
+    plan: &ExecutionPlan,
+    policy: &EnginePolicy,
+    simulation: &SimulationArtifact,
+) -> EngineResult<()> {
     if !simulation.success {
         return Err(EngineError::SimulationRejected {
             reason: simulation
@@ -667,41 +696,42 @@ fn parse_json(field: &'static str, value: &str) -> EngineResult<Value> {
     })
 }
 
-fn parse_plan(value: Value) -> EngineResult<ExecutionPlan> {
+fn parse_plan(value: &Value) -> EngineResult<ExecutionPlan> {
     Ok(ExecutionPlan {
-        trace_id: required_str(&value, "plan", "trace_id")?.to_string(),
-        strategy: StrategyKind::parse(required_str(&value, "plan", "strategy")?),
-        chain_id: required_u64(&value, "plan", "chain_id")?,
-        target: required_address(&value, "plan", "target")?,
-        calldata: required_bytes(&value, "plan", "calldata")?,
-        value: optional_u256(&value, "plan", "value")?.unwrap_or(U256::ZERO),
-        gas_limit: required_u64(&value, "plan", "gas_limit")?,
-        max_fee_per_gas: required_u256(&value, "plan", "max_fee_per_gas")?,
-        max_priority_fee_per_gas: required_u256(&value, "plan", "max_priority_fee_per_gas")?,
-        deadline_ms: required_u64(&value, "plan", "deadline_ms")?,
-        profit_token: required_address(&value, "plan", "profit_token")?,
-        min_profit_wei: required_u256(&value, "plan", "min_profit_wei")?,
-        require_preflight: required_bool(&value, "plan", "require_preflight")?,
-        dry_run: required_bool(&value, "plan", "dry_run")?,
-        broadcast_lane: BroadcastLane::parse(required_str(&value, "plan", "broadcast_lane")?)?,
+        trace_id: required_str(value, "plan", "trace_id")?.to_string(),
+        strategy: StrategyKind::parse(required_str(value, "plan", "strategy")?),
+        chain_id: required_u64(value, "plan", "chain_id")?,
+        target: required_address(value, "plan", "target")?,
+        calldata: required_bytes(value, "plan", "calldata")?,
+        value: optional_u256(value, "plan", "value")?.unwrap_or(U256::ZERO),
+        gas_limit: required_u64(value, "plan", "gas_limit")?,
+        max_fee_per_gas: required_u256(value, "plan", "max_fee_per_gas")?,
+        max_priority_fee_per_gas: required_u256(value, "plan", "max_priority_fee_per_gas")?,
+        deadline_ms: required_u64(value, "plan", "deadline_ms")?,
+        profit_token: required_address(value, "plan", "profit_token")?,
+        min_profit_wei: required_u256(value, "plan", "min_profit_wei")?,
+        require_preflight: required_bool(value, "plan", "require_preflight")?,
+        dry_run: required_bool(value, "plan", "dry_run")?,
+        broadcast_lane: BroadcastLane::parse(required_str(value, "plan", "broadcast_lane")?)?,
     })
 }
 
-fn parse_policy(value: Value) -> EngineResult<EnginePolicy> {
+fn parse_policy(value: &Value) -> EngineResult<EnginePolicy> {
+    let min_gate_count = required_usize(value, "policy", "min_gate_count")?;
     Ok(EnginePolicy {
-        expected_chain_id: required_u64(&value, "policy", "expected_chain_id")?,
-        min_profit_wei: required_u256(&value, "policy", "min_profit_wei")?,
-        max_gas_limit: required_u64(&value, "policy", "max_gas_limit")?,
-        require_preflight: required_bool(&value, "policy", "require_preflight")?,
-        require_live_sources: required_bool(&value, "policy", "require_live_sources")?,
-        min_gate_count: required_u64(&value, "policy", "min_gate_count")? as usize,
-        min_deadline_ms_from_now: required_u64(&value, "policy", "min_deadline_ms_from_now")?,
-        allowed_targets: optional_address_array(&value, "policy", "allowed_targets")?,
-        allowed_lanes: optional_lane_array(&value, "policy", "allowed_lanes")?,
+        expected_chain_id: required_u64(value, "policy", "expected_chain_id")?,
+        min_profit_wei: required_u256(value, "policy", "min_profit_wei")?,
+        max_gas_limit: required_u64(value, "policy", "max_gas_limit")?,
+        require_preflight: required_bool(value, "policy", "require_preflight")?,
+        require_live_sources: required_bool(value, "policy", "require_live_sources")?,
+        min_gate_count,
+        min_deadline_ms_from_now: required_u64(value, "policy", "min_deadline_ms_from_now")?,
+        allowed_targets: optional_address_array(value, "policy", "allowed_targets")?,
+        allowed_lanes: optional_lane_array(value, "policy", "allowed_lanes")?,
     })
 }
 
-fn parse_sources(value: Value) -> EngineResult<Vec<SourceArtifact>> {
+fn parse_sources(value: &Value) -> EngineResult<Vec<SourceArtifact>> {
     let array = value.as_array().ok_or_else(|| EngineError::InvalidField {
         object: "sources",
         field: "root",
@@ -719,7 +749,7 @@ fn parse_sources(value: Value) -> EngineResult<Vec<SourceArtifact>> {
         .collect()
 }
 
-fn parse_gates(value: Value) -> EngineResult<Vec<GateArtifact>> {
+fn parse_gates(value: &Value) -> EngineResult<Vec<GateArtifact>> {
     let array = value.as_array().ok_or_else(|| EngineError::InvalidField {
         object: "gates",
         field: "root",
@@ -737,13 +767,13 @@ fn parse_gates(value: Value) -> EngineResult<Vec<GateArtifact>> {
         .collect()
 }
 
-fn parse_simulation(value: Value) -> EngineResult<SimulationArtifact> {
+fn parse_simulation(value: &Value) -> EngineResult<SimulationArtifact> {
     Ok(SimulationArtifact {
-        success: required_bool(&value, "simulation", "success")?,
-        expected_profit_wei: required_u256(&value, "simulation", "expected_profit_wei")?,
-        gas_used: required_u64(&value, "simulation", "gas_used")?,
-        state_read_count: required_u64(&value, "simulation", "state_read_count")?,
-        revert_reason: optional_str(&value, "revert_reason").map(ToString::to_string),
+        success: required_bool(value, "simulation", "success")?,
+        expected_profit_wei: required_u256(value, "simulation", "expected_profit_wei")?,
+        gas_used: required_u64(value, "simulation", "gas_used")?,
+        state_read_count: required_u64(value, "simulation", "state_read_count")?,
+        revert_reason: optional_str(value, "revert_reason").map(ToString::to_string),
     })
 }
 
@@ -799,6 +829,15 @@ fn required_u64(value: &Value, object: &'static str, key: &'static str) -> Engin
         })
 }
 
+fn required_usize(value: &Value, object: &'static str, key: &'static str) -> EngineResult<usize> {
+    let raw = required_u64(value, object, key)?;
+    usize::try_from(raw).map_err(|err| EngineError::InvalidField {
+        object,
+        field: key,
+        message: err.to_string(),
+    })
+}
+
 fn required_u256(value: &Value, object: &'static str, key: &'static str) -> EngineResult<U256> {
     optional_u256(value, object, key)?.ok_or(EngineError::MissingField { object, field: key })
 }
@@ -811,11 +850,10 @@ fn optional_u256(
     let Some(raw) = value.get(key) else {
         return Ok(None);
     };
-    let text = if let Some(s) = raw.as_str() {
-        s
-    } else if let Some(n) = raw.as_u64() {
+    if let Some(n) = raw.as_u64() {
         return Ok(Some(U256::from(n)));
-    } else {
+    }
+    let Some(text) = raw.as_str() else {
         return Err(EngineError::InvalidField {
             object,
             field: key,
@@ -826,19 +864,16 @@ fn optional_u256(
 }
 
 fn parse_u256(text: &str, object: &'static str, key: &'static str) -> EngineResult<U256> {
-    if let Some(hex) = text.strip_prefix("0x") {
-        U256::from_str_radix(hex, 16).map_err(|err| EngineError::InvalidField {
+    text.strip_prefix("0x")
+        .map_or_else(
+            || U256::from_str_radix(text, 10),
+            |hex| U256::from_str_radix(hex, 16),
+        )
+        .map_err(|err| EngineError::InvalidField {
             object,
             field: key,
             message: err.to_string(),
         })
-    } else {
-        U256::from_str_radix(text, 10).map_err(|err| EngineError::InvalidField {
-            object,
-            field: key,
-            message: err.to_string(),
-        })
-    }
 }
 
 fn required_address(
@@ -1009,8 +1044,9 @@ mod tests {
 
     #[test]
     fn composes_hash_addressed_job() {
+        let policy = policy();
         let job =
-            compose_engine_job(plan(), policy(), sources(), gates(), simulation(), 8_000).unwrap();
+            compose_engine_job(plan(), &policy, sources(), gates(), simulation(), 8_000).unwrap();
         assert_eq!(job.plan.strategy, StrategyKind::UniswapXFlashFill);
         assert_eq!(job.broadcast.lane, BroadcastLane::PrivateRelay);
         assert!(job.broadcast.private_submission);
@@ -1023,7 +1059,8 @@ mod tests {
         let mut gates = gates();
         gates[1].admitted = false;
         gates[1].reason = Some("sim below floor".to_string());
-        let err = compose_engine_job(plan(), policy(), sources(), gates, simulation(), 8_000)
+        let policy = policy();
+        let err = compose_engine_job(plan(), &policy, sources(), gates, simulation(), 8_000)
             .expect_err("gate rejection must fail closed");
         assert!(matches!(err, EngineError::GateRejected { .. }));
     }
@@ -1032,7 +1069,8 @@ mod tests {
     fn rejects_profit_below_effective_floor() {
         let mut simulation = simulation();
         simulation.expected_profit_wei = U256::from(99u64);
-        let err = compose_engine_job(plan(), policy(), sources(), gates(), simulation, 8_000)
+        let policy = policy();
+        let err = compose_engine_job(plan(), &policy, sources(), gates(), simulation, 8_000)
             .expect_err("low profit must fail closed");
         assert!(matches!(err, EngineError::ProfitBelowFloor { .. }));
     }

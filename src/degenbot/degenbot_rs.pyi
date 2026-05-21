@@ -10,6 +10,19 @@ from typing import Any, Literal, overload
 
 from hexbytes import HexBytes
 
+def evaluate_prediction_fx_match_json(input_json: str) -> str:
+    """
+    Evaluate a Prediction-FX style signed-order match as JSON.
+
+    Args:
+        input_json: JSON object encoded as a string. Numeric fields should be
+            decimal strings for full integer precision.
+
+    Returns:
+        JSON string containing deterministic admission, accounting, and
+        violation fields.
+    """
+
 def get_sqrt_ratio_at_tick(tick: int) -> int:
     """
     Convert a tick value to its corresponding sqrt price (X96 format).
@@ -347,13 +360,14 @@ class AlloyProvider:
     def __init__(
         self,
         rpc_url: str,
-        max_connections: int = 10,
-        timeout: float = 30.0,
         max_retries: int = 10,
         max_blocks_per_request: int = 5000,
+        network: str = "any",
     ) -> None: ...
     @property
     def rpc_url(self) -> str: ...
+    @property
+    def network(self) -> str: ...
     def get_block_number(self) -> int: ...
     def get_chain_id(self) -> int: ...
     def get_gas_price(self) -> str: ...
@@ -379,6 +393,16 @@ class AlloyProvider:
         address: str,
         block_number: int | None = None,
     ) -> HexBytes: ...
+    def get_balance(
+        self,
+        address: str,
+        block_number: int | None = None,
+    ) -> int: ...
+    def get_transaction_count(
+        self,
+        address: str,
+        block_number: int | None = None,
+    ) -> int: ...
     def estimate_gas(
         self,
         to: str,
@@ -398,9 +422,9 @@ class AsyncAlloyProvider:
     @staticmethod
     def create(
         rpc_url: str,
-        max_connections: int = 10,
-        timeout: float = 30.0,
         max_retries: int = 10,
+        max_blocks_per_request: int = 5000,
+        network: str = "any",
     ) -> Coroutine[Any, Any, AsyncAlloyProvider]: ...
 
 class AsyncContract:
@@ -428,12 +452,12 @@ __all__ = [
     "Contract",
     "HexBytes",
     "LogFilter",
+    "compose_engine_job_json",
     "decode",
     "decode_return_data",
     "decode_single",
-    "compose_engine_job_json",
-    "encode_function_call",
     "encode_compose_four_leg_calldata",
+    "encode_function_call",
     "encode_match_internal_calldata",
     "encode_native_arb_calldata",
     "get_function_selector",

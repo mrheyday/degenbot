@@ -6,11 +6,12 @@
 
 use crate::errors::{ProviderError, ProviderResult};
 use alloy::consensus::{Header as ConsensusHeader, TxEnvelope};
-use alloy::network::Ethereum;
+use alloy::network::{AnyNetwork, AnyRpcBlock, Ethereum};
 use alloy::primitives::{Address, Bytes, B256, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::eth::{Block, Header as RpcHeader, Transaction};
-use alloy::rpc::types::{Filter, Log};
+use alloy::rpc::types::{Filter, Log, TransactionRequest};
+use alloy::serde::WithOtherFields;
 use alloy::transports::ipc::IpcConnect;
 use alloy::transports::ws::WsConnect;
 use alloy::transports::{RpcError, TransportErrorKind};
@@ -194,9 +195,67 @@ impl LogFilter {
     }
 }
 
+/// Alloy network type used by the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderNetwork {
+    /// Strict Ethereum response types.
+    Ethereum,
+    /// Permissive response types that retain chain-specific extra fields.
+    Any,
+}
+
+impl ProviderNetwork {
+    /// Parse a Python/user-facing network label.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProviderError::InvalidParams` if the label is unsupported.
+    pub fn parse(network: &str) -> ProviderResult<Self> {
+        match network.to_ascii_lowercase().as_str() {
+            "ethereum" | "eth" => Ok(Self::Ethereum),
+            "any" => Ok(Self::Any),
+            other => Err(ProviderError::InvalidParams {
+                message: format!("unsupported Alloy provider network '{other}'"),
+            }),
+        }
+    }
+
+    /// Return the stable Python-facing network label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ethereum => "ethereum",
+            Self::Any => "any",
+        }
+    }
+}
+
+enum ProviderInner {
+    Ethereum(Arc<dyn Provider<Ethereum>>),
+    Any(Arc<dyn Provider<AnyNetwork>>),
+}
+
+impl Clone for ProviderInner {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Ethereum(provider) => Self::Ethereum(Arc::clone(provider)),
+            Self::Any(provider) => Self::Any(Arc::clone(provider)),
+        }
+    }
+}
+
+/// Block response returned by the selected Alloy network.
+pub enum ProviderBlock {
+    /// Strict Ethereum block response.
+    Ethereum(Block<Transaction<TxEnvelope>, RpcHeader<ConsensusHeader>>),
+    /// Permissive multi-network block response.
+    Any(AnyRpcBlock),
+}
+
 /// High-performance Ethereum RPC provider.
 pub struct AlloyProvider {
-    inner: Arc<dyn Provider<Ethereum>>,
+    inner: ProviderInner,
+    network: ProviderNetwork,
     rpc_url: String,
     max_retries: u32,
 }
@@ -204,7 +263,8 @@ pub struct AlloyProvider {
 impl Clone for AlloyProvider {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: self.inner.clone(),
+            network: self.network,
             rpc_url: self.rpc_url.clone(),
             max_retries: self.max_retries,
         }
@@ -223,44 +283,101 @@ impl AlloyProvider {
     /// Returns `ProviderError::ConnectionFailed` if the HTTP client cannot be created
     /// or IPC connection fails.
     pub async fn new(rpc_url: &str, max_retries: u32) -> ProviderResult<Self> {
-        let provider: Arc<dyn Provider<Ethereum>> =
-            if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
-                // HTTP endpoint - use Alloy's built-in HTTP transport
-                let url = rpc_url
-                    .parse()
-                    .map_err(|e| ProviderError::ConnectionFailed {
-                        message: format!("Invalid RPC URL: {e}"),
-                    })?;
+        Self::new_with_network(rpc_url, max_retries, ProviderNetwork::Any).await
+    }
 
-                let provider = ProviderBuilder::<_, _, Ethereum>::new().connect_http(url);
-                Arc::new(provider)
-            } else if rpc_url.starts_with("ws://") || rpc_url.starts_with("wss://") {
-                // WebSocket connection
-                let ws_connect = WsConnect::new(rpc_url.to_string());
-                let provider = ProviderBuilder::<_, _, Ethereum>::new()
-                    .connect_ws(ws_connect)
-                    .await
-                    .map_err(|e| ProviderError::ConnectionFailed {
-                        message: format!("Failed to connect to WebSocket endpoint: {e}"),
-                    })?;
-                Arc::new(provider)
-            } else {
-                // IPC connection via Unix domain socket or Windows named pipe
-                let ipc_connect: IpcConnect<String> = IpcConnect::new(rpc_url.to_string());
-                let provider = ProviderBuilder::<_, _, Ethereum>::new()
-                    .connect_ipc(ipc_connect)
-                    .await
-                    .map_err(|e| ProviderError::ConnectionFailed {
-                        message: format!("Failed to connect to IPC endpoint: {e}"),
-                    })?;
-                Arc::new(provider)
-            };
+    /// Create a new provider with an explicit Alloy network type.
+    ///
+    /// Use `ProviderNetwork::Any` for L2s and unknown chains where blocks or
+    /// receipts may include non-Ethereum extension fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProviderError::ConnectionFailed` if the transport cannot be created.
+    pub async fn new_with_network(
+        rpc_url: &str,
+        max_retries: u32,
+        network: ProviderNetwork,
+    ) -> ProviderResult<Self> {
+        let inner = match network {
+            ProviderNetwork::Ethereum => {
+                ProviderInner::Ethereum(Self::connect_ethereum(rpc_url).await?)
+            }
+            ProviderNetwork::Any => ProviderInner::Any(Self::connect_any(rpc_url).await?),
+        };
 
         Ok(Self {
-            inner: provider,
+            inner,
+            network,
             rpc_url: rpc_url.to_string(),
             max_retries,
         })
+    }
+
+    async fn connect_ethereum(rpc_url: &str) -> ProviderResult<Arc<dyn Provider<Ethereum>>> {
+        if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
+            let url = rpc_url
+                .parse()
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Invalid RPC URL: {e}"),
+                })?;
+
+            let provider = ProviderBuilder::<_, _, Ethereum>::new().connect_http(url);
+            Ok(Arc::new(provider))
+        } else if rpc_url.starts_with("ws://") || rpc_url.starts_with("wss://") {
+            let ws_connect = WsConnect::new(rpc_url.to_string());
+            let provider = ProviderBuilder::<_, _, Ethereum>::new()
+                .connect_ws(ws_connect)
+                .await
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Failed to connect to WebSocket endpoint: {e}"),
+                })?;
+            Ok(Arc::new(provider))
+        } else {
+            let ipc_connect: IpcConnect<String> = IpcConnect::new(rpc_url.to_string());
+            let provider = ProviderBuilder::<_, _, Ethereum>::new()
+                .connect_ipc(ipc_connect)
+                .await
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Failed to connect to IPC endpoint: {e}"),
+                })?;
+            Ok(Arc::new(provider))
+        }
+    }
+
+    async fn connect_any(rpc_url: &str) -> ProviderResult<Arc<dyn Provider<AnyNetwork>>> {
+        if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
+            let url = rpc_url
+                .parse()
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Invalid RPC URL: {e}"),
+                })?;
+
+            let provider = ProviderBuilder::new()
+                .network::<AnyNetwork>()
+                .connect_http(url);
+            Ok(Arc::new(provider))
+        } else if rpc_url.starts_with("ws://") || rpc_url.starts_with("wss://") {
+            let ws_connect = WsConnect::new(rpc_url.to_string());
+            let provider = ProviderBuilder::new()
+                .network::<AnyNetwork>()
+                .connect_ws(ws_connect)
+                .await
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Failed to connect to WebSocket endpoint: {e}"),
+                })?;
+            Ok(Arc::new(provider))
+        } else {
+            let ipc_connect: IpcConnect<String> = IpcConnect::new(rpc_url.to_string());
+            let provider = ProviderBuilder::new()
+                .network::<AnyNetwork>()
+                .connect_ipc(ipc_connect)
+                .await
+                .map_err(|e| ProviderError::ConnectionFailed {
+                    message: format!("Failed to connect to IPC endpoint: {e}"),
+                })?;
+            Ok(Arc::new(provider))
+        }
     }
 
     /// Get current block number.
@@ -270,11 +387,16 @@ impl AlloyProvider {
     /// Returns `ProviderError::RpcError` if the RPC call fails.
     pub async fn get_block_number(&self) -> ProviderResult<u64> {
         self.retry_with_backoff(|| async {
-            let result: u64 = self
-                .inner
-                .get_block_number()
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block number"))?;
+            let result: u64 = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_block_number()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block number"))?,
+                ProviderInner::Any(provider) => provider
+                    .get_block_number()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block number"))?,
+            };
             Ok(result)
         })
         .await
@@ -287,11 +409,16 @@ impl AlloyProvider {
     /// Returns `ProviderError::RpcError` if the RPC call fails.
     pub async fn get_chain_id(&self) -> ProviderResult<u64> {
         self.retry_with_backoff(|| async {
-            let result: u64 = self
-                .inner
-                .get_chain_id()
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get chain ID"))?;
+            let result: u64 = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_chain_id()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get chain ID"))?,
+                ProviderInner::Any(provider) => provider
+                    .get_chain_id()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get chain ID"))?,
+            };
             Ok(result)
         })
         .await
@@ -306,11 +433,16 @@ impl AlloyProvider {
         let alloy_filter = filter.to_alloy_filter()?;
 
         self.retry_with_backoff(|| async {
-            let result: Vec<Log> = self
-                .inner
-                .get_logs(&alloy_filter)
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get logs"))?;
+            let result: Vec<Log> = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_logs(&alloy_filter)
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get logs"))?,
+                ProviderInner::Any(provider) => provider
+                    .get_logs(&alloy_filter)
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get logs"))?,
+            };
             Ok(result)
         })
         .await
@@ -327,13 +459,21 @@ impl AlloyProvider {
         block_number: Option<u64>,
     ) -> ProviderResult<Bytes> {
         self.retry_with_backoff(|| async {
-            let result = if let Some(block) = block_number {
-                self.inner
-                    .get_code_at(*address)
-                    .block_id(block.into())
-                    .await
-            } else {
-                self.inner.get_code_at(*address).await
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider.get_code_at(*address).block_id(block.into()).await
+                    } else {
+                        provider.get_code_at(*address).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    if let Some(block) = block_number {
+                        provider.get_code_at(*address).block_id(block.into()).await
+                    } else {
+                        provider.get_code_at(*address).await
+                    }
+                }
             }
             .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get code"))?;
 
@@ -349,19 +489,23 @@ impl AlloyProvider {
     /// # Errors
     ///
     /// Returns `ProviderError::RpcError` if the RPC call fails.
-    pub async fn get_block(
-        &self,
-        block_number: u64,
-    ) -> ProviderResult<Option<Block<Transaction<TxEnvelope>, RpcHeader<ConsensusHeader>>>> {
+    pub async fn get_block(&self, block_number: u64) -> ProviderResult<Option<ProviderBlock>> {
         use alloy::eips::BlockNumberOrTag;
 
         self.retry_with_backoff(|| async {
             let block_num_tag = BlockNumberOrTag::Number(block_number);
-            let result = self
-                .inner
-                .get_block_by_number(block_num_tag)
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block"))?;
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_block_by_number(block_num_tag)
+                    .await
+                    .map(|block| block.map(ProviderBlock::Ethereum))
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block"))?,
+                ProviderInner::Any(provider) => provider
+                    .get_block_by_number(block_num_tag)
+                    .await
+                    .map(|block| block.map(ProviderBlock::Any))
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get block"))?,
+            };
 
             Ok(result)
         })
@@ -423,6 +567,12 @@ impl AlloyProvider {
         &self.rpc_url
     }
 
+    /// Get the configured Alloy network label.
+    #[must_use]
+    pub const fn network(&self) -> &'static str {
+        self.network.as_str()
+    }
+
     /// Execute an `eth_call`.
     ///
     /// # Errors
@@ -434,18 +584,27 @@ impl AlloyProvider {
         data: Bytes,
         block_number: Option<u64>,
     ) -> ProviderResult<Bytes> {
-        use alloy::rpc::types::TransactionRequest;
-
         self.retry_with_backoff(|| async {
             let tx = TransactionRequest::default()
                 .to(*to)
                 .input(data.clone().into());
 
-            // Call at specific block if provided, otherwise use latest
-            let result = if let Some(block) = block_number {
-                self.inner.call(tx).block(block.into()).await
-            } else {
-                self.inner.call(tx).await
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider.call(tx).block(block.into()).await
+                    } else {
+                        provider.call(tx).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    let tx = WithOtherFields::new(tx);
+                    if let Some(block) = block_number {
+                        provider.call(tx).block(block.into()).await
+                    } else {
+                        provider.call(tx).await
+                    }
+                }
             }
             .map_err(|e| alloy_error_to_provider_error(&e, "eth_call failed"))?;
 
@@ -461,11 +620,16 @@ impl AlloyProvider {
     /// Returns `ProviderError::RpcError` if the RPC call fails.
     pub async fn get_gas_price(&self) -> ProviderResult<u128> {
         self.retry_with_backoff(|| async {
-            let result: u128 = self
-                .inner
-                .get_gas_price()
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get gas price"))?;
+            let result: u128 = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_gas_price()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get gas price"))?,
+                ProviderInner::Any(provider) => provider
+                    .get_gas_price()
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get gas price"))?,
+            };
             Ok(result)
         })
         .await
@@ -491,8 +655,6 @@ impl AlloyProvider {
         value: Option<u128>,
         block_number: Option<u64>,
     ) -> ProviderResult<u64> {
-        use alloy::rpc::types::TransactionRequest;
-
         self.retry_with_backoff(|| async {
             let mut tx = TransactionRequest::default()
                 .to(*to)
@@ -506,11 +668,22 @@ impl AlloyProvider {
                 tx = tx.value(alloy::primitives::U256::from(val));
             }
 
-            // Estimate at specific block if provided, otherwise use pending
-            let result = if let Some(block) = block_number {
-                self.inner.estimate_gas(tx).block(block.into()).await
-            } else {
-                self.inner.estimate_gas(tx).await
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider.estimate_gas(tx).block(block.into()).await
+                    } else {
+                        provider.estimate_gas(tx).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    let tx = WithOtherFields::new(tx);
+                    if let Some(block) = block_number {
+                        provider.estimate_gas(tx).block(block.into()).await
+                    } else {
+                        provider.estimate_gas(tx).await
+                    }
+                }
             }
             .map_err(|e| alloy_error_to_provider_error(&e, "Failed to estimate gas"))?;
 
@@ -536,22 +709,30 @@ impl AlloyProvider {
         })?;
 
         self.retry_with_backoff(|| async {
-            let result = self
-                .inner
-                .get_transaction_by_hash(hash)
-                .await
-                .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get transaction"))?;
-
-            // Convert to JSON value
-            let json_value = result
-                .map(|tx| {
-                    serde_json::to_value(&tx).map_err(|e| ProviderError::SerializationError {
-                        message: format!("Failed to serialize transaction: {e}"),
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_transaction_by_hash(hash)
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get transaction"))?
+                    .map(|tx| {
+                        serde_json::to_value(&tx).map_err(|e| ProviderError::SerializationError {
+                            message: format!("Failed to serialize transaction: {e}"),
+                        })
                     })
-                })
-                .transpose()?;
+                    .transpose()?,
+                ProviderInner::Any(provider) => provider
+                    .get_transaction_by_hash(hash)
+                    .await
+                    .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get transaction"))?
+                    .map(|tx| {
+                        serde_json::to_value(&tx).map_err(|e| ProviderError::SerializationError {
+                            message: format!("Failed to serialize transaction: {e}"),
+                        })
+                    })
+                    .transpose()?,
+            };
 
-            Ok(json_value)
+            Ok(result)
         })
         .await
     }
@@ -573,24 +754,38 @@ impl AlloyProvider {
         })?;
 
         self.retry_with_backoff(|| async {
-            let result = self
-                .inner
-                .get_transaction_receipt(hash)
-                .await
-                .map_err(|e| {
-                    alloy_error_to_provider_error(&e, "Failed to get transaction receipt")
-                })?;
-
-            // Convert to JSON value
-            let json_value = result
-                .map(|receipt| {
-                    serde_json::to_value(&receipt).map_err(|e| ProviderError::SerializationError {
-                        message: format!("Failed to serialize transaction receipt: {e}"),
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => provider
+                    .get_transaction_receipt(hash)
+                    .await
+                    .map_err(|e| {
+                        alloy_error_to_provider_error(&e, "Failed to get transaction receipt")
+                    })?
+                    .map(|receipt| {
+                        serde_json::to_value(&receipt).map_err(|e| {
+                            ProviderError::SerializationError {
+                                message: format!("Failed to serialize transaction receipt: {e}"),
+                            }
+                        })
                     })
-                })
-                .transpose()?;
+                    .transpose()?,
+                ProviderInner::Any(provider) => provider
+                    .get_transaction_receipt(hash)
+                    .await
+                    .map_err(|e| {
+                        alloy_error_to_provider_error(&e, "Failed to get transaction receipt")
+                    })?
+                    .map(|receipt| {
+                        serde_json::to_value(&receipt).map_err(|e| {
+                            ProviderError::SerializationError {
+                                message: format!("Failed to serialize transaction receipt: {e}"),
+                            }
+                        })
+                    })
+                    .transpose()?,
+            };
 
-            Ok(json_value)
+            Ok(result)
         })
         .await
     }
@@ -609,18 +804,106 @@ impl AlloyProvider {
         use alloy::eips::BlockNumberOrTag;
 
         self.retry_with_backoff(|| async {
-            let result = if let Some(block) = block_number {
-                self.inner
-                    .get_storage_at(*address, position)
-                    .block_id(BlockNumberOrTag::Number(block).into())
-                    .await
-            } else {
-                self.inner.get_storage_at(*address, position).await
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider
+                            .get_storage_at(*address, position)
+                            .block_id(BlockNumberOrTag::Number(block).into())
+                            .await
+                    } else {
+                        provider.get_storage_at(*address, position).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    if let Some(block) = block_number {
+                        provider
+                            .get_storage_at(*address, position)
+                            .block_id(BlockNumberOrTag::Number(block).into())
+                            .await
+                    } else {
+                        provider.get_storage_at(*address, position).await
+                    }
+                }
             }
             .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get storage"))?;
 
             // Convert U256 to B256 (32-byte storage slot)
             Ok(B256::from(result.to_be_bytes::<32>()))
+        })
+        .await
+    }
+
+    /// Get the native balance for an address.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProviderError::RpcError` if the RPC call fails.
+    pub async fn get_balance(
+        &self,
+        address: &Address,
+        block_number: Option<u64>,
+    ) -> ProviderResult<U256> {
+        self.retry_with_backoff(|| async {
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider.get_balance(*address).block_id(block.into()).await
+                    } else {
+                        provider.get_balance(*address).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    if let Some(block) = block_number {
+                        provider.get_balance(*address).block_id(block.into()).await
+                    } else {
+                        provider.get_balance(*address).await
+                    }
+                }
+            }
+            .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get balance"))?;
+
+            Ok(result)
+        })
+        .await
+    }
+
+    /// Get the transaction count, also known as the account nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProviderError::RpcError` if the RPC call fails.
+    pub async fn get_transaction_count(
+        &self,
+        address: &Address,
+        block_number: Option<u64>,
+    ) -> ProviderResult<u64> {
+        self.retry_with_backoff(|| async {
+            let result = match &self.inner {
+                ProviderInner::Ethereum(provider) => {
+                    if let Some(block) = block_number {
+                        provider
+                            .get_transaction_count(*address)
+                            .block_id(block.into())
+                            .await
+                    } else {
+                        provider.get_transaction_count(*address).await
+                    }
+                }
+                ProviderInner::Any(provider) => {
+                    if let Some(block) = block_number {
+                        provider
+                            .get_transaction_count(*address)
+                            .block_id(block.into())
+                            .await
+                    } else {
+                        provider.get_transaction_count(*address).await
+                    }
+                }
+            }
+            .map_err(|e| alloy_error_to_provider_error(&e, "Failed to get transaction count"))?;
+
+            Ok(result)
         })
         .await
     }

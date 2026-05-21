@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 
 /// Compose and validate a Rust execution-engine job from JSON payloads.
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)]
 #[pyo3(name = "compose_engine_job_json")]
 #[pyo3(signature = (
     plan_json,
