@@ -1,0 +1,9 @@
+[profile.default]
+solc = "0.8.34"
+evm_version = "osaka"
+optimizer = true
+optimizer_runs = 2_000_000
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false
+revert_strings = "strip"

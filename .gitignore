@@ -188,3 +188,8 @@ research
 
 # Foundry build artifacts (Aave test contracts)
 tests/aave/libraries/contracts/.foundry
+cache/
+out/
+
+# macOS
+.DS_Store
