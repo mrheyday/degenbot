@@ -2,9 +2,9 @@
 //!
 //! This module is the degenbot-owned Rust core for capital-moving execution
 //! handoff. It composes live source artifacts, deterministic gates, simulation
-//! output, calldata, and the broadcast lane into one hash-addressed job. It
-//! does not sign or broadcast by itself; those side effects attach behind the
-//! Rust/Alloy engine boundary after this composition step succeeds.
+//! output, calldata, and the broadcast lane into one hash-addressed job. The
+//! side-effecting signing and broadcast adapters attach behind this accepted
+//! degenbot dispatch envelope; they do not rebuild calldata.
 
 use alloy::primitives::{keccak256, Address, Bytes, B256, U256};
 use serde::Serialize;

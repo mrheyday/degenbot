@@ -28,12 +28,25 @@ from .degenbot_rs import (
     get_tick_at_sqrt_ratio,
     to_checksum_address,
 )
+from .dispatch import compose_dispatch_envelope
 from .execution import (
     encode_compose_four_leg_calldata,
     encode_match_internal_calldata,
     encode_native_arb_calldata,
 )
 from .execution_engine import compose_engine_job
+from .pipeline import (
+    DeterministicPipeline,
+    PipelineAction,
+    PipelineCollector,
+    PipelineConfig,
+    PipelineConfigurationError,
+    PipelineError,
+    PipelineExecutor,
+    PipelineFault,
+    PipelineMetrics,
+    PipelineStrategy,
+)
 from .version import __version__
 
 # isort: split
@@ -47,8 +60,8 @@ from .aerodrome import (
     AerodromeV3PoolState,
 )
 from .anvil_fork import AnvilFork
-from .bot import BotOpportunity, BotScanConfig, DegenbotBot
 from .arbitrage import ArbitrageCalculationResult, UniswapCurveCycle, UniswapLpCycle
+from .bot import BotOpportunity, BotScanConfig, DegenbotBot
 from .camelot import CamelotLiquidityPool
 from .chainlink import ChainlinkPriceContract
 from .curve import (
@@ -104,9 +117,9 @@ __all__ = (
     "AerodromeV3PoolManager",
     "AerodromeV3PoolState",
     "AnvilFork",
+    "ArbitrageCalculationResult",
     "BotOpportunity",
     "BotScanConfig",
-    "ArbitrageCalculationResult",
     "CamelotLiquidityPool",
     "ChainlinkPriceContract",
     "CurveStableSwapPoolStateUpdated",
@@ -114,6 +127,7 @@ __all__ = (
     "CurveStableswapPoolSimulationResult",
     "CurveStableswapPoolState",
     "DegenbotBot",
+    "DeterministicPipeline",
     "Erc20Token",
     "Erc20TokenManager",
     "EtherPlaceholder",
@@ -121,6 +135,15 @@ __all__ = (
     "PancakeswapV2PoolManager",
     "PancakeswapV3Pool",
     "PancakeswapV3PoolManager",
+    "PipelineAction",
+    "PipelineCollector",
+    "PipelineConfig",
+    "PipelineConfigurationError",
+    "PipelineError",
+    "PipelineExecutor",
+    "PipelineFault",
+    "PipelineMetrics",
+    "PipelineStrategy",
     "SushiswapV2Pool",
     "SushiswapV2PoolManager",
     "SushiswapV3Pool",
@@ -149,9 +172,10 @@ __all__ = (
     "abi_decode_single",
     "abi_encode",
     "async_connection_manager",
+    "compose_dispatch_envelope",
+    "compose_engine_job",
     "connection_manager",
     "decode_return_data",
-    "compose_engine_job",
     "encode_compose_four_leg_calldata",
     "encode_function_call",
     "encode_match_internal_calldata",
