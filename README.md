@@ -782,7 +782,7 @@ The extension is pre-built in published packages. For source builds:
 
 ```bash
 # Build the extension
-cargo build --release --features extension-module --manifest-path rust/Cargo.toml
+env -u RUST_LOG uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
 # Or use the justfile
 just dev  # Build and install Python extension
@@ -808,12 +808,16 @@ git clone https://github.com/BowTiedDevil/degenbot.git
 cd degenbot
 uv sync
 
-# Run tests
-uv run pytest
+# Run deterministic tests
+just test-python
+
+# Run external-gated tests when prerequisites are configured
+just test-python-live
+just test-python-database
 
 # Run linting
-uv run ruff check
-uv run mypy
+env -u RUST_LOG uv run ruff check
+env -u RUST_LOG uv run mypy
 ```
 
 ## License

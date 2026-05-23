@@ -13,7 +13,7 @@ test-rust:
 
 # Run wrapped Rust Python tests
 test-rust-python:
-    uv run pytest tests/rust -x -q --no-header
+    env -u RUST_LOG uv run pytest tests/rust -x -q --no-header
 
 # Run Stylus contract tests
 test-stylus:
@@ -31,19 +31,19 @@ lint-stylus:
 build-rust-debug:
     cargo build --release --manifest-path rust/Cargo.toml
 
-# Build Rust extension module (correct for Python extension)
+# Build Rust extension wheel (correct Python linker and abi3 metadata)
 build-rust-extension:
-    cargo build --release --features extension-module --manifest-path rust/Cargo.toml
+    env -u RUST_LOG uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
 # ========== Python Development ==========
 
 # Build and install Python extension in development mode
 dev:
-    uv run --no-project maturin develop --manifest-path rust/Cargo.toml
+    env -u RUST_LOG uv run --no-project maturin develop --manifest-path rust/Cargo.toml
 
 # Build Python extension wheels
 build-wheels:
-    uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
+    env -u RUST_LOG uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
 # Compile Solidity test contracts
 compile-test-contracts:
@@ -51,11 +51,23 @@ compile-test-contracts:
 
 # Run Python tests
 test-python: compile-test-contracts
-    uv run pytest tests/ -x -q --no-header
+    env -u RUST_LOG uv run pytest tests/ -x -q --no-header
+
+# Run Python tests that require live RPC endpoints
+test-python-live: compile-test-contracts
+    env -u RUST_LOG uv run pytest tests/ -x -q --no-header --run-live-rpc
+
+# Run Python tests that require an operator-populated local database
+test-python-database:
+    env -u RUST_LOG uv run pytest tests/database -x -q --no-header --run-database
+
+# Run every Python test category; requires reliable RPC and database prerequisites
+test-python-all: compile-test-contracts
+    env -u RUST_LOG uv run pytest tests/ -x -q --no-header --run-live-rpc --run-database
 
 # Run Python tests with coverage
 test-python-cov: compile-test-contracts
-    uv run pytest tests/ -x -q --no-header --cov=src/degenbot --cov-branch
+    env -u RUST_LOG uv run pytest tests/ -x -q --no-header --cov=src/degenbot --cov-branch
 
 # Run all tests (Rust + Python)
 test-all: test-rust test-stylus test-python
@@ -64,21 +76,21 @@ test-all: test-rust test-stylus test-python
 
 # Run all linters (Rust + Python)
 lint: lint-rust lint-stylus
-    uv run ruff check src/
-    uv run mypy src/
+    env -u RUST_LOG uv run ruff check src/
+    env -u RUST_LOG uv run mypy src/
 
 # Format all code
 format: 
     cargo fmt --manifest-path rust/Cargo.toml
     cargo fmt --manifest-path stylus/core/Cargo.toml
     cargo fmt --manifest-path stylus/pool_adapter/Cargo.toml
-    uv run ruff format src/
+    env -u RUST_LOG uv run ruff format src/
 
 # ========== CI/CD ==========
 
 # Simulate CI Rust checks
 ci-rust: lint-rust test-rust
-    cargo build --release --features extension-module --manifest-path rust/Cargo.toml
+    env -u RUST_LOG uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
 # Simulate CI Stylus checks
 ci-stylus: lint-stylus test-stylus
@@ -100,7 +112,7 @@ ci-full: ci-rust ci-stylus test-python
 # Build documentation
 docs:
     cargo doc --no-deps --manifest-path rust/Cargo.toml
-    uv run mkdocs build 2>/dev/null || echo "mkdocs not configured"
+    env -u RUST_LOG uv run mkdocs build 2>/dev/null || echo "mkdocs not configured"
 
 # Serve documentation locally
 serve-docs:

@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub mod bit_math;
+pub mod executor_abi;
 pub mod frontrun_calldata;
 pub mod interface_surfaces;
 pub mod lib_uniswap;
@@ -232,6 +233,14 @@ impl DegenbotStylusCore {
 
     pub fn compose_four_leg_selector(&self) -> FixedBytes<4> {
         FixedBytes::from(interface_surfaces::COMPOSE_FOUR_LEG)
+    }
+
+    pub fn execute_uniswapx_fill_selector(&self) -> FixedBytes<4> {
+        FixedBytes::from(interface_surfaces::EXECUTE_UNISWAPX_FILL)
+    }
+
+    pub fn trigger_cow_flash_loan_router_selector(&self) -> FixedBytes<4> {
+        FixedBytes::from(interface_surfaces::TRIGGER_COW_FLASH_LOAN_ROUTER)
     }
 
     pub fn find_route_selector(&self) -> FixedBytes<4> {

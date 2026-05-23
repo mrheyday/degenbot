@@ -476,12 +476,14 @@ Uses `just` from the project root (see justfile):
 just test-rust           # Run Rust tests (with auto-initialize feature, single-threaded)
 just lint-rust           # Run cargo clippy (all targets, all features, deny warnings)
 just build-rust-debug    # Build release library (links Python, no extension-module feature)
-just build-rust-extension # Build Python extension (--features extension-module, for distribution)
+just build-rust-extension # Build Python extension wheel via maturin, for distribution
 just dev                 # Build and install Python extension in dev mode (maturin develop)
-just test-all            # Run all Rust and Python tests
+just test-all            # Run deterministic Rust, Stylus, and Python tests
+just test-python-live    # Run live-RPC Python tests when endpoints are configured
+just test-python-database # Run database Python tests when local DB is populated
 ```
 
-**Note:** `build-rust-debug` uses `cargo build --release` but without the `extension-module` feature. It's "debug" in the sense that it doesn't produce a standalone Python extension — use `build-rust-extension` or `dev` for that.
+**Note:** `build-rust-debug` uses `cargo build --release` but without Python wheel metadata. It's "debug" in the sense that it doesn't produce a standalone Python extension wheel — use `build-rust-extension` or `dev` for that.
 
 ## Release Profile
 

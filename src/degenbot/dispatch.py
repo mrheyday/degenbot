@@ -7,7 +7,7 @@ job into the envelope that signing and broadcast adapters consume.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
 from hexbytes import HexBytes
 
@@ -41,6 +41,31 @@ class DispatchEnvelopeDict(TypedDict):
     require_preflight: bool
     dry_run: bool
     engine_report: dict[str, Any]
+
+
+class DispatchReceiptDict(TypedDict):
+    """JSON-safe receipt returned after the dispatch adapter boundary."""
+
+    plan_hash: str
+    trace_id: str
+    adapter: str
+    target: str
+    calldata: str
+    submitted: bool
+    dry_run: bool
+    private_submission: bool
+    broadcast_lane: str
+    tx_hash: NotRequired[str]
+    raw_transaction: NotRequired[str]
+
+
+class DispatchAdapter(Protocol):
+    """Side-effecting signer/broadcast adapter for accepted dispatch envelopes."""
+
+    @property
+    def name(self) -> str: ...
+
+    async def submit(self, envelope: DispatchEnvelopeDict) -> Mapping[str, Any]: ...
 
 
 def _normalize_address(value: str | bytes) -> str:
@@ -102,7 +127,55 @@ def compose_dispatch_envelope(  # noqa: PLR0917
     return envelope
 
 
+async def submit_dispatch_envelope(
+    envelope: DispatchEnvelopeDict,
+    adapter: DispatchAdapter,
+) -> DispatchReceiptDict:
+    """Submit an accepted envelope through the configured live adapter.
+
+    The adapter receives a copy of the already-admitted target/calldata/fee
+    fields. This boundary intentionally does not rebuild calldata or re-run
+    strategy encoding; it only hands the signed/broadcast layer the accepted
+    envelope.
+    """
+
+    receipt = _base_receipt(envelope, adapter.name)
+    if envelope["dry_run"] or not envelope["submit"]:
+        return receipt
+
+    admitted_envelope: DispatchEnvelopeDict = {**envelope}
+    result = await adapter.submit(admitted_envelope)
+    submitted_receipt: DispatchReceiptDict = {
+        **receipt,
+        "submitted": True,
+    }
+    tx_hash = result.get("tx_hash")
+    if tx_hash is not None:
+        submitted_receipt["tx_hash"] = str(tx_hash)
+    raw_transaction = result.get("raw_transaction")
+    if raw_transaction is not None:
+        submitted_receipt["raw_transaction"] = _normalize_bytes(raw_transaction)
+    return submitted_receipt
+
+
+def _base_receipt(envelope: DispatchEnvelopeDict, adapter_name: str) -> DispatchReceiptDict:
+    return {
+        "plan_hash": envelope["plan_hash"],
+        "trace_id": envelope["trace_id"],
+        "adapter": adapter_name,
+        "target": envelope["target"],
+        "calldata": envelope["calldata"],
+        "submitted": False,
+        "dry_run": envelope["dry_run"],
+        "private_submission": envelope["private_submission"],
+        "broadcast_lane": envelope["broadcast_lane"],
+    }
+
+
 __all__ = [
+    "DispatchAdapter",
     "DispatchEnvelopeDict",
+    "DispatchReceiptDict",
     "compose_dispatch_envelope",
+    "submit_dispatch_envelope",
 ]

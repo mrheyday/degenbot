@@ -1,4 +1,5 @@
 import dataclasses
+import os
 
 import pytest
 import web3
@@ -37,6 +38,19 @@ WBTC_ETH_V4_POOL_ID = "0x54c72c46df32f2cc455e84e41e191b26ed73a29452cdd3d82f51109
 WBTC_ETH_V4_POOL_FEE = 3000
 WBTC_ETH_V4_POOL_TICK_SPACING = 60
 WBTC_ETH_V4_POOL_HOOKS = "0x0000000000000000000000000000000000000000"
+
+
+def _v4_v2_executor_env() -> tuple[str, str, str]:
+    executor_address = os.environ.get("V4_V2_EXECUTOR_CONTRACT_ADDRESS") or env_values.get(
+        "V4_V2_EXECUTOR_CONTRACT_ADDRESS"
+    )
+    executor_abi = os.environ.get("V4_V2_EXECUTOR_CONTRACT_ABI") or env_values.get(
+        "V4_V2_EXECUTOR_CONTRACT_ABI"
+    )
+    operator_address = os.environ.get("OPERATOR_ADDRESS") or env_values.get("OPERATOR_ADDRESS")
+    if not executor_address or not executor_abi or not operator_address:
+        pytest.skip("V4/V2 executor deployment env is not configured")
+    return executor_address, executor_abi, operator_address
 
 
 @pytest.fixture
@@ -385,11 +399,9 @@ def test_v4_v2_dai_arb_base(fork_base_archive: AnvilFork):
 
     assert v4_amount_in < v2_amount_out
 
-    v4_v2_executor_contract_address = get_checksum_address(
-        env_values["V4_V2_EXECUTOR_CONTRACT_ADDRESS"]
-    )
-    v4_v2_executor_contract_abi = env_values["V4_V2_EXECUTOR_CONTRACT_ABI"]
-    operator_address = get_checksum_address(env_values["OPERATOR_ADDRESS"])
+    executor_address, v4_v2_executor_contract_abi, raw_operator_address = _v4_v2_executor_env()
+    v4_v2_executor_contract_address = get_checksum_address(executor_address)
+    operator_address = get_checksum_address(raw_operator_address)
 
     executor_contract = fork_base_archive.w3.eth.contract(
         address=v4_v2_executor_contract_address,
@@ -485,11 +497,9 @@ def test_v2_v4_usdc_arb_base(fork_base_archive: AnvilFork):
 
     assert v4_amount_in < v2_amount_out
 
-    v4_v2_executor_contract_address = get_checksum_address(
-        env_values["V4_V2_EXECUTOR_CONTRACT_ADDRESS"]
-    )
-    v4_v2_executor_contract_abi = env_values["V4_V2_EXECUTOR_CONTRACT_ABI"]
-    operator_address = get_checksum_address(env_values["OPERATOR_ADDRESS"])
+    executor_address, v4_v2_executor_contract_abi, raw_operator_address = _v4_v2_executor_env()
+    v4_v2_executor_contract_address = get_checksum_address(executor_address)
+    operator_address = get_checksum_address(raw_operator_address)
 
     assert isinstance(v4_v2_executor_contract_abi, str)
 

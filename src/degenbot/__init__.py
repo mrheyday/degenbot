@@ -28,7 +28,12 @@ from .degenbot_rs import (
     get_tick_at_sqrt_ratio,
     to_checksum_address,
 )
-from .dispatch import compose_dispatch_envelope
+from .dispatch import (
+    DispatchAdapter,
+    DispatchReceiptDict,
+    compose_dispatch_envelope,
+    submit_dispatch_envelope,
+)
 from .execution import (
     encode_compose_four_leg_calldata,
     encode_match_internal_calldata,
@@ -128,6 +133,8 @@ __all__ = (
     "CurveStableswapPoolState",
     "DegenbotBot",
     "DeterministicPipeline",
+    "DispatchAdapter",
+    "DispatchReceiptDict",
     "Erc20Token",
     "Erc20TokenManager",
     "EtherPlaceholder",
@@ -193,6 +200,7 @@ __all__ = (
     "set_async_web3",
     "set_web3",
     "settings",
+    "submit_dispatch_envelope",
     "to_checksum_address",
     "token_registry",
 )

@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Generator
 from typing import Any
 
@@ -15,37 +16,64 @@ from degenbot.registry import pool_registry, token_registry
 from degenbot.types.abstract.pool_manager import AbstractPoolManager
 from degenbot.types.concrete import AbstractPublisherMessage, Publisher
 
+LIVE_RPC_FIXTURES = frozenset({
+    "fork_arbitrum_full",
+    "fork_base_archive",
+    "fork_base_full",
+    "fork_mainnet_archive",
+    "fork_mainnet_full",
+})
+LIVE_RPC_MARKERS = frozenset({"arbitrum", "base", "ethereum"})
+LIVE_RPC_NODEID_PREFIXES = (
+    "tests/rust/test_alloy_async_integration.py",
+    "tests/rust/test_alloy_integration.py",
+    "tests/rust/test_provider_interface.py",
+    "tests/test_anvil_fork.py",
+    "tests/test_config.py",
+    "tests/test_provider_parallel.py",
+)
+DATABASE_NODEID_PREFIXES = (
+    "tests/database/",
+    "tests/uniswap/v3/test_uniswap_v3_snapshot.py",
+)
+
 env_file = dotenv.find_dotenv("tests.env")
 env_values = dotenv.dotenv_values(env_file)
 
 
-ARBITRUM_FULL_NODE_HTTP_URI: str = env_values.get(
+def _rpc_env(name: str, default: str) -> str:
+    return os.environ.get(name) or env_values.get(name) or default
+
+
+ARBITRUM_FULL_NODE_HTTP_URI: str = _rpc_env(
     "ARBITRUM_FULL_NODE_HTTP_URI", "https://arbitrum-one-rpc.publicnode.com"
 )
-ARBITRUM_FULL_NODE_WS_URI: str = env_values.get(
+ARBITRUM_FULL_NODE_WS_URI: str = _rpc_env(
     "ARBITRUM_FULL_NODE_WS_URI", "wss://arbitrum-one-rpc.publicnode.com"
 )
 
-BASE_ARCHIVE_NODE_HTTP_URI: str = env_values.get(
-    "BASE_ARCHIVE_NODE_HTTP_URI", "https://base.llamarpc.com/"
+BASE_ARCHIVE_NODE_HTTP_URI: str = _rpc_env(
+    "BASE_ARCHIVE_NODE_HTTP_URI", "https://base-rpc.publicnode.com"
 )
-BASE_ARCHIVE_NODE_WS_URI: str = env_values.get(
-    "BASE_ARCHIVE_NODE_WS_URI", "wss://base.llamarpc.com/"
+BASE_ARCHIVE_NODE_WS_URI: str = _rpc_env(
+    "BASE_ARCHIVE_NODE_WS_URI", "wss://base-rpc.publicnode.com"
 )
-BASE_FULL_NODE_HTTP_URI: str = env_values.get("BASE_FULL_NODE_HTTP_URI", "http://localhost:8544/")
-BASE_FULL_NODE_WS_URI: str = env_values.get("BASE_FULL_NODE_WS_URI", "ws://localhost:8548/")
+BASE_FULL_NODE_HTTP_URI: str = _rpc_env(
+    "BASE_FULL_NODE_HTTP_URI", "https://base-rpc.publicnode.com"
+)
+BASE_FULL_NODE_WS_URI: str = _rpc_env("BASE_FULL_NODE_WS_URI", "wss://base-rpc.publicnode.com")
 
-ETHEREUM_ARCHIVE_NODE_HTTP_URI: str = env_values.get(
-    "ETHEREUM_ARCHIVE_NODE_HTTP_URI", "https://eth.llamarpc.com/"
+ETHEREUM_ARCHIVE_NODE_HTTP_URI: str = _rpc_env(
+    "ETHEREUM_ARCHIVE_NODE_HTTP_URI", "https://eth.drpc.org"
 )
-ETHEREUM_ARCHIVE_NODE_WS_URI: str = env_values.get(
-    "ETHEREUM_ARCHIVE_NODE_WS_URI", "wss://eth.llamarpc.com/"
+ETHEREUM_ARCHIVE_NODE_WS_URI: str = _rpc_env(
+    "ETHEREUM_ARCHIVE_NODE_WS_URI", "wss://eth.drpc.org"
 )
-ETHEREUM_FULL_NODE_HTTP_URI: str = env_values.get(
-    "ETHEREUM_FULL_NODE_HTTP_URI", "https://eth.llamarpc.com/"
+ETHEREUM_FULL_NODE_HTTP_URI: str = _rpc_env(
+    "ETHEREUM_FULL_NODE_HTTP_URI", "https://eth.drpc.org"
 )
-ETHEREUM_FULL_NODE_WS_URI: str = env_values.get(
-    "ETHEREUM_FULL_NODE_WS_URI", "wss://eth.llamarpc.com/"
+ETHEREUM_FULL_NODE_WS_URI: str = _rpc_env(
+    "ETHEREUM_FULL_NODE_WS_URI", "wss://eth.drpc.org"
 )
 
 
@@ -56,34 +84,56 @@ def pytest_addoption(parser: Parser):
         default="",
         help="Comma-separated list of fixture names to skip",
     )
+    parser.addoption(
+        "--run-live-rpc",
+        action="store_true",
+        default=False,
+        help="Include tests that require public or operator-provided live RPC endpoints.",
+    )
+    parser.addoption(
+        "--run-database",
+        action="store_true",
+        default=False,
+        help="Include tests that require an operator-populated degenbot SQLite database.",
+    )
 
 
 def pytest_collection_modifyitems(config: Config, items: list[Item]):
-    """
-    Modify the
-    """
     skip_fixtures: str = config.getoption("--skip-fixture")
-    if not skip_fixtures:
-        return  # nothing to skip
-
-    # Convert comma-separated string into a set of fixture names
     ignore_fixtures = {name.strip() for name in skip_fixtures.split(",") if name.strip()}
+    run_live_rpc = bool(config.getoption("--run-live-rpc"))
+    run_database = bool(config.getoption("--run-database"))
 
-    if not ignore_fixtures:
-        return
-
-    remaining_items = []
-    deselected_items = []
+    remaining_items: list[Item] = []
+    deselected_items: list[Item] = []
 
     for item in items:
         if any(fix in ignore_fixtures for fix in item.fixturenames):
             deselected_items.append(item)
-        else:
-            remaining_items.append(item)
+            continue
+        if _is_live_rpc_test(item) and not run_live_rpc:
+            deselected_items.append(item)
+            continue
+        if _is_database_test(item) and not run_database:
+            deselected_items.append(item)
+            continue
+        remaining_items.append(item)
 
     if deselected_items:
         items[:] = remaining_items
         config.hook.pytest_deselected(items=deselected_items)
+
+
+def _is_live_rpc_test(item: Item) -> bool:
+    return (
+        bool(LIVE_RPC_FIXTURES.intersection(item.fixturenames))
+        or any(item.get_closest_marker(marker) is not None for marker in LIVE_RPC_MARKERS)
+        or item.nodeid.startswith(LIVE_RPC_NODEID_PREFIXES)
+    )
+
+
+def _is_database_test(item: Item) -> bool:
+    return item.nodeid.startswith(DATABASE_NODEID_PREFIXES)
 
 
 @pytest.fixture(autouse=True)

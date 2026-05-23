@@ -14,6 +14,10 @@ their ABI and behavior are proven against the Solidity source they replace.
 ## Ported Now
 
 - `libraries/BitMath.sol` -> `core::bit_math`
+- `interfaces/IExecutor.sol` strategy struct ABI encoders for `executeNativeArb`,
+  `executeOwnedSwaps`, `matchInternal`, `composeFourLeg`, `executeUniswapXFill`,
+  `triggerCoWFlashLoanRouter`, and UniswapX `reactorCallback` callback data ->
+  `core::executor_abi`
 - `libraries/FrontrunCalldata.sol` selectors, UR command classifier, V3 packed path encode/parse, V2/Aave/V3-single common encoders and decoders, SwapRouter02 exactInput encoding/decoding, Universal Router execute/input decoders, V2 amount-out, and tested V2 frontrun sizing range -> `core::frontrun_calldata`
 - `interfaces/FlashProtocol.sol`, `interfaces/IExecutor.sol` `DexKind` ordinals and strategy selectors, `interfaces/IPathFinder.sol` venue ordinals and selectors, ERC-8004 registry selectors/addresses, callback selectors from `interfaces/IFlashLoanInterfaces.sol`, `interfaces/IFlashLoanRouter.sol`, `interfaces/IReactorCallback.sol`, and `interfaces/IUniswapV4Hook.sol` hook flag constants -> `core::interface_surfaces`
 - `interfaces/IPathFinder.sol` `Route` return ABI encoding for `(address[] path, uint8[] venues, uint24[] fees, uint256 amountOut)` -> `core::interface_surfaces`
@@ -36,7 +40,7 @@ their ABI and behavior are proven against the Solidity source they replace.
 - `poc/*`
 - `reverse/*`
 - `swappers/*`
-- remaining executor/callback struct ABI codecs, dynamic array/string codecs, and runtime calls
+- remaining executor/callback runtime calls and string-heavy dynamic codecs
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
 - `libraries/LpTransferLib.sol` runtime ERC-20/ERC-721/ERC-6909 calls and return-value/revert normalization
 - `libraries/TokenRiskFilter.sol` live token `staticcall` probes, cache storage, cache timestamp freshness, and external batch/cache ABI

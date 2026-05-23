@@ -188,7 +188,9 @@ filterwarnings = ["ignore::DeprecationWarning:websockets.legacy"]
 markers = [
     "arbitrum: tests requiring an Arbitrum One mainnet RPC",
     "base: tests requiring a Base mainnet RPC",
+    "database: tests requiring an operator-populated degenbot SQLite database",
     "ethereum: tests requiring an Ethereum mainnet RPC",
+    "live_rpc: tests requiring public or operator-provided live RPC endpoints",
 ]
 
 [dependency-groups]

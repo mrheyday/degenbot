@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, TypedDict
+from typing import Any, NotRequired, Protocol, TypedDict
 
 class DispatchEnvelopeDict(TypedDict):
     plan_hash: str
@@ -22,6 +22,24 @@ class DispatchEnvelopeDict(TypedDict):
     dry_run: bool
     engine_report: dict[str, Any]
 
+class DispatchReceiptDict(TypedDict):
+    plan_hash: str
+    trace_id: str
+    adapter: str
+    target: str
+    calldata: str
+    submitted: bool
+    dry_run: bool
+    private_submission: bool
+    broadcast_lane: str
+    tx_hash: NotRequired[str]
+    raw_transaction: NotRequired[str]
+
+class DispatchAdapter(Protocol):
+    @property
+    def name(self) -> str: ...
+    async def submit(self, envelope: DispatchEnvelopeDict) -> Mapping[str, Any]: ...
+
 def compose_dispatch_envelope(
     plan: Mapping[str, Any],
     policy: Mapping[str, Any],
@@ -31,7 +49,15 @@ def compose_dispatch_envelope(
     now_ms: int,
 ) -> DispatchEnvelopeDict: ...
 
+async def submit_dispatch_envelope(
+    envelope: DispatchEnvelopeDict,
+    adapter: DispatchAdapter,
+) -> DispatchReceiptDict: ...
+
 __all__ = [
+    "DispatchAdapter",
     "DispatchEnvelopeDict",
+    "DispatchReceiptDict",
     "compose_dispatch_envelope",
+    "submit_dispatch_envelope",
 ]
