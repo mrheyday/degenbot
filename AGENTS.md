@@ -40,6 +40,7 @@ intelligence and Rust latency helpers:
   `src/degenbot`;
 - put hot-path Rust helpers under `rust/src` and expose them through the maturin `degenbot_rs`
   binding;
+- put reusable Stylus contract ports and parity harnesses under `stylus`;
 - keep parent-repo `solver/driver` code as thin integration glue unless a file is explicitly
   retained there;
 - keep parent-repo TypeScript decisions in `coordinator/` and Solidity execution in `contracts/`.

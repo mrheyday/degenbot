@@ -26,12 +26,12 @@ abstract contract Context {
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
-import {DistributionTypes} from '../lib/DistributionTypes.sol';
-import {StakedTokenV3} from './StakedTokenV3.sol';
-import {IGhoVariableDebtTokenTransferHook} from '../interfaces/IGhoVariableDebtTokenTransferHook.sol';
-import {SafeCast} from '../lib/SafeCast.sol';
-import {IStakedAaveV3} from '../interfaces/IStakedAaveV3.sol';
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {DistributionTypes} from "../lib/DistributionTypes.sol";
+import {StakedTokenV3} from "./StakedTokenV3.sol";
+import {IGhoVariableDebtTokenTransferHook} from "../interfaces/IGhoVariableDebtTokenTransferHook.sol";
+import {SafeCast} from "../lib/SafeCast.sol";
+import {IStakedAaveV3} from "../interfaces/IStakedAaveV3.sol";
 
 /**
  * @title StakedAaveV3
@@ -39,133 +39,107 @@ import {IStakedAaveV3} from '../interfaces/IStakedAaveV3.sol';
  * @author BGD Labs
  */
 contract StakedAaveV3 is StakedTokenV3, IStakedAaveV3 {
-  using SafeCast for uint256;
+    using SafeCast for uint256;
 
-  uint256[1] private ______DEPRECATED_FROM_STK_AAVE_V3;
+    uint256[1] private ______DEPRECATED_FROM_STK_AAVE_V3;
 
-  /// @notice GHO debt token to be used in the _beforeTokenTransfer hook
-  IGhoVariableDebtTokenTransferHook public ghoDebtToken;
+    /// @notice GHO debt token to be used in the _beforeTokenTransfer hook
+    IGhoVariableDebtTokenTransferHook public ghoDebtToken;
 
-  function REVISION() public pure virtual override returns (uint256) {
-    return 6;
-  }
-
-  constructor(
-    IERC20 stakedToken,
-    IERC20 rewardToken,
-    uint256 unstakeWindow,
-    address rewardsVault,
-    address emissionManager,
-    uint128 distributionDuration
-  )
-    StakedTokenV3(
-      stakedToken,
-      rewardToken,
-      unstakeWindow,
-      rewardsVault,
-      emissionManager,
-      distributionDuration
-    )
-  {
-    // brick initialize
-    lastInitializedRevision = REVISION();
-  }
-
-  /**
-   * @dev Called by the proxy contract
-   */
-  function initialize() external override initializer {}
-
-  /// @inheritdoc IStakedAaveV3
-  function claimRewardsAndStake(
-    address to,
-    uint256 amount
-  ) external override returns (uint256) {
-    return _claimRewardsAndStakeOnBehalf(msg.sender, to, amount);
-  }
-
-  /// @inheritdoc IStakedAaveV3
-  function claimRewardsAndStakeOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) external override onlyClaimHelper returns (uint256) {
-    return _claimRewardsAndStakeOnBehalf(from, to, amount);
-  }
-
-  /**
-   * - On _transfer, it updates discount, rewards & delegation for both "from" and "to"
-   * - On _mint, only for _to
-   * - On _burn, only for _from
-   * @param from token sender
-   * @param to token recipient
-   * @param fromBalanceBefore balance of the sender before transfer
-   * @param toBalanceBefore balance of the recipient before transfer
-   * @param amount amount of tokens sent
-   */
-  function _afterTokenTransfer(
-    address from,
-    address to,
-    uint256 fromBalanceBefore,
-    uint256 toBalanceBefore,
-    uint256 amount
-  ) internal override {
-    super._afterTokenTransfer(
-      from,
-      to,
-      fromBalanceBefore,
-      toBalanceBefore,
-      amount
-    );
-
-    address cachedGhoDebtToken = address(ghoDebtToken);
-    if (cachedGhoDebtToken != address(0)) {
-      _updateDiscountDistribution(
-        cachedGhoDebtToken,
-        from,
-        to,
-        fromBalanceBefore,
-        toBalanceBefore,
-        amount
-      );
+    function REVISION() public pure virtual override returns (uint256) {
+        return 6;
     }
-  }
 
-  /// @notice Assembly implementation of the gas limited call to avoid return gas bomb,
-  /// moreover call would also revert even inside try-catch block in Solidity 0.8.17
-  function _updateDiscountDistribution(
-    address cachedGhoDebtToken,
-    address from,
-    address to,
-    uint256 fromBalanceBefore,
-    uint256 toBalanceBefore,
-    uint256 amount
-  ) internal {
-    bytes4 selector = IGhoVariableDebtTokenTransferHook
-      .updateDiscountDistribution
-      .selector;
-    uint256 gasLimit = 220_000;
+    constructor(
+        IERC20 stakedToken,
+        IERC20 rewardToken,
+        uint256 unstakeWindow,
+        address rewardsVault,
+        address emissionManager,
+        uint128 distributionDuration
+    ) StakedTokenV3(stakedToken, rewardToken, unstakeWindow, rewardsVault, emissionManager, distributionDuration) {
+        // brick initialize
+        lastInitializedRevision = REVISION();
+    }
 
-    /// @solidity memory-safe-assembly
-    assembly {
-      // solhint-disable-line no-inline-assembly
-      let ptr := mload(0x40)
-      mstore(ptr, selector)
-      mstore(add(ptr, 0x04), from)
-      mstore(add(ptr, 0x24), to)
-      mstore(add(ptr, 0x44), fromBalanceBefore)
-      mstore(add(ptr, 0x64), toBalanceBefore)
-      mstore(add(ptr, 0x84), amount)
+    /**
+     * @dev Called by the proxy contract
+     */
+    function initialize() external override initializer {}
 
-      let gasLeft := gas()
-      if iszero(call(gasLimit, cachedGhoDebtToken, 0, ptr, 0xA4, 0, 0)) {
-        if lt(div(mul(gasLeft, 63), 64), gasLimit) {
-          returndatacopy(ptr, 0, returndatasize())
-          revert(ptr, returndatasize())
+    /// @inheritdoc IStakedAaveV3
+    function claimRewardsAndStake(address to, uint256 amount) external override returns (uint256) {
+        return _claimRewardsAndStakeOnBehalf(msg.sender, to, amount);
+    }
+
+    /// @inheritdoc IStakedAaveV3
+    function claimRewardsAndStakeOnBehalf(address from, address to, uint256 amount)
+        external
+        override
+        onlyClaimHelper
+        returns (uint256)
+    {
+        return _claimRewardsAndStakeOnBehalf(from, to, amount);
+    }
+
+    /**
+     * - On _transfer, it updates discount, rewards & delegation for both "from" and "to"
+     * - On _mint, only for _to
+     * - On _burn, only for _from
+     * @param from token sender
+     * @param to token recipient
+     * @param fromBalanceBefore balance of the sender before transfer
+     * @param toBalanceBefore balance of the recipient before transfer
+     * @param amount amount of tokens sent
+     */
+    function _afterTokenTransfer(
+        address from,
+        address to,
+        uint256 fromBalanceBefore,
+        uint256 toBalanceBefore,
+        uint256 amount
+    ) internal override {
+        super._afterTokenTransfer(from, to, fromBalanceBefore, toBalanceBefore, amount);
+
+        address cachedGhoDebtToken = address(ghoDebtToken);
+        if (cachedGhoDebtToken != address(0)) {
+            _updateDiscountDistribution(cachedGhoDebtToken, from, to, fromBalanceBefore, toBalanceBefore, amount);
         }
-      }
     }
-  }
+
+    /// @notice Assembly implementation of the gas limited call to avoid return gas bomb,
+    /// moreover call would also revert even inside try-catch block in Solidity 0.8.17
+    function _updateDiscountDistribution(
+        address cachedGhoDebtToken,
+        address from,
+        address to,
+        uint256 fromBalanceBefore,
+        uint256 toBalanceBefore,
+        uint256 amount
+    ) internal {
+        bytes4 selector = IGhoVariableDebtTokenTransferHook.updateDiscountDistribution.selector;
+        uint256 gasLimit = 220_000;
+
+        /// @solidity memory-safe-assembly
+        assembly {
+            // solhint-disable-line no-inline-assembly
+            let ptr := mload(0x40)
+            mstore(ptr, selector)
+            mstore(add(ptr, 0x04), from)
+            mstore(add(ptr, 0x24), to)
+            mstore(add(ptr, 0x44), fromBalanceBefore)
+            mstore(add(ptr, 0x64), toBalanceBefore)
+            mstore(add(ptr, 0x84), amount)
+
+            let gasLeft := gas()
+            if iszero(call(gasLimit, cachedGhoDebtToken, 0, ptr, 0xA4, 0, 0)) {
+                if lt(div(mul(gasLeft, 63), 64), gasLimit) {
+                    returndatacopy(ptr, 0, returndatasize())
+                    revert(ptr, returndatasize())
+                }
+            }
+        }
+    }
 }
 
 // SPDX-License-Identifier: MIT
@@ -1308,176 +1282,144 @@ library SafeCast {
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IStakedTokenV2} from './IStakedTokenV2.sol';
+import {IStakedTokenV2} from "./IStakedTokenV2.sol";
 
 interface IStakedTokenV3 is IStakedTokenV2 {
-  event Staked(
-    address indexed from,
-    address indexed to,
-    uint256 assets,
-    uint256 shares
-  );
-  event Redeem(
-    address indexed from,
-    address indexed to,
-    uint256 assets,
-    uint256 shares
-  );
-  event MaxSlashablePercentageChanged(uint256 newPercentage);
-  event Slashed(address indexed destination, uint256 amount);
-  event SlashingExitWindowDurationChanged(uint256 windowSeconds);
-  event CooldownSecondsChanged(uint256 cooldownSeconds);
-  event ExchangeRateChanged(uint216 exchangeRate);
-  event FundsReturned(uint256 amount);
-  event SlashingSettled();
+    event Staked(address indexed from, address indexed to, uint256 assets, uint256 shares);
+    event Redeem(address indexed from, address indexed to, uint256 assets, uint256 shares);
+    event MaxSlashablePercentageChanged(uint256 newPercentage);
+    event Slashed(address indexed destination, uint256 amount);
+    event SlashingExitWindowDurationChanged(uint256 windowSeconds);
+    event CooldownSecondsChanged(uint256 cooldownSeconds);
+    event ExchangeRateChanged(uint216 exchangeRate);
+    event FundsReturned(uint256 amount);
+    event SlashingSettled();
 
-  /**
-   * @dev Allows staking a certain amount of STAKED_TOKEN with gasless approvals (permit)
-   * @param amount The amount to be staked
-   * @param deadline The permit execution deadline
-   * @param v The v component of the signed message
-   * @param r The r component of the signed message
-   * @param s The s component of the signed message
-   */
-  function stakeWithPermit(
-    uint256 amount,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external;
+    /**
+     * @dev Allows staking a certain amount of STAKED_TOKEN with gasless approvals (permit)
+     * @param amount The amount to be staked
+     * @param deadline The permit execution deadline
+     * @param v The v component of the signed message
+     * @param r The r component of the signed message
+     * @param s The s component of the signed message
+     */
+    function stakeWithPermit(uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 
-  /**
-   * @dev Returns the current exchange rate
-   * @return exchangeRate as 18 decimal precision uint216
-   */
-  function getExchangeRate() external view returns (uint216);
+    /**
+     * @dev Returns the current exchange rate
+     * @return exchangeRate as 18 decimal precision uint216
+     */
+    function getExchangeRate() external view returns (uint216);
 
-  /**
-   * @dev Executes a slashing of the underlying of a certain amount, transferring the seized funds
-   * to destination. Decreasing the amount of underlying will automatically adjust the exchange rate.
-   * A call to `slash` will start a slashing event which has to be settled via `settleSlashing`.
-   * As long as the slashing event is ongoing, stake and slash are deactivated.
-   * - MUST NOT be called when a previous slashing is still ongoing
-   * @param destination the address where seized funds will be transferred
-   * @param amount the amount to be slashed
-   * - if the amount bigger than maximum allowed, the maximum will be slashed instead.
-   * @return amount the amount slashed
-   */
-  function slash(
-    address destination,
-    uint256 amount
-  ) external returns (uint256);
+    /**
+     * @dev Executes a slashing of the underlying of a certain amount, transferring the seized funds
+     * to destination. Decreasing the amount of underlying will automatically adjust the exchange rate.
+     * A call to `slash` will start a slashing event which has to be settled via `settleSlashing`.
+     * As long as the slashing event is ongoing, stake and slash are deactivated.
+     * - MUST NOT be called when a previous slashing is still ongoing
+     * @param destination the address where seized funds will be transferred
+     * @param amount the amount to be slashed
+     * - if the amount bigger than maximum allowed, the maximum will be slashed instead.
+     * @return amount the amount slashed
+     */
+    function slash(address destination, uint256 amount) external returns (uint256);
 
-  /**
-   * @dev Settles an ongoing slashing event
-   */
-  function settleSlashing() external;
+    /**
+     * @dev Settles an ongoing slashing event
+     */
+    function settleSlashing() external;
 
-  /**
-   * @dev Pulls STAKE_TOKEN and distributes them amongst current stakers by altering the exchange rate.
-   * This method is permissionless and intended to be used after a slashing event to return potential excess funds.
-   * @param amount amount of STAKE_TOKEN to pull.
-   */
-  function returnFunds(uint256 amount) external;
+    /**
+     * @dev Pulls STAKE_TOKEN and distributes them amongst current stakers by altering the exchange rate.
+     * This method is permissionless and intended to be used after a slashing event to return potential excess funds.
+     * @param amount amount of STAKE_TOKEN to pull.
+     */
+    function returnFunds(uint256 amount) external;
 
-  /**
-   * @dev Getter of the cooldown seconds
-   * @return cooldownSeconds the amount of seconds between starting the cooldown and being able to redeem
-   */
-  function getCooldownSeconds() external view returns (uint256);
+    /**
+     * @dev Getter of the cooldown seconds
+     * @return cooldownSeconds the amount of seconds between starting the cooldown and being able to redeem
+     */
+    function getCooldownSeconds() external view returns (uint256);
 
-  /**
-   * @dev Getter of the cooldown seconds
-   * @return cooldownSeconds the amount of seconds between starting the cooldown and being able to redeem
-   */
-  function COOLDOWN_SECONDS() external view returns (uint256); // @deprecated
+    /**
+     * @dev Getter of the cooldown seconds
+     * @return cooldownSeconds the amount of seconds between starting the cooldown and being able to redeem
+     */
+    function COOLDOWN_SECONDS() external view returns (uint256); // @deprecated
 
-  /**
-   * @dev Setter of cooldown seconds
-   * Can only be called by the cooldown admin
-   * @param cooldownSeconds the new amount of seconds you have to wait between starting the cooldown and being able to redeem
-   */
-  function setCooldownSeconds(uint256 cooldownSeconds) external;
+    /**
+     * @dev Setter of cooldown seconds
+     * Can only be called by the cooldown admin
+     * @param cooldownSeconds the new amount of seconds you have to wait between starting the cooldown and being able to redeem
+     */
+    function setCooldownSeconds(uint256 cooldownSeconds) external;
 
-  /**
-   * @dev Getter of the max slashable percentage of the total staked amount.
-   * @return percentage the maximum slashable percentage
-   */
-  function getMaxSlashablePercentage() external view returns (uint256);
+    /**
+     * @dev Getter of the max slashable percentage of the total staked amount.
+     * @return percentage the maximum slashable percentage
+     */
+    function getMaxSlashablePercentage() external view returns (uint256);
 
-  /**
-   * @dev Setter of max slashable percentage of the total staked amount.
-   * Can only be called by the slashing admin
-   * @param percentage the new maximum slashable percentage
-   */
-  function setMaxSlashablePercentage(uint256 percentage) external;
+    /**
+     * @dev Setter of max slashable percentage of the total staked amount.
+     * Can only be called by the slashing admin
+     * @param percentage the new maximum slashable percentage
+     */
+    function setMaxSlashablePercentage(uint256 percentage) external;
 
-  /**
-   * @dev returns the exact amount of shares that would be received for the provided number of assets
-   * @param assets the number of assets to stake
-   * @return uint256 shares the number of shares that would be received
-   */
-  function previewStake(uint256 assets) external view returns (uint256);
+    /**
+     * @dev returns the exact amount of shares that would be received for the provided number of assets
+     * @param assets the number of assets to stake
+     * @return uint256 shares the number of shares that would be received
+     */
+    function previewStake(uint256 assets) external view returns (uint256);
 
-  /**
-   * @dev Activates the cooldown period to unstake
-   * - It can't be called if the user is not staking
-   */
-  function cooldownOnBehalfOf(address from) external;
+    /**
+     * @dev Activates the cooldown period to unstake
+     * - It can't be called if the user is not staking
+     */
+    function cooldownOnBehalfOf(address from) external;
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to` on behalf of the user. Only the claim helper contract is allowed to call this function
-   * @param from The address of the user from to claim
-   * @param to Address to send the claimed rewards
-   * @param amount Amount to claim
-   */
-  function claimRewardsOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) external returns (uint256);
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to` on behalf of the user. Only the claim helper contract is allowed to call this function
+     * @param from The address of the user from to claim
+     * @param to Address to send the claimed rewards
+     * @param amount Amount to claim
+     */
+    function claimRewardsOnBehalf(address from, address to, uint256 amount) external returns (uint256);
 
-  /**
-   * @dev returns the exact amount of assets that would be redeemed for the provided number of shares
-   * @param shares the number of shares to redeem
-   * @return uint256 assets the number of assets that would be redeemed
-   */
-  function previewRedeem(uint256 shares) external view returns (uint256);
+    /**
+     * @dev returns the exact amount of assets that would be redeemed for the provided number of shares
+     * @param shares the number of shares to redeem
+     * @return uint256 assets the number of assets that would be redeemed
+     */
+    function previewRedeem(uint256 shares) external view returns (uint256);
 
-  /**
-   * @dev Redeems shares for a user. Only the claim helper contract is allowed to call this function
-   * @param from Address to redeem from
-   * @param to Address to redeem to
-   * @param amount Amount of shares to redeem
-   */
-  function redeemOnBehalf(address from, address to, uint256 amount) external;
+    /**
+     * @dev Redeems shares for a user. Only the claim helper contract is allowed to call this function
+     * @param from Address to redeem from
+     * @param to Address to redeem to
+     * @param amount Amount of shares to redeem
+     */
+    function redeemOnBehalf(address from, address to, uint256 amount) external;
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` and redeems to the provided address
-   * @param to Address to claim and redeem to
-   * @param claimAmount Amount to claim
-   * @param redeemAmount Amount to redeem
-   */
-  function claimRewardsAndRedeem(
-    address to,
-    uint256 claimAmount,
-    uint256 redeemAmount
-  ) external;
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` and redeems to the provided address
+     * @param to Address to claim and redeem to
+     * @param claimAmount Amount to claim
+     * @param redeemAmount Amount to redeem
+     */
+    function claimRewardsAndRedeem(address to, uint256 claimAmount, uint256 redeemAmount) external;
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` and redeems the `redeemAmount` to an address. Only the claim helper contract is allowed to call this function
-   * @param from The address of the from
-   * @param to Address to claim and redeem to
-   * @param claimAmount Amount to claim
-   * @param redeemAmount Amount to redeem
-   */
-  function claimRewardsAndRedeemOnBehalf(
-    address from,
-    address to,
-    uint256 claimAmount,
-    uint256 redeemAmount
-  ) external;
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` and redeems the `redeemAmount` to an address. Only the claim helper contract is allowed to call this function
+     * @param from The address of the from
+     * @param to Address to claim and redeem to
+     * @param claimAmount Amount to claim
+     * @param redeemAmount Amount to redeem
+     */
+    function claimRewardsAndRedeemOnBehalf(address from, address to, uint256 claimAmount, uint256 redeemAmount) external;
 }
 
 // SPDX-License-Identifier: MIT
@@ -1516,82 +1458,80 @@ pragma solidity ^0.8.0;
  * @notice Generic role manager to manage slashing and cooldown admin in StakedAaveV3.
  *         It implements a claim admin role pattern to safely migrate between different admin addresses
  * @author Aave
- **/
+ *
+ */
 contract RoleManager {
-  struct InitAdmin {
-    uint256 role;
-    address admin;
-  }
-
-  mapping(uint256 => address) private _admins;
-  mapping(uint256 => address) private _pendingAdmins;
-
-  event PendingAdminChanged(address indexed newPendingAdmin, uint256 role);
-  event RoleClaimed(address indexed newAdmin, uint256 role);
-
-  modifier onlyRoleAdmin(uint256 role) {
-    require(_admins[role] == msg.sender, 'CALLER_NOT_ROLE_ADMIN');
-    _;
-  }
-
-  modifier onlyPendingRoleAdmin(uint256 role) {
-    require(
-      _pendingAdmins[role] == msg.sender,
-      'CALLER_NOT_PENDING_ROLE_ADMIN'
-    );
-    _;
-  }
-
-  /**
-   * @dev returns the admin associated with the specific role
-   * @param role the role associated with the admin being returned
-   **/
-  function getAdmin(uint256 role) public view returns (address) {
-    return _admins[role];
-  }
-
-  /**
-   * @dev returns the pending admin associated with the specific role
-   * @param role the role associated with the pending admin being returned
-   **/
-  function getPendingAdmin(uint256 role) public view returns (address) {
-    return _pendingAdmins[role];
-  }
-
-  /**
-   * @dev sets the pending admin for a specific role
-   * @param role the role associated with the new pending admin being set
-   * @param newPendingAdmin the address of the new pending admin
-   **/
-  function setPendingAdmin(
-    uint256 role,
-    address newPendingAdmin
-  ) public onlyRoleAdmin(role) {
-    _pendingAdmins[role] = newPendingAdmin;
-    emit PendingAdminChanged(newPendingAdmin, role);
-  }
-
-  /**
-   * @dev allows the caller to become a specific role admin
-   * @param role the role associated with the admin claiming the new role
-   **/
-  function claimRoleAdmin(uint256 role) external onlyPendingRoleAdmin(role) {
-    _admins[role] = msg.sender;
-    _pendingAdmins[role] = address(0);
-    emit RoleClaimed(msg.sender, role);
-  }
-
-  function _initAdmins(InitAdmin[] memory initAdmins) internal {
-    for (uint256 i = 0; i < initAdmins.length; i++) {
-      require(
-        _admins[initAdmins[i].role] == address(0) &&
-          initAdmins[i].admin != address(0),
-        'ADMIN_CANNOT_BE_INITIALIZED'
-      );
-      _admins[initAdmins[i].role] = initAdmins[i].admin;
-      emit RoleClaimed(initAdmins[i].admin, initAdmins[i].role);
+    struct InitAdmin {
+        uint256 role;
+        address admin;
     }
-  }
+
+    mapping(uint256 => address) private _admins;
+    mapping(uint256 => address) private _pendingAdmins;
+
+    event PendingAdminChanged(address indexed newPendingAdmin, uint256 role);
+    event RoleClaimed(address indexed newAdmin, uint256 role);
+
+    modifier onlyRoleAdmin(uint256 role) {
+        require(_admins[role] == msg.sender, "CALLER_NOT_ROLE_ADMIN");
+        _;
+    }
+
+    modifier onlyPendingRoleAdmin(uint256 role) {
+        require(_pendingAdmins[role] == msg.sender, "CALLER_NOT_PENDING_ROLE_ADMIN");
+        _;
+    }
+
+    /**
+     * @dev returns the admin associated with the specific role
+     * @param role the role associated with the admin being returned
+     *
+     */
+    function getAdmin(uint256 role) public view returns (address) {
+        return _admins[role];
+    }
+
+    /**
+     * @dev returns the pending admin associated with the specific role
+     * @param role the role associated with the pending admin being returned
+     *
+     */
+    function getPendingAdmin(uint256 role) public view returns (address) {
+        return _pendingAdmins[role];
+    }
+
+    /**
+     * @dev sets the pending admin for a specific role
+     * @param role the role associated with the new pending admin being set
+     * @param newPendingAdmin the address of the new pending admin
+     *
+     */
+    function setPendingAdmin(uint256 role, address newPendingAdmin) public onlyRoleAdmin(role) {
+        _pendingAdmins[role] = newPendingAdmin;
+        emit PendingAdminChanged(newPendingAdmin, role);
+    }
+
+    /**
+     * @dev allows the caller to become a specific role admin
+     * @param role the role associated with the admin claiming the new role
+     *
+     */
+    function claimRoleAdmin(uint256 role) external onlyPendingRoleAdmin(role) {
+        _admins[role] = msg.sender;
+        _pendingAdmins[role] = address(0);
+        emit RoleClaimed(msg.sender, role);
+    }
+
+    function _initAdmins(InitAdmin[] memory initAdmins) internal {
+        for (uint256 i = 0; i < initAdmins.length; i++) {
+            require(
+                _admins[initAdmins[i].role] == address(0) && initAdmins[i].admin != address(0),
+                "ADMIN_CANNOT_BE_INITIALIZED"
+            );
+            _admins[initAdmins[i].role] = initAdmins[i].admin;
+            emit RoleClaimed(initAdmins[i].admin, initAdmins[i].role);
+        }
+    }
 }
 
 // SPDX-License-Identifier: agpl-3.0
@@ -1612,32 +1552,29 @@ pragma solidity ^0.8.0;
  * @author Aave, inspired by the OpenZeppelin Initializable contract
  */
 abstract contract VersionedInitializable {
-  /**
-   * @dev Indicates that the contract has been initialized.
-   */
-  uint256 internal lastInitializedRevision = 0;
+    /**
+     * @dev Indicates that the contract has been initialized.
+     */
+    uint256 internal lastInitializedRevision = 0;
 
-  /**
-   * @dev Modifier to use in the initializer function of a contract.
-   */
-  modifier initializer() {
-    uint256 revision = getRevision();
-    require(
-      revision > lastInitializedRevision,
-      'Contract instance has already been initialized'
-    );
+    /**
+     * @dev Modifier to use in the initializer function of a contract.
+     */
+    modifier initializer() {
+        uint256 revision = getRevision();
+        require(revision > lastInitializedRevision, "Contract instance has already been initialized");
 
-    lastInitializedRevision = revision;
+        lastInitializedRevision = revision;
 
-    _;
-  }
+        _;
+    }
 
-  /// @dev returns the revision number of the contract.
-  /// Needs to be defined in the inherited class as a constant.
-  function getRevision() internal pure virtual returns (uint256);
+    /// @dev returns the revision number of the contract.
+    /// Needs to be defined in the inherited class as a constant.
+    function getRevision() internal pure virtual returns (uint256);
 
-  // Reserved storage space to allow for layout changes in the future.
-  uint256[50] private ______gap;
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
 }
 
 // SPDX-License-Identifier: MIT
@@ -1781,17 +1718,17 @@ library SignedMath {
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
-import {EIP712, ECDSA} from 'aave-token-v3/utils/EIP712.sol';
-import {IStakedTokenV2} from '../interfaces/IStakedTokenV2.sol';
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {EIP712, ECDSA} from "aave-token-v3/utils/EIP712.sol";
+import {IStakedTokenV2} from "../interfaces/IStakedTokenV2.sol";
 
-import {DistributionTypes} from '../lib/DistributionTypes.sol';
-import {SafeERC20} from '../lib/SafeERC20.sol';
+import {DistributionTypes} from "../lib/DistributionTypes.sol";
+import {SafeERC20} from "../lib/SafeERC20.sol";
 
-import {VersionedInitializable} from '../utils/VersionedInitializable.sol';
-import {AaveDistributionManager} from './AaveDistributionManager.sol';
-import {GovernancePowerWithSnapshot} from '../lib/GovernancePowerWithSnapshot.sol';
-import {BaseMintableAaveToken} from './BaseMintableAaveToken.sol';
+import {VersionedInitializable} from "../utils/VersionedInitializable.sol";
+import {AaveDistributionManager} from "./AaveDistributionManager.sol";
+import {GovernancePowerWithSnapshot} from "../lib/GovernancePowerWithSnapshot.sol";
+import {BaseMintableAaveToken} from "./BaseMintableAaveToken.sol";
 
 /**
  * @title StakedTokenV2
@@ -1799,160 +1736,127 @@ import {BaseMintableAaveToken} from './BaseMintableAaveToken.sol';
  * @author BGD Labs
  */
 abstract contract StakedTokenV2 is
-  IStakedTokenV2,
-  BaseMintableAaveToken,
-  GovernancePowerWithSnapshot,
-  VersionedInitializable,
-  AaveDistributionManager,
-  EIP712
+    IStakedTokenV2,
+    BaseMintableAaveToken,
+    GovernancePowerWithSnapshot,
+    VersionedInitializable,
+    AaveDistributionManager,
+    EIP712
 {
-  using SafeERC20 for IERC20;
+    using SafeERC20 for IERC20;
 
-  IERC20 public immutable STAKED_TOKEN;
-  IERC20 public immutable REWARD_TOKEN;
+    IERC20 public immutable STAKED_TOKEN;
+    IERC20 public immutable REWARD_TOKEN;
 
-  /// @notice Seconds available to redeem once the cooldown period is fulfilled
-  uint256 public immutable UNSTAKE_WINDOW;
+    /// @notice Seconds available to redeem once the cooldown period is fulfilled
+    uint256 public immutable UNSTAKE_WINDOW;
 
-  /// @notice Address to pull from the rewards, needs to have approved this contract
-  address public immutable REWARDS_VAULT;
+    /// @notice Address to pull from the rewards, needs to have approved this contract
+    address public immutable REWARDS_VAULT;
 
-  mapping(address => uint256) public stakerRewardsToClaim;
-  mapping(address => CooldownSnapshot) public stakersCooldowns;
+    mapping(address => uint256) public stakerRewardsToClaim;
+    mapping(address => CooldownSnapshot) public stakersCooldowns;
 
-  /// @dev End of Storage layout from StakedToken v1
-  uint256[5] private ______DEPRECATED_FROM_STK_AAVE_V2;
+    /// @dev End of Storage layout from StakedToken v1
+    uint256[5] private ______DEPRECATED_FROM_STK_AAVE_V2;
 
-  bytes32 public constant PERMIT_TYPEHASH =
-    keccak256(
-      'Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)'
-    );
+    bytes32 public constant PERMIT_TYPEHASH =
+        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
 
-  /// @dev owner => next valid nonce to submit with permit()
-  mapping(address => uint256) public _nonces;
+    /// @dev owner => next valid nonce to submit with permit()
+    mapping(address => uint256) public _nonces;
 
-  constructor(
-    IERC20 stakedToken,
-    IERC20 rewardToken,
-    uint256 unstakeWindow,
-    address rewardsVault,
-    address emissionManager,
-    uint128 distributionDuration
-  )
-    AaveDistributionManager(emissionManager, distributionDuration)
-    EIP712('Staked Aave', '2')
-  {
-    STAKED_TOKEN = stakedToken;
-    REWARD_TOKEN = rewardToken;
-    UNSTAKE_WINDOW = unstakeWindow;
-    REWARDS_VAULT = rewardsVault;
-  }
-
-  /**
-   * @notice Get the domain separator for the token
-   * @dev Return cached value if chainId matches cache, otherwise recomputes separator
-   * @return The domain separator of the token at current chain
-   */
-  function DOMAIN_SEPARATOR() public view virtual returns (bytes32) {
-    return _domainSeparatorV4();
-  }
-
-  /// @dev maintained for backwards compatibility. See EIP712 _EIP712Version
-  function EIP712_REVISION() external view returns (bytes memory) {
-    return bytes(_EIP712Version());
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function stake(address onBehalfOf, uint256 amount) external virtual override;
-
-  /// @inheritdoc IStakedTokenV2
-  function redeem(address to, uint256 amount) external virtual override;
-
-  /// @inheritdoc IStakedTokenV2
-  function cooldown() external virtual override;
-
-  /// @inheritdoc IStakedTokenV2
-  function claimRewards(address to, uint256 amount) external virtual override;
-
-  /// @inheritdoc IStakedTokenV2
-  function getTotalRewardsBalance(
-    address staker
-  ) external view returns (uint256) {
-    DistributionTypes.UserStakeInput[]
-      memory userStakeInputs = new DistributionTypes.UserStakeInput[](1);
-    userStakeInputs[0] = DistributionTypes.UserStakeInput({
-      underlyingAsset: address(this),
-      stakedByUser: balanceOf(staker),
-      totalStaked: totalSupply()
-    });
-    return
-      stakerRewardsToClaim[staker] +
-      _getUnclaimedRewards(staker, userStakeInputs);
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function permit(
-    address owner,
-    address spender,
-    uint256 value,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external {
-    require(owner != address(0), 'INVALID_OWNER');
-    //solium-disable-next-line
-    require(block.timestamp <= deadline, 'INVALID_EXPIRATION');
-    uint256 currentValidNonce = _nonces[owner];
-    bytes32 digest = _hashTypedDataV4(
-      keccak256(
-        abi.encode(
-          PERMIT_TYPEHASH,
-          owner,
-          spender,
-          value,
-          currentValidNonce,
-          deadline
-        )
-      )
-    );
-
-    require(owner == ECDSA.recover(digest, v, r, s), 'INVALID_SIGNATURE');
-    unchecked {
-      _nonces[owner] = currentValidNonce + 1;
-    }
-    _approve(owner, spender, value);
-  }
-
-  /**
-   * @dev Updates the user state related with his accrued rewards
-   * @param user Address of the user
-   * @param userBalance The current balance of the user
-   * @param updateStorage Boolean flag used to update or not the stakerRewardsToClaim of the user
-   * @return The unclaimed rewards that were added to the total accrued
-   */
-  function _updateCurrentUnclaimedRewards(
-    address user,
-    uint256 userBalance,
-    bool updateStorage
-  ) internal returns (uint256) {
-    uint256 accruedRewards = _updateUserAssetInternal(
-      user,
-      address(this),
-      userBalance,
-      totalSupply()
-    );
-    uint256 unclaimedRewards = stakerRewardsToClaim[user] + accruedRewards;
-
-    if (accruedRewards != 0) {
-      if (updateStorage) {
-        stakerRewardsToClaim[user] = unclaimedRewards;
-      }
-      emit RewardsAccrued(user, accruedRewards);
+    constructor(
+        IERC20 stakedToken,
+        IERC20 rewardToken,
+        uint256 unstakeWindow,
+        address rewardsVault,
+        address emissionManager,
+        uint128 distributionDuration
+    ) AaveDistributionManager(emissionManager, distributionDuration) EIP712("Staked Aave", "2") {
+        STAKED_TOKEN = stakedToken;
+        REWARD_TOKEN = rewardToken;
+        UNSTAKE_WINDOW = unstakeWindow;
+        REWARDS_VAULT = rewardsVault;
     }
 
-    return unclaimedRewards;
-  }
+    /**
+     * @notice Get the domain separator for the token
+     * @dev Return cached value if chainId matches cache, otherwise recomputes separator
+     * @return The domain separator of the token at current chain
+     */
+    function DOMAIN_SEPARATOR() public view virtual returns (bytes32) {
+        return _domainSeparatorV4();
+    }
+
+    /// @dev maintained for backwards compatibility. See EIP712 _EIP712Version
+    function EIP712_REVISION() external view returns (bytes memory) {
+        return bytes(_EIP712Version());
+    }
+
+    /// @inheritdoc IStakedTokenV2
+    function stake(address onBehalfOf, uint256 amount) external virtual override;
+
+    /// @inheritdoc IStakedTokenV2
+    function redeem(address to, uint256 amount) external virtual override;
+
+    /// @inheritdoc IStakedTokenV2
+    function cooldown() external virtual override;
+
+    /// @inheritdoc IStakedTokenV2
+    function claimRewards(address to, uint256 amount) external virtual override;
+
+    /// @inheritdoc IStakedTokenV2
+    function getTotalRewardsBalance(address staker) external view returns (uint256) {
+        DistributionTypes.UserStakeInput[] memory userStakeInputs = new DistributionTypes.UserStakeInput[](1);
+        userStakeInputs[0] = DistributionTypes.UserStakeInput({
+            underlyingAsset: address(this), stakedByUser: balanceOf(staker), totalStaked: totalSupply()
+        });
+        return stakerRewardsToClaim[staker] + _getUnclaimedRewards(staker, userStakeInputs);
+    }
+
+    /// @inheritdoc IStakedTokenV2
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+    {
+        require(owner != address(0), "INVALID_OWNER");
+        //solium-disable-next-line
+        require(block.timestamp <= deadline, "INVALID_EXPIRATION");
+        uint256 currentValidNonce = _nonces[owner];
+        bytes32 digest = _hashTypedDataV4(
+            keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, currentValidNonce, deadline))
+        );
+
+        require(owner == ECDSA.recover(digest, v, r, s), "INVALID_SIGNATURE");
+        unchecked {
+            _nonces[owner] = currentValidNonce + 1;
+        }
+        _approve(owner, spender, value);
+    }
+
+    /**
+     * @dev Updates the user state related with his accrued rewards
+     * @param user Address of the user
+     * @param userBalance The current balance of the user
+     * @param updateStorage Boolean flag used to update or not the stakerRewardsToClaim of the user
+     * @return The unclaimed rewards that were added to the total accrued
+     */
+    function _updateCurrentUnclaimedRewards(address user, uint256 userBalance, bool updateStorage)
+        internal
+        returns (uint256)
+    {
+        uint256 accruedRewards = _updateUserAssetInternal(user, address(this), userBalance, totalSupply());
+        uint256 unclaimedRewards = stakerRewardsToClaim[user] + accruedRewards;
+
+        if (accruedRewards != 0) {
+            if (updateStorage) {
+                stakerRewardsToClaim[user] = unclaimedRewards;
+            }
+            emit RewardsAccrued(user, accruedRewards);
+        }
+
+        return unclaimedRewards;
+    }
 }
 
 // SPDX-License-Identifier: MIT
@@ -2097,18 +2001,11 @@ library StorageSlot {
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 interface IERC20WithPermit is IERC20 {
-  function permit(
-    address owner,
-    address spender,
-    uint256 value,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external;
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external;
 }
 
 // SPDX-License-Identifier: agpl-3.0
@@ -2120,7 +2017,8 @@ pragma solidity ^0.8.0;
  * @notice Provides functions to perform percentage calculations
  * @dev Percentages are defined by default with 2 decimals of precision (100.00). The precision is indicated by PERCENTAGE_FACTOR
  * @dev Operations are rounded half up
- **/
+ *
+ */
 
 library PercentageMath {
     uint256 constant PERCENTAGE_FACTOR = 1e4; //percentage plus two decimals
@@ -2131,20 +2029,14 @@ library PercentageMath {
      * @param value The value of which the percentage needs to be calculated
      * @param percentage The percentage of the value to be calculated
      * @return The percentage of value
-     **/
-    function percentMul(uint256 value, uint256 percentage)
-        internal
-        pure
-        returns (uint256)
-    {
+     *
+     */
+    function percentMul(uint256 value, uint256 percentage) internal pure returns (uint256) {
         if (value == 0 || percentage == 0) {
             return 0;
         }
 
-        require(
-            value <= (type(uint256).max) / percentage,
-            "MATH_MULTIPLICATION_OVERFLOW"
-        );
+        require(value <= (type(uint256).max) / percentage, "MATH_MULTIPLICATION_OVERFLOW");
 
         return (value * percentage) / PERCENTAGE_FACTOR;
     }
@@ -2154,18 +2046,12 @@ library PercentageMath {
      * @param value The value of which the percentage needs to be calculated
      * @param percentage The percentage of the value to be calculated
      * @return The value divided the percentage
-     **/
-    function percentDiv(uint256 value, uint256 percentage)
-        internal
-        pure
-        returns (uint256)
-    {
+     *
+     */
+    function percentDiv(uint256 value, uint256 percentage) internal pure returns (uint256) {
         require(percentage != 0, "MATH_DIVISION_BY_ZERO");
 
-        require(
-            value <= type(uint256).max / PERCENTAGE_FACTOR,
-            "MATH_MULTIPLICATION_OVERFLOW"
-        );
+        require(value <= type(uint256).max / PERCENTAGE_FACTOR, "MATH_MULTIPLICATION_OVERFLOW");
 
         return (value * PERCENTAGE_FACTOR) / percentage;
     }
@@ -2233,7 +2119,7 @@ library Address {
     function sendValue(address payable recipient, uint256 amount) internal {
         require(address(this).balance >= amount, "Address: insufficient balance");
 
-        (bool success, ) = recipient.call{value: amount}("");
+        (bool success,) = recipient.call{value: amount}("");
         require(success, "Address: unable to send value, recipient may have reverted");
     }
 
@@ -2265,11 +2151,10 @@ library Address {
      *
      * _Available since v3.1._
      */
-    function functionCall(
-        address target,
-        bytes memory data,
-        string memory errorMessage
-    ) internal returns (bytes memory) {
+    function functionCall(address target, bytes memory data, string memory errorMessage)
+        internal
+        returns (bytes memory)
+    {
         return functionCallWithValue(target, data, 0, errorMessage);
     }
 
@@ -2284,11 +2169,7 @@ library Address {
      *
      * _Available since v3.1._
      */
-    function functionCallWithValue(
-        address target,
-        bytes memory data,
-        uint256 value
-    ) internal returns (bytes memory) {
+    function functionCallWithValue(address target, bytes memory data, uint256 value) internal returns (bytes memory) {
         return functionCallWithValue(target, data, value, "Address: low-level call with value failed");
     }
 
@@ -2298,12 +2179,10 @@ library Address {
      *
      * _Available since v3.1._
      */
-    function functionCallWithValue(
-        address target,
-        bytes memory data,
-        uint256 value,
-        string memory errorMessage
-    ) internal returns (bytes memory) {
+    function functionCallWithValue(address target, bytes memory data, uint256 value, string memory errorMessage)
+        internal
+        returns (bytes memory)
+    {
         require(address(this).balance >= value, "Address: insufficient balance for call");
         (bool success, bytes memory returndata) = target.call{value: value}(data);
         return verifyCallResultFromTarget(target, success, returndata, errorMessage);
@@ -2325,11 +2204,11 @@ library Address {
      *
      * _Available since v3.3._
      */
-    function functionStaticCall(
-        address target,
-        bytes memory data,
-        string memory errorMessage
-    ) internal view returns (bytes memory) {
+    function functionStaticCall(address target, bytes memory data, string memory errorMessage)
+        internal
+        view
+        returns (bytes memory)
+    {
         (bool success, bytes memory returndata) = target.staticcall(data);
         return verifyCallResultFromTarget(target, success, returndata, errorMessage);
     }
@@ -2350,11 +2229,10 @@ library Address {
      *
      * _Available since v3.4._
      */
-    function functionDelegateCall(
-        address target,
-        bytes memory data,
-        string memory errorMessage
-    ) internal returns (bytes memory) {
+    function functionDelegateCall(address target, bytes memory data, string memory errorMessage)
+        internal
+        returns (bytes memory)
+    {
         (bool success, bytes memory returndata) = target.delegatecall(data);
         return verifyCallResultFromTarget(target, success, returndata, errorMessage);
     }
@@ -2389,11 +2267,11 @@ library Address {
      *
      * _Available since v4.3._
      */
-    function verifyCallResult(
-        bool success,
-        bytes memory returndata,
-        string memory errorMessage
-    ) internal pure returns (bytes memory) {
+    function verifyCallResult(bool success, bytes memory returndata, string memory errorMessage)
+        internal
+        pure
+        returns (bytes memory)
+    {
         if (success) {
             return returndata;
         } else {
@@ -2420,22 +2298,23 @@ library Address {
 pragma solidity ^0.8.0;
 
 interface IGhoVariableDebtTokenTransferHook {
-  /**
-   * @dev updates the discount when discount token is transferred
-   * @dev Only callable by discount token
-   * @param sender address of sender
-   * @param recipient address of recipient
-   * @param senderDiscountTokenBalance sender discount token balance
-   * @param recipientDiscountTokenBalance recipient discount token balance
-   * @param amount amount of discount token being transferred
-   **/
-  function updateDiscountDistribution(
-    address sender,
-    address recipient,
-    uint256 senderDiscountTokenBalance,
-    uint256 recipientDiscountTokenBalance,
-    uint256 amount
-  ) external;
+    /**
+     * @dev updates the discount when discount token is transferred
+     * @dev Only callable by discount token
+     * @param sender address of sender
+     * @param recipient address of recipient
+     * @param senderDiscountTokenBalance sender discount token balance
+     * @param recipientDiscountTokenBalance recipient discount token balance
+     * @param amount amount of discount token being transferred
+     *
+     */
+    function updateDiscountDistribution(
+        address sender,
+        address recipient,
+        uint256 senderDiscountTokenBalance,
+        uint256 recipientDiscountTokenBalance,
+        uint256 amount
+    ) external;
 }
 
 // SPDX-License-Identifier: MIT
@@ -2445,9 +2324,9 @@ interface IGhoVariableDebtTokenTransferHook {
 
 pragma solidity ^0.8.10;
 
-import {ECDSA} from 'openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol';
-import {ShortStrings, ShortString} from 'openzeppelin-contracts/contracts/utils/ShortStrings.sol';
-import {IERC5267} from 'openzeppelin-contracts/contracts/interfaces/IERC5267.sol';
+import {ECDSA} from "openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
+import {ShortStrings, ShortString} from "openzeppelin-contracts/contracts/utils/ShortStrings.sol";
+import {IERC5267} from "openzeppelin-contracts/contracts/interfaces/IERC5267.sol";
 
 /**
  * @dev https://eips.ethereum.org/EIPS/eip-712[EIP 712] is a standard for hashing and signing of typed structured data.
@@ -2475,151 +2354,148 @@ import {IERC5267} from 'openzeppelin-contracts/contracts/interfaces/IERC5267.sol
  * @custom:oz-upgrades-unsafe-allow state-variable-immutable state-variable-assignment
  */
 abstract contract EIP712 is IERC5267 {
-  using ShortStrings for *;
+    using ShortStrings for *;
 
-  bytes32 private constant _TYPE_HASH =
-    keccak256('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)');
+    bytes32 private constant _TYPE_HASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
-  // Cache the domain separator as an immutable value, but also store the chain id that it corresponds to, in order to
-  // invalidate the cached domain separator if the chain id changes.
-  bytes32 private immutable _cachedDomainSeparator;
-  uint256 private immutable _cachedChainId;
-  address private immutable _cachedThis;
+    // Cache the domain separator as an immutable value, but also store the chain id that it corresponds to, in order to
+    // invalidate the cached domain separator if the chain id changes.
+    bytes32 private immutable _cachedDomainSeparator;
+    uint256 private immutable _cachedChainId;
+    address private immutable _cachedThis;
 
-  bytes32 private immutable _hashedName;
-  bytes32 private immutable _hashedVersion;
+    bytes32 private immutable _hashedName;
+    bytes32 private immutable _hashedVersion;
 
-  ShortString private immutable _name;
-  ShortString private immutable _version;
+    ShortString private immutable _name;
+    ShortString private immutable _version;
 
-  /**
-   * @dev Initializes the domain separator and parameter caches.
-   *
-   * The meaning of `name` and `version` is specified in
-   * https://eips.ethereum.org/EIPS/eip-712#definition-of-domainseparator[EIP 712]:
-   *
-   * - `name`: the user readable name of the signing domain, i.e. the name of the DApp or the protocol.
-   * - `version`: the current major version of the signing domain.
-   *
-   * NOTE: These parameters cannot be changed except through a xref:learn::upgrading-smart-contracts.adoc[smart
-   * contract upgrade].
-   */
-  /// @dev BGD: removed usage of fallback variables to not modify previous storage layout. As we know that the length of
-  ///           name and version will not be bigger than 32 bytes we use toShortString as there is no need to use the fallback system.
-  constructor(string memory name, string memory version) {
-    _name = name.toShortString();
-    _version = version.toShortString();
-    _hashedName = keccak256(bytes(name));
-    _hashedVersion = keccak256(bytes(version));
+    /**
+     * @dev Initializes the domain separator and parameter caches.
+     *
+     * The meaning of `name` and `version` is specified in
+     * https://eips.ethereum.org/EIPS/eip-712#definition-of-domainseparator[EIP 712]:
+     *
+     * - `name`: the user readable name of the signing domain, i.e. the name of the DApp or the protocol.
+     * - `version`: the current major version of the signing domain.
+     *
+     * NOTE: These parameters cannot be changed except through a xref:learn::upgrading-smart-contracts.adoc[smart
+     * contract upgrade].
+     */
+    /// @dev BGD: removed usage of fallback variables to not modify previous storage layout. As we know that the length of
+    ///           name and version will not be bigger than 32 bytes we use toShortString as there is no need to use the fallback system.
+    constructor(string memory name, string memory version) {
+        _name = name.toShortString();
+        _version = version.toShortString();
+        _hashedName = keccak256(bytes(name));
+        _hashedVersion = keccak256(bytes(version));
 
-    _cachedChainId = block.chainid;
-    _cachedDomainSeparator = _buildDomainSeparator();
-    _cachedThis = address(this);
-  }
-
-  /**
-   * @dev Returns the domain separator for the current chain.
-   */
-  function _domainSeparatorV4() internal view returns (bytes32) {
-    if (address(this) == _cachedThis && block.chainid == _cachedChainId) {
-      return _cachedDomainSeparator;
-    } else {
-      return _buildDomainSeparator();
+        _cachedChainId = block.chainid;
+        _cachedDomainSeparator = _buildDomainSeparator();
+        _cachedThis = address(this);
     }
-  }
 
-  function _buildDomainSeparator() private view returns (bytes32) {
-    return
-      keccak256(abi.encode(_TYPE_HASH, _hashedName, _hashedVersion, block.chainid, address(this)));
-  }
+    /**
+     * @dev Returns the domain separator for the current chain.
+     */
+    function _domainSeparatorV4() internal view returns (bytes32) {
+        if (address(this) == _cachedThis && block.chainid == _cachedChainId) {
+            return _cachedDomainSeparator;
+        } else {
+            return _buildDomainSeparator();
+        }
+    }
 
-  /**
-   * @dev Given an already https://eips.ethereum.org/EIPS/eip-712#definition-of-hashstruct[hashed struct], this
-   * function returns the hash of the fully encoded EIP712 message for this domain.
-   *
-   * This hash can be used together with {ECDSA-recover} to obtain the signer of a message. For example:
-   *
-   * ```solidity
-   * bytes32 digest = _hashTypedDataV4(keccak256(abi.encode(
-   *     keccak256("Mail(address to,string contents)"),
-   *     mailTo,
-   *     keccak256(bytes(mailContents))
-   * )));
-   * address signer = ECDSA.recover(digest, signature);
-   * ```
-   */
-  function _hashTypedDataV4(bytes32 structHash) internal view virtual returns (bytes32) {
-    return ECDSA.toTypedDataHash(_domainSeparatorV4(), structHash);
-  }
+    function _buildDomainSeparator() private view returns (bytes32) {
+        return keccak256(abi.encode(_TYPE_HASH, _hashedName, _hashedVersion, block.chainid, address(this)));
+    }
 
-  /**
-   * @dev See {EIP-5267}.
-   *
-   * _Available since v4.9._
-   */
-  function eip712Domain()
-    public
-    view
-    virtual
-    returns (
-      bytes1 fields,
-      string memory name,
-      string memory version,
-      uint256 chainId,
-      address verifyingContract,
-      bytes32 salt,
-      uint256[] memory extensions
-    )
-  {
-    return (
-      hex'0f', // 01111
-      _EIP712Name(),
-      _EIP712Version(),
-      block.chainid,
-      address(this),
-      bytes32(0),
-      new uint256[](0)
-    );
-  }
+    /**
+     * @dev Given an already https://eips.ethereum.org/EIPS/eip-712#definition-of-hashstruct[hashed struct], this
+     * function returns the hash of the fully encoded EIP712 message for this domain.
+     *
+     * This hash can be used together with {ECDSA-recover} to obtain the signer of a message. For example:
+     *
+     * ```solidity
+     * bytes32 digest = _hashTypedDataV4(keccak256(abi.encode(
+     *     keccak256("Mail(address to,string contents)"),
+     *     mailTo,
+     *     keccak256(bytes(mailContents))
+     * )));
+     * address signer = ECDSA.recover(digest, signature);
+     * ```
+     */
+    function _hashTypedDataV4(bytes32 structHash) internal view virtual returns (bytes32) {
+        return ECDSA.toTypedDataHash(_domainSeparatorV4(), structHash);
+    }
 
-  /**
-   * @dev The name parameter for the EIP712 domain.
-   *
-   * NOTE: By default this function reads _name which is an immutable value.
-   * It only reads from storage if necessary (in case the value is too large to fit in a ShortString).
-   *
-   * _Available since v5.0._
-   */
-  /// @dev BGD: we use toString instead of toStringWithFallback as we dont have fallback, to not modify previous storage layout
-  // solhint-disable-next-line func-name-mixedcase
-  function _EIP712Name() internal view returns (string memory) {
-    return _name.toString(); // _name.toStringWithFallback(_nameFallback);
-  }
+    /**
+     * @dev See {EIP-5267}.
+     *
+     * _Available since v4.9._
+     */
+    function eip712Domain()
+        public
+        view
+        virtual
+        returns (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        )
+    {
+        return (
+            hex"0f", // 01111
+            _EIP712Name(),
+            _EIP712Version(),
+            block.chainid,
+            address(this),
+            bytes32(0),
+            new uint256[](0)
+        );
+    }
 
-  /**
-   * @dev The version parameter for the EIP712 domain.
-   *
-   * NOTE: By default this function reads _version which is an immutable value.
-   * It only reads from storage if necessary (in case the value is too large to fit in a ShortString).
-   *
-   * _Available since v5.0._
-   */
-  /// @dev BGD: we use toString instead of toStringWithFallback as we dont have fallback, to not modify previous storage layout
-  // solhint-disable-next-line func-name-mixedcase
-  function _EIP712Version() internal view returns (string memory) {
-    return _version.toString();
-  }
+    /**
+     * @dev The name parameter for the EIP712 domain.
+     *
+     * NOTE: By default this function reads _name which is an immutable value.
+     * It only reads from storage if necessary (in case the value is too large to fit in a ShortString).
+     *
+     * _Available since v5.0._
+     */
+    /// @dev BGD: we use toString instead of toStringWithFallback as we dont have fallback, to not modify previous storage layout
+    // solhint-disable-next-line func-name-mixedcase
+    function _EIP712Name() internal view returns (string memory) {
+        return _name.toString(); // _name.toStringWithFallback(_nameFallback);
+    }
+
+    /**
+     * @dev The version parameter for the EIP712 domain.
+     *
+     * NOTE: By default this function reads _version which is an immutable value.
+     * It only reads from storage if necessary (in case the value is too large to fit in a ShortString).
+     *
+     * _Available since v5.0._
+     */
+    /// @dev BGD: we use toString instead of toStringWithFallback as we dont have fallback, to not modify previous storage layout
+    // solhint-disable-next-line func-name-mixedcase
+    function _EIP712Version() internal view returns (string memory) {
+        return _version.toString();
+    }
 }
 
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {DistributionTypes} from '../lib/DistributionTypes.sol';
+import {DistributionTypes} from "../lib/DistributionTypes.sol";
 
 interface IAaveDistributionManager {
-  function configureAssets(
-    DistributionTypes.AssetConfigInput[] memory assetsConfigInput
-  ) external;
+    function configureAssets(DistributionTypes.AssetConfigInput[] memory assetsConfigInput) external;
 }
 
 // SPDX-License-Identifier: MIT
@@ -2827,7 +2703,7 @@ library ShortStrings {
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {BaseAaveToken} from 'aave-token-v3/BaseAaveToken.sol';
+import {BaseAaveToken} from "aave-token-v3/BaseAaveToken.sol";
 
 /**
  * @title BaseMintableAaveToken
@@ -2835,721 +2711,585 @@ import {BaseAaveToken} from 'aave-token-v3/BaseAaveToken.sol';
  * @notice extension for BaseAaveToken adding mint/burn and transfer hooks
  */
 contract BaseMintableAaveToken is BaseAaveToken {
-  /** @dev Creates `amount` tokens and assigns them to `account`, increasing
-   * the total supply.
-   *
-   * Emits a {Transfer} event with `from` set to the zero address.
-   *
-   * Requirements:
-   *
-   * - `account` cannot be the zero address.
-   */
-  function _mint(address account, uint104 amount) internal virtual {
-    require(account != address(0), 'ERC20: mint to the zero address');
+    /**
+     * @dev Creates `amount` tokens and assigns them to `account`, increasing
+     * the total supply.
+     *
+     * Emits a {Transfer} event with `from` set to the zero address.
+     *
+     * Requirements:
+     *
+     * - `account` cannot be the zero address.
+     */
+    function _mint(address account, uint104 amount) internal virtual {
+        require(account != address(0), "ERC20: mint to the zero address");
 
-    uint104 balanceBefore = _balances[account].balance;
-    _totalSupply += amount;
-    _balances[account].balance += amount;
-    emit Transfer(address(0), account, amount);
+        uint104 balanceBefore = _balances[account].balance;
+        _totalSupply += amount;
+        _balances[account].balance += amount;
+        emit Transfer(address(0), account, amount);
 
-    _afterTokenTransfer(address(0), account, 0, balanceBefore, amount);
-  }
-
-  /**
-   * @dev Destroys `amount` tokens from `account`, reducing the
-   * total supply.
-   *
-   * Emits a {Transfer} event with `to` set to the zero address.
-   *
-   * Requirements:
-   *
-   * - `account` cannot be the zero address.
-   * - `account` must have at least `amount` tokens.
-   */
-  function _burn(address account, uint104 amount) internal virtual {
-    require(account != address(0), 'ERC20: burn from the zero address');
-
-    uint104 accountBalance = _balances[account].balance;
-    require(accountBalance >= amount, 'ERC20: burn amount exceeds balance');
-    unchecked {
-      _balances[account].balance = accountBalance - amount;
-      // Overflow not possible: amount <= accountBalance <= totalSupply.
-      _totalSupply -= amount;
+        _afterTokenTransfer(address(0), account, 0, balanceBefore, amount);
     }
 
-    emit Transfer(account, address(0), amount);
+    /**
+     * @dev Destroys `amount` tokens from `account`, reducing the
+     * total supply.
+     *
+     * Emits a {Transfer} event with `to` set to the zero address.
+     *
+     * Requirements:
+     *
+     * - `account` cannot be the zero address.
+     * - `account` must have at least `amount` tokens.
+     */
+    function _burn(address account, uint104 amount) internal virtual {
+        require(account != address(0), "ERC20: burn from the zero address");
 
-    _afterTokenTransfer(account, address(0), accountBalance, 0, amount);
-  }
+        uint104 accountBalance = _balances[account].balance;
+        require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
+        unchecked {
+            _balances[account].balance = accountBalance - amount;
+            // Overflow not possible: amount <= accountBalance <= totalSupply.
+            _totalSupply -= amount;
+        }
+
+        emit Transfer(account, address(0), amount);
+
+        _afterTokenTransfer(account, address(0), accountBalance, 0, amount);
+    }
 }
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/** @notice influenced by OpenZeppelin SafeCast lib, which is missing to uint72 cast
+/**
+ *  @notice influenced by OpenZeppelin SafeCast lib, which is missing to uint72 cast
  * @author BGD Labs
  */
 library SafeCast72 {
-  /**
-   * @dev Returns the downcasted uint72 from uint256, reverting on
-   * overflow (when the input is greater than largest uint72).
-   *
-   * Counterpart to Solidity's `uint16` operator.
-   *
-   * Requirements:
-   *
-   * - input must fit into 72 bits
-   */
-  function toUint72(uint256 value) internal pure returns (uint72) {
-    require(value <= type(uint72).max, "SafeCast: value doesn't fit in 72 bits");
-    return uint72(value);
-  }
+    /**
+     * @dev Returns the downcasted uint72 from uint256, reverting on
+     * overflow (when the input is greater than largest uint72).
+     *
+     * Counterpart to Solidity's `uint16` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 72 bits
+     */
+    function toUint72(uint256 value) internal pure returns (uint72) {
+        require(value <= type(uint72).max, "SafeCast: value doesn't fit in 72 bits");
+        return uint72(value);
+    }
 }
 
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
-import {IERC20Metadata} from 'openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol';
-import {BaseDelegation} from 'aave-token-v3/BaseDelegation.sol';
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {BaseDelegation} from "aave-token-v3/BaseDelegation.sol";
 
-import {DistributionTypes} from '../lib/DistributionTypes.sol';
-import {SafeERC20} from '../lib/SafeERC20.sol';
-import {IAaveDistributionManager} from '../interfaces/IAaveDistributionManager.sol';
-import {IStakedTokenV2} from '../interfaces/IStakedTokenV2.sol';
-import {StakedTokenV2} from './StakedTokenV2.sol';
-import {IStakedTokenV3} from '../interfaces/IStakedTokenV3.sol';
-import {PercentageMath} from '../lib/PercentageMath.sol';
-import {RoleManager} from '../utils/RoleManager.sol';
-import {SafeCast} from '../lib/SafeCast.sol';
-import {IERC20WithPermit} from '../interfaces/IERC20WithPermit.sol';
+import {DistributionTypes} from "../lib/DistributionTypes.sol";
+import {SafeERC20} from "../lib/SafeERC20.sol";
+import {IAaveDistributionManager} from "../interfaces/IAaveDistributionManager.sol";
+import {IStakedTokenV2} from "../interfaces/IStakedTokenV2.sol";
+import {StakedTokenV2} from "./StakedTokenV2.sol";
+import {IStakedTokenV3} from "../interfaces/IStakedTokenV3.sol";
+import {PercentageMath} from "../lib/PercentageMath.sol";
+import {RoleManager} from "../utils/RoleManager.sol";
+import {SafeCast} from "../lib/SafeCast.sol";
+import {IERC20WithPermit} from "../interfaces/IERC20WithPermit.sol";
 
 /**
  * @title StakedTokenV3
  * @notice Contract to stake Aave token, tokenize the position and get rewards, inheriting from a distribution manager contract
  * @author BGD Labs
  */
-contract StakedTokenV3 is
-  StakedTokenV2,
-  IStakedTokenV3,
-  RoleManager,
-  IAaveDistributionManager,
-  BaseDelegation
-{
-  using SafeERC20 for IERC20;
-  using PercentageMath for uint256;
-  using SafeCast for uint256;
-  using SafeCast for uint104;
+contract StakedTokenV3 is StakedTokenV2, IStakedTokenV3, RoleManager, IAaveDistributionManager, BaseDelegation {
+    using SafeERC20 for IERC20;
+    using PercentageMath for uint256;
+    using SafeCast for uint256;
+    using SafeCast for uint104;
 
-  uint256 public constant SLASH_ADMIN_ROLE = 0;
-  uint256 public constant COOLDOWN_ADMIN_ROLE = 1;
-  uint256 public constant CLAIM_HELPER_ROLE = 2;
-  uint216 public constant INITIAL_EXCHANGE_RATE = 1e18;
-  uint256 public constant EXCHANGE_RATE_UNIT = 1e18;
+    uint256 public constant SLASH_ADMIN_ROLE = 0;
+    uint256 public constant COOLDOWN_ADMIN_ROLE = 1;
+    uint256 public constant CLAIM_HELPER_ROLE = 2;
+    uint216 public constant INITIAL_EXCHANGE_RATE = 1e18;
+    uint256 public constant EXCHANGE_RATE_UNIT = 1e18;
 
-  /// @notice lower bound to prevent spam & avoid exchangeRate issues
-  // as returnFunds can be called permissionless an attacker could spam returnFunds(1) to produce exchangeRate snapshots making voting expensive
-  uint256 public immutable LOWER_BOUND;
+    /// @notice lower bound to prevent spam & avoid exchangeRate issues
+    // as returnFunds can be called permissionless an attacker could spam returnFunds(1) to produce exchangeRate snapshots making voting expensive
+    uint256 public immutable LOWER_BOUND;
 
-  // Reserved storage space to allow for layout changes in the future.
-  uint256[6] private ______gap;
-  /// @notice Seconds between starting cooldown and being able to withdraw
-  uint256 internal _cooldownSeconds;
-  /// @notice The maximum amount of funds that can be slashed at any given time
-  uint256 internal _maxSlashablePercentage;
-  /// @notice Mirror of latest snapshot value for cheaper access
-  uint216 internal _currentExchangeRate;
-  /// @notice Flag determining if there's an ongoing slashing event that needs to be settled
-  bool public inPostSlashingPeriod;
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[6] private ______gap;
+    /// @notice Seconds between starting cooldown and being able to withdraw
+    uint256 internal _cooldownSeconds;
+    /// @notice The maximum amount of funds that can be slashed at any given time
+    uint256 internal _maxSlashablePercentage;
+    /// @notice Mirror of latest snapshot value for cheaper access
+    uint216 internal _currentExchangeRate;
+    /// @notice Flag determining if there's an ongoing slashing event that needs to be settled
+    bool public inPostSlashingPeriod;
 
-  modifier onlySlashingAdmin() {
-    require(
-      msg.sender == getAdmin(SLASH_ADMIN_ROLE),
-      'CALLER_NOT_SLASHING_ADMIN'
-    );
-    _;
-  }
-
-  modifier onlyCooldownAdmin() {
-    require(
-      msg.sender == getAdmin(COOLDOWN_ADMIN_ROLE),
-      'CALLER_NOT_COOLDOWN_ADMIN'
-    );
-    _;
-  }
-
-  modifier onlyClaimHelper() {
-    require(
-      msg.sender == getAdmin(CLAIM_HELPER_ROLE),
-      'CALLER_NOT_CLAIM_HELPER'
-    );
-    _;
-  }
-
-  constructor(
-    IERC20 stakedToken,
-    IERC20 rewardToken,
-    uint256 unstakeWindow,
-    address rewardsVault,
-    address emissionManager,
-    uint128 distributionDuration
-  )
-    StakedTokenV2(
-      stakedToken,
-      rewardToken,
-      unstakeWindow,
-      rewardsVault,
-      emissionManager,
-      distributionDuration
-    )
-  {
-    // brick initialize
-    lastInitializedRevision = REVISION();
-    uint256 decimals = IERC20Metadata(address(stakedToken)).decimals();
-    LOWER_BOUND = 10 ** decimals;
-  }
-
-  /**
-   * @dev returns the revision of the implementation contract
-   * @return The revision
-   */
-  function REVISION() public pure virtual returns (uint256) {
-    return 4;
-  }
-
-  /**
-   * @dev returns the revision of the implementation contract
-   * @return The revision
-   */
-  function getRevision() internal pure virtual override returns (uint256) {
-    return REVISION();
-  }
-
-  /**
-   * @dev Called by the proxy contract
-   */
-  function initialize() external virtual initializer {}
-
-  function _initialize(
-    address slashingAdmin,
-    address cooldownPauseAdmin,
-    address claimHelper,
-    uint256 maxSlashablePercentage,
-    uint256 cooldownSeconds
-  ) internal {
-    InitAdmin[] memory initAdmins = new InitAdmin[](3);
-    initAdmins[0] = InitAdmin(SLASH_ADMIN_ROLE, slashingAdmin);
-    initAdmins[1] = InitAdmin(COOLDOWN_ADMIN_ROLE, cooldownPauseAdmin);
-    initAdmins[2] = InitAdmin(CLAIM_HELPER_ROLE, claimHelper);
-
-    _initAdmins(initAdmins);
-
-    _setMaxSlashablePercentage(maxSlashablePercentage);
-    _setCooldownSeconds(cooldownSeconds);
-    _updateExchangeRate(INITIAL_EXCHANGE_RATE);
-  }
-
-  /// @inheritdoc IAaveDistributionManager
-  function configureAssets(
-    DistributionTypes.AssetConfigInput[] memory assetsConfigInput
-  ) external override {
-    require(msg.sender == EMISSION_MANAGER, 'ONLY_EMISSION_MANAGER');
-
-    for (uint256 i = 0; i < assetsConfigInput.length; i++) {
-      assetsConfigInput[i].totalStaked = totalSupply();
+    modifier onlySlashingAdmin() {
+        require(msg.sender == getAdmin(SLASH_ADMIN_ROLE), "CALLER_NOT_SLASHING_ADMIN");
+        _;
     }
 
-    _configureAssets(assetsConfigInput);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function previewStake(uint256 assets) public view returns (uint256) {
-    return (assets * _currentExchangeRate) / EXCHANGE_RATE_UNIT;
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function stake(
-    address to,
-    uint256 amount
-  ) external override(IStakedTokenV2, StakedTokenV2) {
-    _stake(msg.sender, to, amount);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function stakeWithPermit(
-    uint256 amount,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external override {
-    try
-      IERC20WithPermit(address(STAKED_TOKEN)).permit(
-        msg.sender,
-        address(this),
-        amount,
-        deadline,
-        v,
-        r,
-        s
-      )
-    {
-      // do nothing
-    } catch (bytes memory) {
-      // do nothing
-    }
-    _stake(msg.sender, msg.sender, amount);
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function cooldown() external override(IStakedTokenV2, StakedTokenV2) {
-    _cooldown(msg.sender);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function cooldownOnBehalfOf(address from) external override onlyClaimHelper {
-    _cooldown(from);
-  }
-
-  function _cooldown(address from) internal {
-    uint256 amount = balanceOf(from);
-    require(amount != 0, 'INVALID_BALANCE_ON_COOLDOWN');
-    stakersCooldowns[from] = CooldownSnapshot({
-      timestamp: uint40(block.timestamp),
-      amount: uint216(amount)
-    });
-
-    emit Cooldown(from, amount);
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function redeem(
-    address to,
-    uint256 amount
-  ) external override(IStakedTokenV2, StakedTokenV2) {
-    _redeem(msg.sender, to, amount.toUint104());
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function redeemOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) external override onlyClaimHelper {
-    _redeem(from, to, amount.toUint104());
-  }
-
-  /// @inheritdoc IStakedTokenV2
-  function claimRewards(
-    address to,
-    uint256 amount
-  ) external override(IStakedTokenV2, StakedTokenV2) {
-    _claimRewards(msg.sender, to, amount);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function claimRewardsOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) external override onlyClaimHelper returns (uint256) {
-    return _claimRewards(from, to, amount);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function claimRewardsAndRedeem(
-    address to,
-    uint256 claimAmount,
-    uint256 redeemAmount
-  ) external override {
-    _claimRewards(msg.sender, to, claimAmount);
-    _redeem(msg.sender, to, redeemAmount.toUint104());
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function claimRewardsAndRedeemOnBehalf(
-    address from,
-    address to,
-    uint256 claimAmount,
-    uint256 redeemAmount
-  ) external override onlyClaimHelper {
-    _claimRewards(from, to, claimAmount);
-    _redeem(from, to, redeemAmount.toUint104());
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function getExchangeRate() public view override returns (uint216) {
-    return _currentExchangeRate;
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function previewRedeem(
-    uint256 shares
-  ) public view override returns (uint256) {
-    return (EXCHANGE_RATE_UNIT * shares) / _currentExchangeRate;
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function slash(
-    address destination,
-    uint256 amount
-  ) external override onlySlashingAdmin returns (uint256) {
-    require(!inPostSlashingPeriod, 'PREVIOUS_SLASHING_NOT_SETTLED');
-    require(amount > 0, 'ZERO_AMOUNT');
-    uint256 currentShares = totalSupply();
-    uint256 balance = previewRedeem(currentShares);
-
-    uint256 maxSlashable = balance.percentMul(_maxSlashablePercentage);
-
-    if (amount > maxSlashable) {
-      amount = maxSlashable;
-    }
-    require(balance - amount >= LOWER_BOUND, 'REMAINING_LT_MINIMUM');
-
-    inPostSlashingPeriod = true;
-    _updateExchangeRate(_getExchangeRate(balance - amount, currentShares));
-
-    STAKED_TOKEN.safeTransfer(destination, amount);
-
-    emit Slashed(destination, amount);
-    return amount;
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function returnFunds(uint256 amount) external override {
-    require(amount >= LOWER_BOUND, 'AMOUNT_LT_MINIMUM');
-    uint256 currentShares = totalSupply();
-    require(currentShares >= LOWER_BOUND, 'SHARES_LT_MINIMUM');
-    uint256 assets = previewRedeem(currentShares);
-    _updateExchangeRate(_getExchangeRate(assets + amount, currentShares));
-
-    STAKED_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
-    emit FundsReturned(amount);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function settleSlashing() external override onlySlashingAdmin {
-    inPostSlashingPeriod = false;
-    emit SlashingSettled();
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function setMaxSlashablePercentage(
-    uint256 percentage
-  ) external override onlySlashingAdmin {
-    _setMaxSlashablePercentage(percentage);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function getMaxSlashablePercentage()
-    external
-    view
-    override
-    returns (uint256)
-  {
-    return _maxSlashablePercentage;
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function setCooldownSeconds(
-    uint256 cooldownSeconds
-  ) external onlyCooldownAdmin {
-    _setCooldownSeconds(cooldownSeconds);
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function getCooldownSeconds() external view returns (uint256) {
-    return _cooldownSeconds;
-  }
-
-  /// @inheritdoc IStakedTokenV3
-  function COOLDOWN_SECONDS() external view returns (uint256) {
-    return _cooldownSeconds;
-  }
-
-  /**
-   * @dev sets the max slashable percentage
-   * @param percentage must be strictly lower 100% as otherwise the exchange rate calculation would result in 0 division
-   */
-  function _setMaxSlashablePercentage(uint256 percentage) internal {
-    require(
-      percentage < PercentageMath.PERCENTAGE_FACTOR,
-      'INVALID_SLASHING_PERCENTAGE'
-    );
-
-    _maxSlashablePercentage = percentage;
-    emit MaxSlashablePercentageChanged(percentage);
-  }
-
-  /**
-   * @dev sets the cooldown seconds
-   * @param cooldownSeconds the new amount of cooldown seconds
-   */
-  function _setCooldownSeconds(uint256 cooldownSeconds) internal {
-    _cooldownSeconds = cooldownSeconds;
-    emit CooldownSecondsChanged(cooldownSeconds);
-  }
-
-  /**
-   * @dev claims the rewards for a specified address to a specified address
-   * @param from The address of the from from which to claim
-   * @param to Address to receive the rewards
-   * @param amount Amount to claim
-   * @return amount claimed
-   */
-  function _claimRewards(
-    address from,
-    address to,
-    uint256 amount
-  ) internal returns (uint256) {
-    require(amount != 0, 'INVALID_ZERO_AMOUNT');
-    uint256 newTotalRewards = _updateCurrentUnclaimedRewards(
-      from,
-      balanceOf(from),
-      false
-    );
-
-    uint256 amountToClaim = (amount > newTotalRewards)
-      ? newTotalRewards
-      : amount;
-    require(amountToClaim != 0, 'INVALID_ZERO_AMOUNT');
-
-    stakerRewardsToClaim[from] = newTotalRewards - amountToClaim;
-    REWARD_TOKEN.safeTransferFrom(REWARDS_VAULT, to, amountToClaim);
-    emit RewardsClaimed(from, to, amountToClaim);
-    return amountToClaim;
-  }
-
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` and stakes.
-   * @param from The address of the from from which to claim
-   * @param to Address to stake to
-   * @param amount Amount to claim
-   * @return amount claimed
-   */
-  function _claimRewardsAndStakeOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) internal returns (uint256) {
-    require(REWARD_TOKEN == STAKED_TOKEN, 'REWARD_TOKEN_IS_NOT_STAKED_TOKEN');
-
-    uint256 userUpdatedRewards = _updateCurrentUnclaimedRewards(
-      from,
-      balanceOf(from),
-      true
-    );
-    uint256 amountToClaim = (amount > userUpdatedRewards)
-      ? userUpdatedRewards
-      : amount;
-
-    if (amountToClaim != 0) {
-      _claimRewards(from, address(this), amountToClaim);
-      _stake(address(this), to, amountToClaim);
+    modifier onlyCooldownAdmin() {
+        require(msg.sender == getAdmin(COOLDOWN_ADMIN_ROLE), "CALLER_NOT_COOLDOWN_ADMIN");
+        _;
     }
 
-    return amountToClaim;
-  }
-
-  /**
-   * @dev Allows staking a specified amount of STAKED_TOKEN
-   * @param to The address to receiving the shares
-   * @param amount The amount of assets to be staked
-   */
-  function _stake(address from, address to, uint256 amount) internal {
-    require(!inPostSlashingPeriod, 'SLASHING_ONGOING');
-    require(amount != 0, 'INVALID_ZERO_AMOUNT');
-
-    uint256 balanceOfTo = balanceOf(to);
-
-    uint256 accruedRewards = _updateUserAssetInternal(
-      to,
-      address(this),
-      balanceOfTo,
-      totalSupply()
-    );
-
-    if (accruedRewards != 0) {
-      stakerRewardsToClaim[to] = stakerRewardsToClaim[to] + accruedRewards;
-      emit RewardsAccrued(to, accruedRewards);
+    modifier onlyClaimHelper() {
+        require(msg.sender == getAdmin(CLAIM_HELPER_ROLE), "CALLER_NOT_CLAIM_HELPER");
+        _;
     }
 
-    uint256 sharesToMint = previewStake(amount);
-
-    STAKED_TOKEN.safeTransferFrom(from, address(this), amount);
-
-    _mint(to, sharesToMint.toUint104());
-
-    emit Staked(from, to, amount, sharesToMint);
-  }
-
-  /**
-   * @dev Redeems staked tokens, and stop earning rewards
-   * @param from Address to redeem from
-   * @param to Address to redeem to
-   * @param amount Amount to redeem
-   */
-  function _redeem(address from, address to, uint104 amount) internal {
-    require(amount != 0, 'INVALID_ZERO_AMOUNT');
-
-    CooldownSnapshot memory cooldownSnapshot = stakersCooldowns[from];
-    if (!inPostSlashingPeriod) {
-      require(
-        (block.timestamp >= cooldownSnapshot.timestamp + _cooldownSeconds),
-        'INSUFFICIENT_COOLDOWN'
-      );
-      require(
-        (block.timestamp - (cooldownSnapshot.timestamp + _cooldownSeconds) <=
-          UNSTAKE_WINDOW),
-        'UNSTAKE_WINDOW_FINISHED'
-      );
+    constructor(
+        IERC20 stakedToken,
+        IERC20 rewardToken,
+        uint256 unstakeWindow,
+        address rewardsVault,
+        address emissionManager,
+        uint128 distributionDuration
+    ) StakedTokenV2(stakedToken, rewardToken, unstakeWindow, rewardsVault, emissionManager, distributionDuration) {
+        // brick initialize
+        lastInitializedRevision = REVISION();
+        uint256 decimals = IERC20Metadata(address(stakedToken)).decimals();
+        LOWER_BOUND = 10 ** decimals;
     }
 
-    uint256 balanceOfFrom = balanceOf(from);
-    uint256 maxRedeemable = inPostSlashingPeriod
-      ? balanceOfFrom
-      : cooldownSnapshot.amount;
-    require(maxRedeemable != 0, 'INVALID_ZERO_MAX_REDEEMABLE');
-
-    uint256 amountToRedeem = (amount > maxRedeemable) ? maxRedeemable : amount;
-
-    _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
-
-    uint256 underlyingToRedeem = previewRedeem(amountToRedeem);
-
-    _burn(from, amountToRedeem.toUint104());
-
-    if (cooldownSnapshot.timestamp != 0) {
-      if (cooldownSnapshot.amount - amountToRedeem == 0) {
-        delete stakersCooldowns[from];
-      } else {
-        stakersCooldowns[from].amount =
-          stakersCooldowns[from].amount -
-          amountToRedeem.toUint184();
-      }
+    /**
+     * @dev returns the revision of the implementation contract
+     * @return The revision
+     */
+    function REVISION() public pure virtual returns (uint256) {
+        return 4;
     }
 
-    IERC20(STAKED_TOKEN).safeTransfer(to, underlyingToRedeem);
+    /**
+     * @dev returns the revision of the implementation contract
+     * @return The revision
+     */
+    function getRevision() internal pure virtual override returns (uint256) {
+        return REVISION();
+    }
 
-    emit Redeem(from, to, underlyingToRedeem, amountToRedeem);
-  }
+    /**
+     * @dev Called by the proxy contract
+     */
+    function initialize() external virtual initializer {}
 
-  /**
-   * @dev Updates the exchangeRate and emits events accordingly
-   * @param newExchangeRate the new exchange rate
-   */
-  function _updateExchangeRate(uint216 newExchangeRate) internal virtual {
-    require(newExchangeRate != 0, 'ZERO_EXCHANGE_RATE');
-    _currentExchangeRate = newExchangeRate;
-    emit ExchangeRateChanged(newExchangeRate);
-  }
+    function _initialize(
+        address slashingAdmin,
+        address cooldownPauseAdmin,
+        address claimHelper,
+        uint256 maxSlashablePercentage,
+        uint256 cooldownSeconds
+    ) internal {
+        InitAdmin[] memory initAdmins = new InitAdmin[](3);
+        initAdmins[0] = InitAdmin(SLASH_ADMIN_ROLE, slashingAdmin);
+        initAdmins[1] = InitAdmin(COOLDOWN_ADMIN_ROLE, cooldownPauseAdmin);
+        initAdmins[2] = InitAdmin(CLAIM_HELPER_ROLE, claimHelper);
 
-  /**
-   * @dev calculates the exchange rate based on totalAssets and totalShares
-   * @dev always rounds up to ensure 100% backing of shares by rounding in favor of the contract
-   * @param totalAssets The total amount of assets staked
-   * @param totalShares The total amount of shares
-   * @return exchangeRate as 18 decimal precision uint216
-   */
-  function _getExchangeRate(
-    uint256 totalAssets,
-    uint256 totalShares
-  ) internal pure returns (uint216) {
-    return
-      (((totalShares * EXCHANGE_RATE_UNIT) + totalAssets - 1) / totalAssets)
-        .toUint216();
-  }
+        _initAdmins(initAdmins);
 
-  function _transfer(
-    address from,
-    address to,
-    uint256 amount
-  ) internal override {
-    uint256 balanceOfFrom = balanceOf(from);
-    // Sender
-    _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
+        _setMaxSlashablePercentage(maxSlashablePercentage);
+        _setCooldownSeconds(cooldownSeconds);
+        _updateExchangeRate(INITIAL_EXCHANGE_RATE);
+    }
 
-    // Recipient
-    if (from != to) {
-      uint256 balanceOfTo = balanceOf(to);
-      _updateCurrentUnclaimedRewards(to, balanceOfTo, true);
+    /// @inheritdoc IAaveDistributionManager
+    function configureAssets(DistributionTypes.AssetConfigInput[] memory assetsConfigInput) external override {
+        require(msg.sender == EMISSION_MANAGER, "ONLY_EMISSION_MANAGER");
 
-      CooldownSnapshot memory previousSenderCooldown = stakersCooldowns[from];
-      if (previousSenderCooldown.timestamp != 0) {
-        // if cooldown was set and whole balance of sender was transferred - clear cooldown
-        if (balanceOfFrom == amount) {
-          delete stakersCooldowns[from];
-        } else if (balanceOfFrom - amount < previousSenderCooldown.amount) {
-          stakersCooldowns[from].amount = uint216(balanceOfFrom - amount);
+        for (uint256 i = 0; i < assetsConfigInput.length; i++) {
+            assetsConfigInput[i].totalStaked = totalSupply();
         }
-      }
+
+        _configureAssets(assetsConfigInput);
     }
 
-    super._transfer(from, to, amount);
-  }
-
-  function _afterTokenTransfer(
-    address from,
-    address to,
-    uint256 fromBalanceBefore,
-    uint256 toBalanceBefore,
-    uint256 amount
-  ) internal virtual override {
-    _delegationChangeOnTransfer(
-      from,
-      to,
-      fromBalanceBefore,
-      toBalanceBefore,
-      amount
-    );
-  }
-
-  function _getDelegationState(
-    address user
-  ) internal view override returns (DelegationState memory) {
-    DelegationAwareBalance memory userState = _balances[user];
-    return
-      DelegationState({
-        delegatedPropositionBalance: userState.delegatedPropositionBalance,
-        delegatedVotingBalance: userState.delegatedVotingBalance,
-        delegationMode: userState.delegationMode
-      });
-  }
-
-  function _getBalance(address user) internal view override returns (uint256) {
-    return balanceOf(user);
-  }
-
-  function getPowerCurrent(
-    address user,
-    GovernancePowerType delegationType
-  ) public view override returns (uint256) {
-    return
-      (super.getPowerCurrent(user, delegationType) * EXCHANGE_RATE_UNIT) /
-      getExchangeRate();
-  }
-
-  function _setDelegationState(
-    address user,
-    DelegationState memory delegationState
-  ) internal override {
-    DelegationAwareBalance storage userState = _balances[user];
-    userState.delegatedPropositionBalance = delegationState
-      .delegatedPropositionBalance;
-    userState.delegatedVotingBalance = delegationState.delegatedVotingBalance;
-    userState.delegationMode = delegationState.delegationMode;
-  }
-
-  function _incrementNonces(address user) internal override returns (uint256) {
-    unchecked {
-      // Does not make sense to check because it's not realistic to reach uint256.max in nonce
-      return _nonces[user]++;
+    /// @inheritdoc IStakedTokenV3
+    function previewStake(uint256 assets) public view returns (uint256) {
+        return (assets * _currentExchangeRate) / EXCHANGE_RATE_UNIT;
     }
-  }
 
-  function _getDomainSeparator() internal view override returns (bytes32) {
-    return DOMAIN_SEPARATOR();
-  }
+    /// @inheritdoc IStakedTokenV2
+    function stake(address to, uint256 amount) external override(IStakedTokenV2, StakedTokenV2) {
+        _stake(msg.sender, to, amount);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function stakeWithPermit(uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external override {
+        try IERC20WithPermit(address(STAKED_TOKEN)).permit(msg.sender, address(this), amount, deadline, v, r, s) {
+        // do nothing
+        }
+            catch (bytes memory) {
+            // do nothing
+        }
+        _stake(msg.sender, msg.sender, amount);
+    }
+
+    /// @inheritdoc IStakedTokenV2
+    function cooldown() external override(IStakedTokenV2, StakedTokenV2) {
+        _cooldown(msg.sender);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function cooldownOnBehalfOf(address from) external override onlyClaimHelper {
+        _cooldown(from);
+    }
+
+    function _cooldown(address from) internal {
+        uint256 amount = balanceOf(from);
+        require(amount != 0, "INVALID_BALANCE_ON_COOLDOWN");
+        stakersCooldowns[from] = CooldownSnapshot({timestamp: uint40(block.timestamp), amount: uint216(amount)});
+
+        emit Cooldown(from, amount);
+    }
+
+    /// @inheritdoc IStakedTokenV2
+    function redeem(address to, uint256 amount) external override(IStakedTokenV2, StakedTokenV2) {
+        _redeem(msg.sender, to, amount.toUint104());
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function redeemOnBehalf(address from, address to, uint256 amount) external override onlyClaimHelper {
+        _redeem(from, to, amount.toUint104());
+    }
+
+    /// @inheritdoc IStakedTokenV2
+    function claimRewards(address to, uint256 amount) external override(IStakedTokenV2, StakedTokenV2) {
+        _claimRewards(msg.sender, to, amount);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function claimRewardsOnBehalf(address from, address to, uint256 amount)
+        external
+        override
+        onlyClaimHelper
+        returns (uint256)
+    {
+        return _claimRewards(from, to, amount);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function claimRewardsAndRedeem(address to, uint256 claimAmount, uint256 redeemAmount) external override {
+        _claimRewards(msg.sender, to, claimAmount);
+        _redeem(msg.sender, to, redeemAmount.toUint104());
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function claimRewardsAndRedeemOnBehalf(address from, address to, uint256 claimAmount, uint256 redeemAmount)
+        external
+        override
+        onlyClaimHelper
+    {
+        _claimRewards(from, to, claimAmount);
+        _redeem(from, to, redeemAmount.toUint104());
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function getExchangeRate() public view override returns (uint216) {
+        return _currentExchangeRate;
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function previewRedeem(uint256 shares) public view override returns (uint256) {
+        return (EXCHANGE_RATE_UNIT * shares) / _currentExchangeRate;
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function slash(address destination, uint256 amount) external override onlySlashingAdmin returns (uint256) {
+        require(!inPostSlashingPeriod, "PREVIOUS_SLASHING_NOT_SETTLED");
+        require(amount > 0, "ZERO_AMOUNT");
+        uint256 currentShares = totalSupply();
+        uint256 balance = previewRedeem(currentShares);
+
+        uint256 maxSlashable = balance.percentMul(_maxSlashablePercentage);
+
+        if (amount > maxSlashable) {
+            amount = maxSlashable;
+        }
+        require(balance - amount >= LOWER_BOUND, "REMAINING_LT_MINIMUM");
+
+        inPostSlashingPeriod = true;
+        _updateExchangeRate(_getExchangeRate(balance - amount, currentShares));
+
+        STAKED_TOKEN.safeTransfer(destination, amount);
+
+        emit Slashed(destination, amount);
+        return amount;
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function returnFunds(uint256 amount) external override {
+        require(amount >= LOWER_BOUND, "AMOUNT_LT_MINIMUM");
+        uint256 currentShares = totalSupply();
+        require(currentShares >= LOWER_BOUND, "SHARES_LT_MINIMUM");
+        uint256 assets = previewRedeem(currentShares);
+        _updateExchangeRate(_getExchangeRate(assets + amount, currentShares));
+
+        STAKED_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
+        emit FundsReturned(amount);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function settleSlashing() external override onlySlashingAdmin {
+        inPostSlashingPeriod = false;
+        emit SlashingSettled();
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function setMaxSlashablePercentage(uint256 percentage) external override onlySlashingAdmin {
+        _setMaxSlashablePercentage(percentage);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function getMaxSlashablePercentage() external view override returns (uint256) {
+        return _maxSlashablePercentage;
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function setCooldownSeconds(uint256 cooldownSeconds) external onlyCooldownAdmin {
+        _setCooldownSeconds(cooldownSeconds);
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function getCooldownSeconds() external view returns (uint256) {
+        return _cooldownSeconds;
+    }
+
+    /// @inheritdoc IStakedTokenV3
+    function COOLDOWN_SECONDS() external view returns (uint256) {
+        return _cooldownSeconds;
+    }
+
+    /**
+     * @dev sets the max slashable percentage
+     * @param percentage must be strictly lower 100% as otherwise the exchange rate calculation would result in 0 division
+     */
+    function _setMaxSlashablePercentage(uint256 percentage) internal {
+        require(percentage < PercentageMath.PERCENTAGE_FACTOR, "INVALID_SLASHING_PERCENTAGE");
+
+        _maxSlashablePercentage = percentage;
+        emit MaxSlashablePercentageChanged(percentage);
+    }
+
+    /**
+     * @dev sets the cooldown seconds
+     * @param cooldownSeconds the new amount of cooldown seconds
+     */
+    function _setCooldownSeconds(uint256 cooldownSeconds) internal {
+        _cooldownSeconds = cooldownSeconds;
+        emit CooldownSecondsChanged(cooldownSeconds);
+    }
+
+    /**
+     * @dev claims the rewards for a specified address to a specified address
+     * @param from The address of the from from which to claim
+     * @param to Address to receive the rewards
+     * @param amount Amount to claim
+     * @return amount claimed
+     */
+    function _claimRewards(address from, address to, uint256 amount) internal returns (uint256) {
+        require(amount != 0, "INVALID_ZERO_AMOUNT");
+        uint256 newTotalRewards = _updateCurrentUnclaimedRewards(from, balanceOf(from), false);
+
+        uint256 amountToClaim = (amount > newTotalRewards) ? newTotalRewards : amount;
+        require(amountToClaim != 0, "INVALID_ZERO_AMOUNT");
+
+        stakerRewardsToClaim[from] = newTotalRewards - amountToClaim;
+        REWARD_TOKEN.safeTransferFrom(REWARDS_VAULT, to, amountToClaim);
+        emit RewardsClaimed(from, to, amountToClaim);
+        return amountToClaim;
+    }
+
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` and stakes.
+     * @param from The address of the from from which to claim
+     * @param to Address to stake to
+     * @param amount Amount to claim
+     * @return amount claimed
+     */
+    function _claimRewardsAndStakeOnBehalf(address from, address to, uint256 amount) internal returns (uint256) {
+        require(REWARD_TOKEN == STAKED_TOKEN, "REWARD_TOKEN_IS_NOT_STAKED_TOKEN");
+
+        uint256 userUpdatedRewards = _updateCurrentUnclaimedRewards(from, balanceOf(from), true);
+        uint256 amountToClaim = (amount > userUpdatedRewards) ? userUpdatedRewards : amount;
+
+        if (amountToClaim != 0) {
+            _claimRewards(from, address(this), amountToClaim);
+            _stake(address(this), to, amountToClaim);
+        }
+
+        return amountToClaim;
+    }
+
+    /**
+     * @dev Allows staking a specified amount of STAKED_TOKEN
+     * @param to The address to receiving the shares
+     * @param amount The amount of assets to be staked
+     */
+    function _stake(address from, address to, uint256 amount) internal {
+        require(!inPostSlashingPeriod, "SLASHING_ONGOING");
+        require(amount != 0, "INVALID_ZERO_AMOUNT");
+
+        uint256 balanceOfTo = balanceOf(to);
+
+        uint256 accruedRewards = _updateUserAssetInternal(to, address(this), balanceOfTo, totalSupply());
+
+        if (accruedRewards != 0) {
+            stakerRewardsToClaim[to] = stakerRewardsToClaim[to] + accruedRewards;
+            emit RewardsAccrued(to, accruedRewards);
+        }
+
+        uint256 sharesToMint = previewStake(amount);
+
+        STAKED_TOKEN.safeTransferFrom(from, address(this), amount);
+
+        _mint(to, sharesToMint.toUint104());
+
+        emit Staked(from, to, amount, sharesToMint);
+    }
+
+    /**
+     * @dev Redeems staked tokens, and stop earning rewards
+     * @param from Address to redeem from
+     * @param to Address to redeem to
+     * @param amount Amount to redeem
+     */
+    function _redeem(address from, address to, uint104 amount) internal {
+        require(amount != 0, "INVALID_ZERO_AMOUNT");
+
+        CooldownSnapshot memory cooldownSnapshot = stakersCooldowns[from];
+        if (!inPostSlashingPeriod) {
+            require((block.timestamp >= cooldownSnapshot.timestamp + _cooldownSeconds), "INSUFFICIENT_COOLDOWN");
+            require(
+                (block.timestamp - (cooldownSnapshot.timestamp + _cooldownSeconds) <= UNSTAKE_WINDOW),
+                "UNSTAKE_WINDOW_FINISHED"
+            );
+        }
+
+        uint256 balanceOfFrom = balanceOf(from);
+        uint256 maxRedeemable = inPostSlashingPeriod ? balanceOfFrom : cooldownSnapshot.amount;
+        require(maxRedeemable != 0, "INVALID_ZERO_MAX_REDEEMABLE");
+
+        uint256 amountToRedeem = (amount > maxRedeemable) ? maxRedeemable : amount;
+
+        _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
+
+        uint256 underlyingToRedeem = previewRedeem(amountToRedeem);
+
+        _burn(from, amountToRedeem.toUint104());
+
+        if (cooldownSnapshot.timestamp != 0) {
+            if (cooldownSnapshot.amount - amountToRedeem == 0) {
+                delete stakersCooldowns[from];
+            } else {
+                stakersCooldowns[from].amount = stakersCooldowns[from].amount - amountToRedeem.toUint184();
+            }
+        }
+
+        IERC20(STAKED_TOKEN).safeTransfer(to, underlyingToRedeem);
+
+        emit Redeem(from, to, underlyingToRedeem, amountToRedeem);
+    }
+
+    /**
+     * @dev Updates the exchangeRate and emits events accordingly
+     * @param newExchangeRate the new exchange rate
+     */
+    function _updateExchangeRate(uint216 newExchangeRate) internal virtual {
+        require(newExchangeRate != 0, "ZERO_EXCHANGE_RATE");
+        _currentExchangeRate = newExchangeRate;
+        emit ExchangeRateChanged(newExchangeRate);
+    }
+
+    /**
+     * @dev calculates the exchange rate based on totalAssets and totalShares
+     * @dev always rounds up to ensure 100% backing of shares by rounding in favor of the contract
+     * @param totalAssets The total amount of assets staked
+     * @param totalShares The total amount of shares
+     * @return exchangeRate as 18 decimal precision uint216
+     */
+    function _getExchangeRate(uint256 totalAssets, uint256 totalShares) internal pure returns (uint216) {
+        return (((totalShares * EXCHANGE_RATE_UNIT) + totalAssets - 1) / totalAssets).toUint216();
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal override {
+        uint256 balanceOfFrom = balanceOf(from);
+        // Sender
+        _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
+
+        // Recipient
+        if (from != to) {
+            uint256 balanceOfTo = balanceOf(to);
+            _updateCurrentUnclaimedRewards(to, balanceOfTo, true);
+
+            CooldownSnapshot memory previousSenderCooldown = stakersCooldowns[from];
+            if (previousSenderCooldown.timestamp != 0) {
+                // if cooldown was set and whole balance of sender was transferred - clear cooldown
+                if (balanceOfFrom == amount) {
+                    delete stakersCooldowns[from];
+                } else if (balanceOfFrom - amount < previousSenderCooldown.amount) {
+                    stakersCooldowns[from].amount = uint216(balanceOfFrom - amount);
+                }
+            }
+        }
+
+        super._transfer(from, to, amount);
+    }
+
+    function _afterTokenTransfer(
+        address from,
+        address to,
+        uint256 fromBalanceBefore,
+        uint256 toBalanceBefore,
+        uint256 amount
+    ) internal virtual override {
+        _delegationChangeOnTransfer(from, to, fromBalanceBefore, toBalanceBefore, amount);
+    }
+
+    function _getDelegationState(address user) internal view override returns (DelegationState memory) {
+        DelegationAwareBalance memory userState = _balances[user];
+        return DelegationState({
+            delegatedPropositionBalance: userState.delegatedPropositionBalance,
+            delegatedVotingBalance: userState.delegatedVotingBalance,
+            delegationMode: userState.delegationMode
+        });
+    }
+
+    function _getBalance(address user) internal view override returns (uint256) {
+        return balanceOf(user);
+    }
+
+    function getPowerCurrent(address user, GovernancePowerType delegationType) public view override returns (uint256) {
+        return (super.getPowerCurrent(user, delegationType) * EXCHANGE_RATE_UNIT) / getExchangeRate();
+    }
+
+    function _setDelegationState(address user, DelegationState memory delegationState) internal override {
+        DelegationAwareBalance storage userState = _balances[user];
+        userState.delegatedPropositionBalance = delegationState.delegatedPropositionBalance;
+        userState.delegatedVotingBalance = delegationState.delegatedVotingBalance;
+        userState.delegationMode = delegationState.delegationMode;
+    }
+
+    function _incrementNonces(address user) internal override returns (uint256) {
+        unchecked {
+            // Does not make sense to check because it's not realistic to reach uint256.max in nonce
+            return _nonces[user]++;
+        }
+    }
+
+    function _getDomainSeparator() internal view override returns (bytes32) {
+        return DOMAIN_SEPARATOR();
+    }
 }
 
 // SPDX-License-Identifier: MIT
@@ -3973,47 +3713,40 @@ library Math {
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {IStakedTokenV3} from './IStakedTokenV3.sol';
-import {IGhoVariableDebtTokenTransferHook} from './IGhoVariableDebtTokenTransferHook.sol';
+import {IStakedTokenV3} from "./IStakedTokenV3.sol";
+import {IGhoVariableDebtTokenTransferHook} from "./IGhoVariableDebtTokenTransferHook.sol";
 
 interface IStakedAaveV3 is IStakedTokenV3 {
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` and stakes.
-   * @param to Address to stake to
-   * @param amount Amount to claim
-   */
-  function claimRewardsAndStake(
-    address to,
-    uint256 amount
-  ) external returns (uint256);
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` and stakes.
+     * @param to Address to stake to
+     * @param amount Amount to claim
+     */
+    function claimRewardsAndStake(address to, uint256 amount) external returns (uint256);
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` and stakes. Only the claim helper contract is allowed to call this function
-   * @param from The address of the from from which to claim
-   * @param to Address to stake to
-   * @param amount Amount to claim
-   */
-  function claimRewardsAndStakeOnBehalf(
-    address from,
-    address to,
-    uint256 amount
-  ) external returns (uint256);
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` and stakes. Only the claim helper contract is allowed to call this function
+     * @param from The address of the from from which to claim
+     * @param to Address to stake to
+     * @param amount Amount to claim
+     */
+    function claimRewardsAndStakeOnBehalf(address from, address to, uint256 amount) external returns (uint256);
 }
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 enum DelegationMode {
-  NO_DELEGATION,
-  VOTING_DELEGATED,
-  PROPOSITION_DELEGATED,
-  FULL_POWER_DELEGATED
+    NO_DELEGATION,
+    VOTING_DELEGATED,
+    PROPOSITION_DELEGATED,
+    FULL_POWER_DELEGATED
 }
 
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
-import {DistributionTypes} from '../lib/DistributionTypes.sol';
+import {DistributionTypes} from "../lib/DistributionTypes.sol";
 
 /**
  * @title AaveDistributionManager
@@ -4021,248 +3754,201 @@ import {DistributionTypes} from '../lib/DistributionTypes.sol';
  * @author Aave
  */
 contract AaveDistributionManager {
-  struct AssetData {
-    uint128 emissionPerSecond;
-    uint128 lastUpdateTimestamp;
-    uint256 index;
-    mapping(address => uint256) users;
-  }
-
-  uint256 public immutable DISTRIBUTION_END;
-
-  address public immutable EMISSION_MANAGER;
-
-  uint8 public constant PRECISION = 18;
-
-  mapping(address => AssetData) public assets;
-
-  event AssetConfigUpdated(address indexed asset, uint256 emission);
-  event AssetIndexUpdated(address indexed asset, uint256 index);
-  event UserIndexUpdated(
-    address indexed user,
-    address indexed asset,
-    uint256 index
-  );
-
-  constructor(address emissionManager, uint256 distributionDuration) {
-    DISTRIBUTION_END = block.timestamp + distributionDuration;
-    EMISSION_MANAGER = emissionManager;
-  }
-
-  /**
-   * @dev Configures the distribution of rewards for a list of assets
-   * @param assetsConfigInput The list of configurations to apply
-   */
-  function _configureAssets(
-    DistributionTypes.AssetConfigInput[] memory assetsConfigInput
-  ) internal {
-    for (uint256 i = 0; i < assetsConfigInput.length; i++) {
-      AssetData storage assetConfig = assets[
-        assetsConfigInput[i].underlyingAsset
-      ];
-
-      _updateAssetStateInternal(
-        assetsConfigInput[i].underlyingAsset,
-        assetConfig,
-        assetsConfigInput[i].totalStaked
-      );
-
-      assetConfig.emissionPerSecond = assetsConfigInput[i].emissionPerSecond;
-
-      emit AssetConfigUpdated(
-        assetsConfigInput[i].underlyingAsset,
-        assetsConfigInput[i].emissionPerSecond
-      );
-    }
-  }
-
-  /**
-   * @dev Updates the state of one distribution, mainly rewards index and timestamp
-   * @param underlyingAsset The address used as key in the distribution, for example sAAVE or the aTokens addresses on Aave
-   * @param assetConfig Storage pointer to the distribution's config
-   * @param totalStaked Current total of staked assets for this distribution
-   * @return The new distribution index
-   */
-  function _updateAssetStateInternal(
-    address underlyingAsset,
-    AssetData storage assetConfig,
-    uint256 totalStaked
-  ) internal returns (uint256) {
-    uint256 oldIndex = assetConfig.index;
-    uint128 lastUpdateTimestamp = assetConfig.lastUpdateTimestamp;
-
-    if (block.timestamp == lastUpdateTimestamp) {
-      return oldIndex;
+    struct AssetData {
+        uint128 emissionPerSecond;
+        uint128 lastUpdateTimestamp;
+        uint256 index;
+        mapping(address => uint256) users;
     }
 
-    uint256 newIndex = _getAssetIndex(
-      oldIndex,
-      assetConfig.emissionPerSecond,
-      lastUpdateTimestamp,
-      totalStaked
-    );
+    uint256 public immutable DISTRIBUTION_END;
 
-    if (newIndex != oldIndex) {
-      assetConfig.index = newIndex;
-      emit AssetIndexUpdated(underlyingAsset, newIndex);
+    address public immutable EMISSION_MANAGER;
+
+    uint8 public constant PRECISION = 18;
+
+    mapping(address => AssetData) public assets;
+
+    event AssetConfigUpdated(address indexed asset, uint256 emission);
+    event AssetIndexUpdated(address indexed asset, uint256 index);
+    event UserIndexUpdated(address indexed user, address indexed asset, uint256 index);
+
+    constructor(address emissionManager, uint256 distributionDuration) {
+        DISTRIBUTION_END = block.timestamp + distributionDuration;
+        EMISSION_MANAGER = emissionManager;
     }
 
-    assetConfig.lastUpdateTimestamp = uint128(block.timestamp);
+    /**
+     * @dev Configures the distribution of rewards for a list of assets
+     * @param assetsConfigInput The list of configurations to apply
+     */
+    function _configureAssets(DistributionTypes.AssetConfigInput[] memory assetsConfigInput) internal {
+        for (uint256 i = 0; i < assetsConfigInput.length; i++) {
+            AssetData storage assetConfig = assets[assetsConfigInput[i].underlyingAsset];
 
-    return newIndex;
-  }
+            _updateAssetStateInternal(
+                assetsConfigInput[i].underlyingAsset, assetConfig, assetsConfigInput[i].totalStaked
+            );
 
-  /**
-   * @dev Updates the state of an user in a distribution
-   * @param user The user's address
-   * @param asset The address of the reference asset of the distribution
-   * @param stakedByUser Amount of tokens staked by the user in the distribution at the moment
-   * @param totalStaked Total tokens staked in the distribution
-   * @return The accrued rewards for the user until the moment
-   */
-  function _updateUserAssetInternal(
-    address user,
-    address asset,
-    uint256 stakedByUser,
-    uint256 totalStaked
-  ) internal returns (uint256) {
-    AssetData storage assetData = assets[asset];
-    uint256 userIndex = assetData.users[user];
-    uint256 accruedRewards = 0;
+            assetConfig.emissionPerSecond = assetsConfigInput[i].emissionPerSecond;
 
-    uint256 newIndex = _updateAssetStateInternal(asset, assetData, totalStaked);
-
-    if (userIndex != newIndex) {
-      if (stakedByUser != 0) {
-        accruedRewards = _getRewards(stakedByUser, newIndex, userIndex);
-      }
-
-      assetData.users[user] = newIndex;
-      emit UserIndexUpdated(user, asset, newIndex);
+            emit AssetConfigUpdated(assetsConfigInput[i].underlyingAsset, assetsConfigInput[i].emissionPerSecond);
+        }
     }
 
-    return accruedRewards;
-  }
+    /**
+     * @dev Updates the state of one distribution, mainly rewards index and timestamp
+     * @param underlyingAsset The address used as key in the distribution, for example sAAVE or the aTokens addresses on Aave
+     * @param assetConfig Storage pointer to the distribution's config
+     * @param totalStaked Current total of staked assets for this distribution
+     * @return The new distribution index
+     */
+    function _updateAssetStateInternal(address underlyingAsset, AssetData storage assetConfig, uint256 totalStaked)
+        internal
+        returns (uint256)
+    {
+        uint256 oldIndex = assetConfig.index;
+        uint128 lastUpdateTimestamp = assetConfig.lastUpdateTimestamp;
 
-  /**
-   * @dev Used by "frontend" stake contracts to update the data of an user when claiming rewards from there
-   * @param user The address of the user
-   * @param stakes List of structs of the user data related with his stake
-   * @return The accrued rewards for the user until the moment
-   */
-  function _claimRewards(
-    address user,
-    DistributionTypes.UserStakeInput[] memory stakes
-  ) internal returns (uint256) {
-    uint256 accruedRewards = 0;
+        if (block.timestamp == lastUpdateTimestamp) {
+            return oldIndex;
+        }
 
-    for (uint256 i = 0; i < stakes.length; i++) {
-      accruedRewards =
-        accruedRewards +
-        _updateUserAssetInternal(
-          user,
-          stakes[i].underlyingAsset,
-          stakes[i].stakedByUser,
-          stakes[i].totalStaked
-        );
+        uint256 newIndex = _getAssetIndex(oldIndex, assetConfig.emissionPerSecond, lastUpdateTimestamp, totalStaked);
+
+        if (newIndex != oldIndex) {
+            assetConfig.index = newIndex;
+            emit AssetIndexUpdated(underlyingAsset, newIndex);
+        }
+
+        assetConfig.lastUpdateTimestamp = uint128(block.timestamp);
+
+        return newIndex;
     }
 
-    return accruedRewards;
-  }
+    /**
+     * @dev Updates the state of an user in a distribution
+     * @param user The user's address
+     * @param asset The address of the reference asset of the distribution
+     * @param stakedByUser Amount of tokens staked by the user in the distribution at the moment
+     * @param totalStaked Total tokens staked in the distribution
+     * @return The accrued rewards for the user until the moment
+     */
+    function _updateUserAssetInternal(address user, address asset, uint256 stakedByUser, uint256 totalStaked)
+        internal
+        returns (uint256)
+    {
+        AssetData storage assetData = assets[asset];
+        uint256 userIndex = assetData.users[user];
+        uint256 accruedRewards = 0;
 
-  /**
-   * @dev Return the accrued rewards for an user over a list of distribution
-   * @param user The address of the user
-   * @param stakes List of structs of the user data related with his stake
-   * @return The accrued rewards for the user until the moment
-   */
-  function _getUnclaimedRewards(
-    address user,
-    DistributionTypes.UserStakeInput[] memory stakes
-  ) internal view returns (uint256) {
-    uint256 accruedRewards = 0;
+        uint256 newIndex = _updateAssetStateInternal(asset, assetData, totalStaked);
 
-    for (uint256 i = 0; i < stakes.length; i++) {
-      AssetData storage assetConfig = assets[stakes[i].underlyingAsset];
-      uint256 assetIndex = _getAssetIndex(
-        assetConfig.index,
-        assetConfig.emissionPerSecond,
-        assetConfig.lastUpdateTimestamp,
-        stakes[i].totalStaked
-      );
+        if (userIndex != newIndex) {
+            if (stakedByUser != 0) {
+                accruedRewards = _getRewards(stakedByUser, newIndex, userIndex);
+            }
 
-      accruedRewards =
-        accruedRewards +
-        _getRewards(
-          stakes[i].stakedByUser,
-          assetIndex,
-          assetConfig.users[user]
-        );
-    }
-    return accruedRewards;
-  }
+            assetData.users[user] = newIndex;
+            emit UserIndexUpdated(user, asset, newIndex);
+        }
 
-  /**
-   * @dev Internal function for the calculation of user's rewards on a distribution
-   * @param principalUserBalance Amount staked by the user on a distribution
-   * @param reserveIndex Current index of the distribution
-   * @param userIndex Index stored for the user, representation his staking moment
-   * @return The rewards
-   */
-  function _getRewards(
-    uint256 principalUserBalance,
-    uint256 reserveIndex,
-    uint256 userIndex
-  ) internal pure returns (uint256) {
-    return
-      (principalUserBalance * (reserveIndex - userIndex)) /
-      (10 ** uint256(PRECISION));
-  }
-
-  /**
-   * @dev Calculates the next value of an specific distribution index, with validations
-   * @param currentIndex Current index of the distribution
-   * @param emissionPerSecond Representing the total rewards distributed per second per asset unit, on the distribution
-   * @param lastUpdateTimestamp Last moment this distribution was updated
-   * @param totalBalance of tokens considered for the distribution
-   * @return The new index.
-   */
-  function _getAssetIndex(
-    uint256 currentIndex,
-    uint256 emissionPerSecond,
-    uint128 lastUpdateTimestamp,
-    uint256 totalBalance
-  ) internal view returns (uint256) {
-    if (
-      emissionPerSecond == 0 ||
-      totalBalance == 0 ||
-      lastUpdateTimestamp == block.timestamp ||
-      lastUpdateTimestamp >= DISTRIBUTION_END
-    ) {
-      return currentIndex;
+        return accruedRewards;
     }
 
-    uint256 currentTimestamp = block.timestamp > DISTRIBUTION_END
-      ? DISTRIBUTION_END
-      : block.timestamp;
-    uint256 timeDelta = currentTimestamp - lastUpdateTimestamp;
-    return
-      ((emissionPerSecond * timeDelta * (10 ** uint256(PRECISION))) /
-        totalBalance) + currentIndex;
-  }
+    /**
+     * @dev Used by "frontend" stake contracts to update the data of an user when claiming rewards from there
+     * @param user The address of the user
+     * @param stakes List of structs of the user data related with his stake
+     * @return The accrued rewards for the user until the moment
+     */
+    function _claimRewards(address user, DistributionTypes.UserStakeInput[] memory stakes) internal returns (uint256) {
+        uint256 accruedRewards = 0;
 
-  /**
-   * @dev Returns the data of an user on a distribution
-   * @param user Address of the user
-   * @param asset The address of the reference asset of the distribution
-   * @return The new index
-   */
-  function getUserAssetData(
-    address user,
-    address asset
-  ) public view returns (uint256) {
-    return assets[asset].users[user];
-  }
+        for (uint256 i = 0; i < stakes.length; i++) {
+            accruedRewards = accruedRewards
+                + _updateUserAssetInternal(
+                    user, stakes[i].underlyingAsset, stakes[i].stakedByUser, stakes[i].totalStaked
+                );
+        }
+
+        return accruedRewards;
+    }
+
+    /**
+     * @dev Return the accrued rewards for an user over a list of distribution
+     * @param user The address of the user
+     * @param stakes List of structs of the user data related with his stake
+     * @return The accrued rewards for the user until the moment
+     */
+    function _getUnclaimedRewards(address user, DistributionTypes.UserStakeInput[] memory stakes)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 accruedRewards = 0;
+
+        for (uint256 i = 0; i < stakes.length; i++) {
+            AssetData storage assetConfig = assets[stakes[i].underlyingAsset];
+            uint256 assetIndex = _getAssetIndex(
+                assetConfig.index, assetConfig.emissionPerSecond, assetConfig.lastUpdateTimestamp, stakes[i].totalStaked
+            );
+
+            accruedRewards = accruedRewards + _getRewards(stakes[i].stakedByUser, assetIndex, assetConfig.users[user]);
+        }
+        return accruedRewards;
+    }
+
+    /**
+     * @dev Internal function for the calculation of user's rewards on a distribution
+     * @param principalUserBalance Amount staked by the user on a distribution
+     * @param reserveIndex Current index of the distribution
+     * @param userIndex Index stored for the user, representation his staking moment
+     * @return The rewards
+     */
+    function _getRewards(uint256 principalUserBalance, uint256 reserveIndex, uint256 userIndex)
+        internal
+        pure
+        returns (uint256)
+    {
+        return (principalUserBalance * (reserveIndex - userIndex)) / (10 ** uint256(PRECISION));
+    }
+
+    /**
+     * @dev Calculates the next value of an specific distribution index, with validations
+     * @param currentIndex Current index of the distribution
+     * @param emissionPerSecond Representing the total rewards distributed per second per asset unit, on the distribution
+     * @param lastUpdateTimestamp Last moment this distribution was updated
+     * @param totalBalance of tokens considered for the distribution
+     * @return The new index.
+     */
+    function _getAssetIndex(
+        uint256 currentIndex,
+        uint256 emissionPerSecond,
+        uint128 lastUpdateTimestamp,
+        uint256 totalBalance
+    ) internal view returns (uint256) {
+        if (
+            emissionPerSecond == 0 || totalBalance == 0 || lastUpdateTimestamp == block.timestamp
+                || lastUpdateTimestamp >= DISTRIBUTION_END
+        ) {
+            return currentIndex;
+        }
+
+        uint256 currentTimestamp = block.timestamp > DISTRIBUTION_END ? DISTRIBUTION_END : block.timestamp;
+        uint256 timeDelta = currentTimestamp - lastUpdateTimestamp;
+        return ((emissionPerSecond * timeDelta * (10 ** uint256(PRECISION))) / totalBalance) + currentIndex;
+    }
+
+    /**
+     * @dev Returns the data of an user on a distribution
+     * @param user Address of the user
+     * @param asset The address of the reference asset of the distribution
+     * @return The new index
+     */
+    function getUserAssetData(address user, address asset) public view returns (uint256) {
+        return assets[asset].users[user];
+    }
 }
 
 // SPDX-License-Identifier: agpl-3.0
@@ -4272,19 +3958,20 @@ pragma solidity ^0.8.0;
  * @title MOCK CONTRACT TO KEEP VALID STORAGE LAYOUT
  * @dev WAS including snapshots of balances on transfer-related actions
  * @author BGD Labs
- **/
+ *
+ */
 abstract contract GovernancePowerWithSnapshot {
-  uint256[3] private __________DEPRECATED_GOV_V2_PART;
+    uint256[3] private __________DEPRECATED_GOV_V2_PART;
 }
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ECDSA} from 'openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol';
+import {ECDSA} from "openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 
-import {SafeCast72} from './utils/SafeCast72.sol';
-import {IGovernancePowerDelegationToken} from './interfaces/IGovernancePowerDelegationToken.sol';
-import {DelegationMode} from './DelegationAwareBalance.sol';
+import {SafeCast72} from "./utils/SafeCast72.sol";
+import {IGovernancePowerDelegationToken} from "./interfaces/IGovernancePowerDelegationToken.sol";
+import {DelegationMode} from "./DelegationAwareBalance.sol";
 
 /**
  * @notice The contract implements generic delegation functionality for the upcoming governance v3
@@ -4298,599 +3985,546 @@ import {DelegationMode} from './DelegationAwareBalance.sol';
  *   *************************************************************
  */
 abstract contract BaseDelegation is IGovernancePowerDelegationToken {
-  struct DelegationState {
-    uint72 delegatedPropositionBalance;
-    uint72 delegatedVotingBalance;
-    DelegationMode delegationMode;
-  }
-
-  mapping(address => address) internal _votingDelegatee;
-  mapping(address => address) internal _propositionDelegatee;
-
-  /** @dev we assume that for the governance system delegation with 18 decimals of precision is not needed,
-   *   by this constant we reduce it by 10, to 8 decimals.
-   *   In case of Aave token this will allow to work with up to 47'223'664'828'696,45213696 total supply
-   *   If your token already have less then 10 decimals, please change it to appropriate.
-   */
-  uint256 public constant POWER_SCALE_FACTOR = 1e10;
-
-  bytes32 public constant DELEGATE_BY_TYPE_TYPEHASH =
-    keccak256(
-      'DelegateByType(address delegator,address delegatee,uint8 delegationType,uint256 nonce,uint256 deadline)'
-    );
-  bytes32 public constant DELEGATE_TYPEHASH =
-    keccak256('Delegate(address delegator,address delegatee,uint256 nonce,uint256 deadline)');
-
-  /**
-   * @notice returns eip-2612 compatible domain separator
-   * @dev we expect that existing tokens, ie Aave, already have, so we want to reuse
-   * @return domain separator
-   */
-  function _getDomainSeparator() internal view virtual returns (bytes32);
-
-  /**
-   * @notice gets the delegation state of a user
-   * @param user address
-   * @return state of a user's delegation
-   */
-  function _getDelegationState(address user) internal view virtual returns (DelegationState memory);
-
-  /**
-   * @notice returns the token balance of a user
-   * @param user address
-   * @return current nonce before increase
-   */
-  function _getBalance(address user) internal view virtual returns (uint256);
-
-  /**
-   * @notice increases and return the current nonce of a user
-   * @dev should use `return nonce++;` pattern
-   * @param user address
-   * @return current nonce before increase
-   */
-  function _incrementNonces(address user) internal virtual returns (uint256);
-
-  /**
-   * @notice sets the delegation state of a user
-   * @param user address
-   * @param delegationState state of a user's delegation
-   */
-  function _setDelegationState(address user, DelegationState memory delegationState)
-    internal
-    virtual;
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function delegateByType(address delegatee, GovernancePowerType delegationType)
-    external
-    virtual
-    override
-  {
-    _delegateByType(msg.sender, delegatee, delegationType);
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function delegate(address delegatee) external override {
-    _delegateByType(msg.sender, delegatee, GovernancePowerType.VOTING);
-    _delegateByType(msg.sender, delegatee, GovernancePowerType.PROPOSITION);
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function getDelegateeByType(address delegator, GovernancePowerType delegationType)
-    external
-    view
-    override
-    returns (address)
-  {
-    return _getDelegateeByType(delegator, _getDelegationState(delegator), delegationType);
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function getDelegates(address delegator) external view override returns (address, address) {
-    DelegationState memory delegatorBalance = _getDelegationState(delegator);
-    return (
-      _getDelegateeByType(delegator, delegatorBalance, GovernancePowerType.VOTING),
-      _getDelegateeByType(delegator, delegatorBalance, GovernancePowerType.PROPOSITION)
-    );
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function getPowerCurrent(address user, GovernancePowerType delegationType)
-    public
-    view
-    virtual
-    override
-    returns (uint256)
-  {
-    DelegationState memory userState = _getDelegationState(user);
-    uint256 userOwnPower = uint8(userState.delegationMode) & (uint8(delegationType) + 1) == 0
-      ? _getBalance(user)
-      : 0;
-    uint256 userDelegatedPower = _getDelegatedPowerByType(userState, delegationType);
-    return userOwnPower + userDelegatedPower;
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function getPowersCurrent(address user) external view override returns (uint256, uint256) {
-    return (
-      getPowerCurrent(user, GovernancePowerType.VOTING),
-      getPowerCurrent(user, GovernancePowerType.PROPOSITION)
-    );
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function metaDelegateByType(
-    address delegator,
-    address delegatee,
-    GovernancePowerType delegationType,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external override {
-    require(delegator != address(0), 'INVALID_OWNER');
-    //solium-disable-next-line
-    require(block.timestamp <= deadline, 'INVALID_EXPIRATION');
-    bytes32 digest = ECDSA.toTypedDataHash(
-      _getDomainSeparator(),
-      keccak256(
-        abi.encode(
-          DELEGATE_BY_TYPE_TYPEHASH,
-          delegator,
-          delegatee,
-          delegationType,
-          _incrementNonces(delegator),
-          deadline
-        )
-      )
-    );
-
-    require(delegator == ECDSA.recover(digest, v, r, s), 'INVALID_SIGNATURE');
-    _delegateByType(delegator, delegatee, delegationType);
-  }
-
-  /// @inheritdoc IGovernancePowerDelegationToken
-  function metaDelegate(
-    address delegator,
-    address delegatee,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external override {
-    require(delegator != address(0), 'INVALID_OWNER');
-    //solium-disable-next-line
-    require(block.timestamp <= deadline, 'INVALID_EXPIRATION');
-    bytes32 digest = ECDSA.toTypedDataHash(
-      _getDomainSeparator(),
-      keccak256(
-        abi.encode(DELEGATE_TYPEHASH, delegator, delegatee, _incrementNonces(delegator), deadline)
-      )
-    );
-
-    require(delegator == ECDSA.recover(digest, v, r, s), 'INVALID_SIGNATURE');
-    _delegateByType(delegator, delegatee, GovernancePowerType.VOTING);
-    _delegateByType(delegator, delegatee, GovernancePowerType.PROPOSITION);
-  }
-
-  /**
-   * @dev Modifies the delegated power of a `delegatee` account by type (VOTING, PROPOSITION).
-   * Passing the impact on the delegation of `delegatee` account before and after to reduce conditionals and not lose
-   * any precision.
-   * @param impactOnDelegationBefore how much impact a balance of another account had over the delegation of a `delegatee`
-   * before an action.
-   * For example, if the action is a delegation from one account to another, the impact before the action will be 0.
-   * @param impactOnDelegationAfter how much impact a balance of another account will have  over the delegation of a `delegatee`
-   * after an action.
-   * For example, if the action is a delegation from one account to another, the impact after the action will be the whole balance
-   * of the account changing the delegatee.
-   * @param delegatee the user whom delegated governance power will be changed
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   **/
-  function _governancePowerTransferByType(
-    uint256 impactOnDelegationBefore,
-    uint256 impactOnDelegationAfter,
-    address delegatee,
-    GovernancePowerType delegationType
-  ) internal {
-    if (delegatee == address(0)) return;
-    if (impactOnDelegationBefore == impactOnDelegationAfter) return;
-
-    // we use uint72, because this is the most optimal for AaveTokenV3
-    // To make delegated balance fit into uint72 we're decreasing precision of delegated balance by POWER_SCALE_FACTOR
-    uint72 impactOnDelegationBefore72 = SafeCast72.toUint72(
-      impactOnDelegationBefore / POWER_SCALE_FACTOR
-    );
-    uint72 impactOnDelegationAfter72 = SafeCast72.toUint72(
-      impactOnDelegationAfter / POWER_SCALE_FACTOR
-    );
-
-    DelegationState memory delegateeState = _getDelegationState(delegatee);
-    if (delegationType == GovernancePowerType.VOTING) {
-      delegateeState.delegatedVotingBalance =
-        delegateeState.delegatedVotingBalance -
-        impactOnDelegationBefore72 +
-        impactOnDelegationAfter72;
-    } else {
-      delegateeState.delegatedPropositionBalance =
-        delegateeState.delegatedPropositionBalance -
-        impactOnDelegationBefore72 +
-        impactOnDelegationAfter72;
-    }
-    _setDelegationState(delegatee, delegateeState);
-  }
-
-  /**
-   * @dev performs all state changes related delegation changes on transfer
-   * @param from token sender
-   * @param to token recipient
-   * @param fromBalanceBefore balance of the sender before transfer
-   * @param toBalanceBefore balance of the recipient before transfer
-   * @param amount amount of tokens sent
-   **/
-  function _delegationChangeOnTransfer(
-    address from,
-    address to,
-    uint256 fromBalanceBefore,
-    uint256 toBalanceBefore,
-    uint256 amount
-  ) internal {
-    if (from == to) {
-      return;
+    struct DelegationState {
+        uint72 delegatedPropositionBalance;
+        uint72 delegatedVotingBalance;
+        DelegationMode delegationMode;
     }
 
-    if (from != address(0)) {
-      DelegationState memory fromUserState = _getDelegationState(from);
-      uint256 fromBalanceAfter = fromBalanceBefore - amount;
-      if (fromUserState.delegationMode != DelegationMode.NO_DELEGATION) {
-        _governancePowerTransferByType(
-          fromBalanceBefore,
-          fromBalanceAfter,
-          _getDelegateeByType(from, fromUserState, GovernancePowerType.VOTING),
-          GovernancePowerType.VOTING
+    mapping(address => address) internal _votingDelegatee;
+    mapping(address => address) internal _propositionDelegatee;
+
+    /**
+     * @dev we assume that for the governance system delegation with 18 decimals of precision is not needed,
+     *   by this constant we reduce it by 10, to 8 decimals.
+     *   In case of Aave token this will allow to work with up to 47'223'664'828'696,45213696 total supply
+     *   If your token already have less then 10 decimals, please change it to appropriate.
+     */
+    uint256 public constant POWER_SCALE_FACTOR = 1e10;
+
+    bytes32 public constant DELEGATE_BY_TYPE_TYPEHASH = keccak256(
+        "DelegateByType(address delegator,address delegatee,uint8 delegationType,uint256 nonce,uint256 deadline)"
+    );
+    bytes32 public constant DELEGATE_TYPEHASH =
+        keccak256("Delegate(address delegator,address delegatee,uint256 nonce,uint256 deadline)");
+
+    /**
+     * @notice returns eip-2612 compatible domain separator
+     * @dev we expect that existing tokens, ie Aave, already have, so we want to reuse
+     * @return domain separator
+     */
+    function _getDomainSeparator() internal view virtual returns (bytes32);
+
+    /**
+     * @notice gets the delegation state of a user
+     * @param user address
+     * @return state of a user's delegation
+     */
+    function _getDelegationState(address user) internal view virtual returns (DelegationState memory);
+
+    /**
+     * @notice returns the token balance of a user
+     * @param user address
+     * @return current nonce before increase
+     */
+    function _getBalance(address user) internal view virtual returns (uint256);
+
+    /**
+     * @notice increases and return the current nonce of a user
+     * @dev should use `return nonce++;` pattern
+     * @param user address
+     * @return current nonce before increase
+     */
+    function _incrementNonces(address user) internal virtual returns (uint256);
+
+    /**
+     * @notice sets the delegation state of a user
+     * @param user address
+     * @param delegationState state of a user's delegation
+     */
+    function _setDelegationState(address user, DelegationState memory delegationState) internal virtual;
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function delegateByType(address delegatee, GovernancePowerType delegationType) external virtual override {
+        _delegateByType(msg.sender, delegatee, delegationType);
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function delegate(address delegatee) external override {
+        _delegateByType(msg.sender, delegatee, GovernancePowerType.VOTING);
+        _delegateByType(msg.sender, delegatee, GovernancePowerType.PROPOSITION);
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function getDelegateeByType(address delegator, GovernancePowerType delegationType)
+        external
+        view
+        override
+        returns (address)
+    {
+        return _getDelegateeByType(delegator, _getDelegationState(delegator), delegationType);
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function getDelegates(address delegator) external view override returns (address, address) {
+        DelegationState memory delegatorBalance = _getDelegationState(delegator);
+        return (
+            _getDelegateeByType(delegator, delegatorBalance, GovernancePowerType.VOTING),
+            _getDelegateeByType(delegator, delegatorBalance, GovernancePowerType.PROPOSITION)
         );
-        _governancePowerTransferByType(
-          fromBalanceBefore,
-          fromBalanceAfter,
-          _getDelegateeByType(from, fromUserState, GovernancePowerType.PROPOSITION),
-          GovernancePowerType.PROPOSITION
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function getPowerCurrent(address user, GovernancePowerType delegationType)
+        public
+        view
+        virtual
+        override
+        returns (uint256)
+    {
+        DelegationState memory userState = _getDelegationState(user);
+        uint256 userOwnPower =
+            uint8(userState.delegationMode) & (uint8(delegationType) + 1) == 0 ? _getBalance(user) : 0;
+        uint256 userDelegatedPower = _getDelegatedPowerByType(userState, delegationType);
+        return userOwnPower + userDelegatedPower;
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function getPowersCurrent(address user) external view override returns (uint256, uint256) {
+        return
+            (getPowerCurrent(user, GovernancePowerType.VOTING), getPowerCurrent(user, GovernancePowerType.PROPOSITION));
+    }
+
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function metaDelegateByType(
+        address delegator,
+        address delegatee,
+        GovernancePowerType delegationType,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external override {
+        require(delegator != address(0), "INVALID_OWNER");
+        //solium-disable-next-line
+        require(block.timestamp <= deadline, "INVALID_EXPIRATION");
+        bytes32 digest = ECDSA.toTypedDataHash(
+            _getDomainSeparator(),
+            keccak256(
+                abi.encode(
+                    DELEGATE_BY_TYPE_TYPEHASH,
+                    delegator,
+                    delegatee,
+                    delegationType,
+                    _incrementNonces(delegator),
+                    deadline
+                )
+            )
         );
-      }
+
+        require(delegator == ECDSA.recover(digest, v, r, s), "INVALID_SIGNATURE");
+        _delegateByType(delegator, delegatee, delegationType);
     }
 
-    if (to != address(0)) {
-      DelegationState memory toUserState = _getDelegationState(to);
-      uint256 toBalanceAfter = toBalanceBefore + amount;
-
-      if (toUserState.delegationMode != DelegationMode.NO_DELEGATION) {
-        _governancePowerTransferByType(
-          toBalanceBefore,
-          toBalanceAfter,
-          _getDelegateeByType(to, toUserState, GovernancePowerType.VOTING),
-          GovernancePowerType.VOTING
+    /// @inheritdoc IGovernancePowerDelegationToken
+    function metaDelegate(address delegator, address delegatee, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+        override
+    {
+        require(delegator != address(0), "INVALID_OWNER");
+        //solium-disable-next-line
+        require(block.timestamp <= deadline, "INVALID_EXPIRATION");
+        bytes32 digest = ECDSA.toTypedDataHash(
+            _getDomainSeparator(),
+            keccak256(abi.encode(DELEGATE_TYPEHASH, delegator, delegatee, _incrementNonces(delegator), deadline))
         );
-        _governancePowerTransferByType(
-          toBalanceBefore,
-          toBalanceAfter,
-          _getDelegateeByType(to, toUserState, GovernancePowerType.PROPOSITION),
-          GovernancePowerType.PROPOSITION
-        );
-      }
-    }
-  }
 
-  /**
-   * @dev Extracts from state and returns delegated governance power (Voting, Proposition)
-   * @param userState the current state of a user
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   **/
-  function _getDelegatedPowerByType(
-    DelegationState memory userState,
-    GovernancePowerType delegationType
-  ) internal pure returns (uint256) {
-    return
-      POWER_SCALE_FACTOR *
-      (
-        delegationType == GovernancePowerType.VOTING
-          ? userState.delegatedVotingBalance
-          : userState.delegatedPropositionBalance
-      );
-  }
-
-  /**
-   * @dev Extracts from state and returns the delegatee of a delegator by type of governance power (Voting, Proposition)
-   * - If the delegator doesn't have any delegatee, returns address(0)
-   * @param delegator delegator
-   * @param userState the current state of a user
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   **/
-  function _getDelegateeByType(
-    address delegator,
-    DelegationState memory userState,
-    GovernancePowerType delegationType
-  ) internal view returns (address) {
-    if (delegationType == GovernancePowerType.VOTING) {
-      return
-        /// With the & operation, we cover both VOTING_DELEGATED delegation and FULL_POWER_DELEGATED
-        /// as VOTING_DELEGATED is equivalent to 01 in binary and FULL_POWER_DELEGATED is equivalent to 11
-        (uint8(userState.delegationMode) & uint8(DelegationMode.VOTING_DELEGATED)) != 0
-          ? _votingDelegatee[delegator]
-          : address(0);
-    }
-    return
-      userState.delegationMode >= DelegationMode.PROPOSITION_DELEGATED
-        ? _propositionDelegatee[delegator]
-        : address(0);
-  }
-
-  /**
-   * @dev Changes user's delegatee address by type of governance power (Voting, Proposition)
-   * @param delegator delegator
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   * @param _newDelegatee the new delegatee
-   **/
-  function _updateDelegateeByType(
-    address delegator,
-    GovernancePowerType delegationType,
-    address _newDelegatee
-  ) internal {
-    address newDelegatee = _newDelegatee == delegator ? address(0) : _newDelegatee;
-    if (delegationType == GovernancePowerType.VOTING) {
-      _votingDelegatee[delegator] = newDelegatee;
-    } else {
-      _propositionDelegatee[delegator] = newDelegatee;
-    }
-  }
-
-  /**
-   * @dev Updates the specific flag which signaling about existence of delegation of governance power (Voting, Proposition)
-   * @param userState a user state to change
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   * @param willDelegate next state of delegation
-   **/
-  function _updateDelegationModeByType(
-    DelegationState memory userState,
-    GovernancePowerType delegationType,
-    bool willDelegate
-  ) internal pure returns (DelegationState memory) {
-    if (willDelegate) {
-      // Because GovernancePowerType starts from 0, we should add 1 first, then we apply bitwise OR
-      userState.delegationMode = DelegationMode(
-        uint8(userState.delegationMode) | (uint8(delegationType) + 1)
-      );
-    } else {
-      // First bitwise NEGATION, ie was 01, after XOR with 11 will be 10,
-      // then bitwise AND, which means it will keep only another delegation type if it exists
-      userState.delegationMode = DelegationMode(
-        uint8(userState.delegationMode) &
-          ((uint8(delegationType) + 1) ^ uint8(DelegationMode.FULL_POWER_DELEGATED))
-      );
-    }
-    return userState;
-  }
-
-  /**
-   * @dev This is the equivalent of an ERC20 transfer(), but for a power type: an atomic transfer of a balance (power).
-   * When needed, it decreases the power of the `delegator` and when needed, it increases the power of the `delegatee`
-   * @param delegator delegator
-   * @param _delegatee the user which delegated power will change
-   * @param delegationType the type of delegation (VOTING, PROPOSITION)
-   **/
-  function _delegateByType(
-    address delegator,
-    address _delegatee,
-    GovernancePowerType delegationType
-  ) internal {
-    // Here we unify the property that delegating power to address(0) == delegating power to yourself == no delegation
-    // So from now on, not being delegating is (exclusively) that delegatee == address(0)
-    address delegatee = _delegatee == delegator ? address(0) : _delegatee;
-
-    // We read the whole struct before validating delegatee, because in the optimistic case
-    // (_delegatee != currentDelegatee) we will reuse userState in the rest of the function
-    DelegationState memory delegatorState = _getDelegationState(delegator);
-    address currentDelegatee = _getDelegateeByType(delegator, delegatorState, delegationType);
-    if (delegatee == currentDelegatee) return;
-
-    bool delegatingNow = currentDelegatee != address(0);
-    bool willDelegateAfter = delegatee != address(0);
-    uint256 delegatorBalance = _getBalance(delegator);
-
-    if (delegatingNow) {
-      _governancePowerTransferByType(delegatorBalance, 0, currentDelegatee, delegationType);
+        require(delegator == ECDSA.recover(digest, v, r, s), "INVALID_SIGNATURE");
+        _delegateByType(delegator, delegatee, GovernancePowerType.VOTING);
+        _delegateByType(delegator, delegatee, GovernancePowerType.PROPOSITION);
     }
 
-    if (willDelegateAfter) {
-      _governancePowerTransferByType(0, delegatorBalance, delegatee, delegationType);
+    /**
+     * @dev Modifies the delegated power of a `delegatee` account by type (VOTING, PROPOSITION).
+     * Passing the impact on the delegation of `delegatee` account before and after to reduce conditionals and not lose
+     * any precision.
+     * @param impactOnDelegationBefore how much impact a balance of another account had over the delegation of a `delegatee`
+     * before an action.
+     * For example, if the action is a delegation from one account to another, the impact before the action will be 0.
+     * @param impactOnDelegationAfter how much impact a balance of another account will have  over the delegation of a `delegatee`
+     * after an action.
+     * For example, if the action is a delegation from one account to another, the impact after the action will be the whole balance
+     * of the account changing the delegatee.
+     * @param delegatee the user whom delegated governance power will be changed
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     *
+     */
+    function _governancePowerTransferByType(
+        uint256 impactOnDelegationBefore,
+        uint256 impactOnDelegationAfter,
+        address delegatee,
+        GovernancePowerType delegationType
+    ) internal {
+        if (delegatee == address(0)) return;
+        if (impactOnDelegationBefore == impactOnDelegationAfter) return;
+
+        // we use uint72, because this is the most optimal for AaveTokenV3
+        // To make delegated balance fit into uint72 we're decreasing precision of delegated balance by POWER_SCALE_FACTOR
+        uint72 impactOnDelegationBefore72 = SafeCast72.toUint72(impactOnDelegationBefore / POWER_SCALE_FACTOR);
+        uint72 impactOnDelegationAfter72 = SafeCast72.toUint72(impactOnDelegationAfter / POWER_SCALE_FACTOR);
+
+        DelegationState memory delegateeState = _getDelegationState(delegatee);
+        if (delegationType == GovernancePowerType.VOTING) {
+            delegateeState.delegatedVotingBalance =
+                delegateeState.delegatedVotingBalance - impactOnDelegationBefore72 + impactOnDelegationAfter72;
+        } else {
+            delegateeState.delegatedPropositionBalance =
+                delegateeState.delegatedPropositionBalance - impactOnDelegationBefore72 + impactOnDelegationAfter72;
+        }
+        _setDelegationState(delegatee, delegateeState);
     }
 
-    _updateDelegateeByType(delegator, delegationType, delegatee);
+    /**
+     * @dev performs all state changes related delegation changes on transfer
+     * @param from token sender
+     * @param to token recipient
+     * @param fromBalanceBefore balance of the sender before transfer
+     * @param toBalanceBefore balance of the recipient before transfer
+     * @param amount amount of tokens sent
+     *
+     */
+    function _delegationChangeOnTransfer(
+        address from,
+        address to,
+        uint256 fromBalanceBefore,
+        uint256 toBalanceBefore,
+        uint256 amount
+    ) internal {
+        if (from == to) {
+            return;
+        }
 
-    if (willDelegateAfter != delegatingNow) {
-      _setDelegationState(
-        delegator,
-        _updateDelegationModeByType(delegatorState, delegationType, willDelegateAfter)
-      );
+        if (from != address(0)) {
+            DelegationState memory fromUserState = _getDelegationState(from);
+            uint256 fromBalanceAfter = fromBalanceBefore - amount;
+            if (fromUserState.delegationMode != DelegationMode.NO_DELEGATION) {
+                _governancePowerTransferByType(
+                    fromBalanceBefore,
+                    fromBalanceAfter,
+                    _getDelegateeByType(from, fromUserState, GovernancePowerType.VOTING),
+                    GovernancePowerType.VOTING
+                );
+                _governancePowerTransferByType(
+                    fromBalanceBefore,
+                    fromBalanceAfter,
+                    _getDelegateeByType(from, fromUserState, GovernancePowerType.PROPOSITION),
+                    GovernancePowerType.PROPOSITION
+                );
+            }
+        }
+
+        if (to != address(0)) {
+            DelegationState memory toUserState = _getDelegationState(to);
+            uint256 toBalanceAfter = toBalanceBefore + amount;
+
+            if (toUserState.delegationMode != DelegationMode.NO_DELEGATION) {
+                _governancePowerTransferByType(
+                    toBalanceBefore,
+                    toBalanceAfter,
+                    _getDelegateeByType(to, toUserState, GovernancePowerType.VOTING),
+                    GovernancePowerType.VOTING
+                );
+                _governancePowerTransferByType(
+                    toBalanceBefore,
+                    toBalanceAfter,
+                    _getDelegateeByType(to, toUserState, GovernancePowerType.PROPOSITION),
+                    GovernancePowerType.PROPOSITION
+                );
+            }
+        }
     }
 
-    emit DelegateChanged(delegator, delegatee, delegationType);
-  }
+    /**
+     * @dev Extracts from state and returns delegated governance power (Voting, Proposition)
+     * @param userState the current state of a user
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     *
+     */
+    function _getDelegatedPowerByType(DelegationState memory userState, GovernancePowerType delegationType)
+        internal
+        pure
+        returns (uint256)
+    {
+        return POWER_SCALE_FACTOR
+            * (delegationType == GovernancePowerType.VOTING
+                    ? userState.delegatedVotingBalance
+                    : userState.delegatedPropositionBalance);
+    }
+
+    /**
+     * @dev Extracts from state and returns the delegatee of a delegator by type of governance power (Voting, Proposition)
+     * - If the delegator doesn't have any delegatee, returns address(0)
+     * @param delegator delegator
+     * @param userState the current state of a user
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     *
+     */
+    function _getDelegateeByType(
+        address delegator,
+        DelegationState memory userState,
+        GovernancePowerType delegationType
+    ) internal view returns (address) {
+        if (delegationType == GovernancePowerType.VOTING) {
+            return
+            /// With the & operation, we cover both VOTING_DELEGATED delegation and FULL_POWER_DELEGATED
+            /// as VOTING_DELEGATED is equivalent to 01 in binary and FULL_POWER_DELEGATED is equivalent to 11
+            (uint8(userState.delegationMode) & uint8(DelegationMode.VOTING_DELEGATED)) != 0
+                ? _votingDelegatee[delegator]
+                : address(0);
+        }
+        return userState.delegationMode >= DelegationMode.PROPOSITION_DELEGATED
+            ? _propositionDelegatee[delegator]
+            : address(0);
+    }
+
+    /**
+     * @dev Changes user's delegatee address by type of governance power (Voting, Proposition)
+     * @param delegator delegator
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     * @param _newDelegatee the new delegatee
+     *
+     */
+    function _updateDelegateeByType(address delegator, GovernancePowerType delegationType, address _newDelegatee)
+        internal
+    {
+        address newDelegatee = _newDelegatee == delegator ? address(0) : _newDelegatee;
+        if (delegationType == GovernancePowerType.VOTING) {
+            _votingDelegatee[delegator] = newDelegatee;
+        } else {
+            _propositionDelegatee[delegator] = newDelegatee;
+        }
+    }
+
+    /**
+     * @dev Updates the specific flag which signaling about existence of delegation of governance power (Voting, Proposition)
+     * @param userState a user state to change
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     * @param willDelegate next state of delegation
+     *
+     */
+    function _updateDelegationModeByType(
+        DelegationState memory userState,
+        GovernancePowerType delegationType,
+        bool willDelegate
+    ) internal pure returns (DelegationState memory) {
+        if (willDelegate) {
+            // Because GovernancePowerType starts from 0, we should add 1 first, then we apply bitwise OR
+            userState.delegationMode = DelegationMode(uint8(userState.delegationMode) | (uint8(delegationType) + 1));
+        } else {
+            // First bitwise NEGATION, ie was 01, after XOR with 11 will be 10,
+            // then bitwise AND, which means it will keep only another delegation type if it exists
+            userState.delegationMode = DelegationMode(
+                uint8(userState.delegationMode)
+                    & ((uint8(delegationType) + 1) ^ uint8(DelegationMode.FULL_POWER_DELEGATED))
+            );
+        }
+        return userState;
+    }
+
+    /**
+     * @dev This is the equivalent of an ERC20 transfer(), but for a power type: an atomic transfer of a balance (power).
+     * When needed, it decreases the power of the `delegator` and when needed, it increases the power of the `delegatee`
+     * @param delegator delegator
+     * @param _delegatee the user which delegated power will change
+     * @param delegationType the type of delegation (VOTING, PROPOSITION)
+     *
+     */
+    function _delegateByType(address delegator, address _delegatee, GovernancePowerType delegationType) internal {
+        // Here we unify the property that delegating power to address(0) == delegating power to yourself == no delegation
+        // So from now on, not being delegating is (exclusively) that delegatee == address(0)
+        address delegatee = _delegatee == delegator ? address(0) : _delegatee;
+
+        // We read the whole struct before validating delegatee, because in the optimistic case
+        // (_delegatee != currentDelegatee) we will reuse userState in the rest of the function
+        DelegationState memory delegatorState = _getDelegationState(delegator);
+        address currentDelegatee = _getDelegateeByType(delegator, delegatorState, delegationType);
+        if (delegatee == currentDelegatee) return;
+
+        bool delegatingNow = currentDelegatee != address(0);
+        bool willDelegateAfter = delegatee != address(0);
+        uint256 delegatorBalance = _getBalance(delegator);
+
+        if (delegatingNow) {
+            _governancePowerTransferByType(delegatorBalance, 0, currentDelegatee, delegationType);
+        }
+
+        if (willDelegateAfter) {
+            _governancePowerTransferByType(0, delegatorBalance, delegatee, delegationType);
+        }
+
+        _updateDelegateeByType(delegator, delegationType, delegatee);
+
+        if (willDelegateAfter != delegatingNow) {
+            _setDelegationState(
+                delegator, _updateDelegationModeByType(delegatorState, delegationType, willDelegateAfter)
+            );
+        }
+
+        emit DelegateChanged(delegator, delegatee, delegationType);
+    }
 }
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Context} from 'openzeppelin-contracts/contracts/utils/Context.sol';
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
-import {IERC20Metadata} from 'openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol';
-import {DelegationMode} from './DelegationAwareBalance.sol';
+import {Context} from "openzeppelin-contracts/contracts/utils/Context.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {DelegationMode} from "./DelegationAwareBalance.sol";
 
 // Inspired by OpenZeppelin Contracts (last updated v4.5.0) (token/ERC20/ERC20.sol)
 abstract contract BaseAaveToken is Context, IERC20Metadata {
-  struct DelegationAwareBalance {
-    uint104 balance;
-    uint72 delegatedPropositionBalance;
-    uint72 delegatedVotingBalance;
-    DelegationMode delegationMode;
-  }
-
-  mapping(address => DelegationAwareBalance) internal _balances;
-
-  mapping(address => mapping(address => uint256)) internal _allowances;
-
-  uint256 internal _totalSupply;
-
-  string internal _name;
-  string internal _symbol;
-
-  // @dev DEPRECATED
-  // kept for backwards compatibility with old storage layout
-  uint8 private ______DEPRECATED_OLD_ERC20_DECIMALS;
-
-  /**
-   * @dev Returns the name of the token.
-   */
-  function name() public view virtual override returns (string memory) {
-    return _name;
-  }
-
-  /**
-   * @dev Returns the symbol of the token, usually a shorter version of the
-   * name.
-   */
-  function symbol() public view virtual override returns (string memory) {
-    return _symbol;
-  }
-
-  function decimals() public view virtual override returns (uint8) {
-    return 18;
-  }
-
-  function totalSupply() public view virtual override returns (uint256) {
-    return _totalSupply;
-  }
-
-  function balanceOf(address account) public view virtual override returns (uint256) {
-    return _balances[account].balance;
-  }
-
-  function transfer(address to, uint256 amount) public virtual override returns (bool) {
-    address owner = _msgSender();
-    _transfer(owner, to, amount);
-    return true;
-  }
-
-  function allowance(address owner, address spender)
-    public
-    view
-    virtual
-    override
-    returns (uint256)
-  {
-    return _allowances[owner][spender];
-  }
-
-  function approve(address spender, uint256 amount) public virtual override returns (bool) {
-    address owner = _msgSender();
-    _approve(owner, spender, amount);
-    return true;
-  }
-
-  function transferFrom(
-    address from,
-    address to,
-    uint256 amount
-  ) public virtual override returns (bool) {
-    address spender = _msgSender();
-    _spendAllowance(from, spender, amount);
-    _transfer(from, to, amount);
-    return true;
-  }
-
-  function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-    address owner = _msgSender();
-    _approve(owner, spender, _allowances[owner][spender] + addedValue);
-    return true;
-  }
-
-  function decreaseAllowance(address spender, uint256 subtractedValue)
-    public
-    virtual
-    returns (bool)
-  {
-    address owner = _msgSender();
-    uint256 currentAllowance = _allowances[owner][spender];
-    require(currentAllowance >= subtractedValue, 'ERC20: decreased allowance below zero');
-    unchecked {
-      _approve(owner, spender, currentAllowance - subtractedValue);
+    struct DelegationAwareBalance {
+        uint104 balance;
+        uint72 delegatedPropositionBalance;
+        uint72 delegatedVotingBalance;
+        DelegationMode delegationMode;
     }
 
-    return true;
-  }
+    mapping(address => DelegationAwareBalance) internal _balances;
 
-  function _transfer(
-    address from,
-    address to,
-    uint256 amount
-  ) internal virtual {
-    require(from != address(0), 'ERC20: transfer from the zero address');
-    require(to != address(0), 'ERC20: transfer to the zero address');
+    mapping(address => mapping(address => uint256)) internal _allowances;
 
-    if (from != to) {
-      uint104 fromBalanceBefore = _balances[from].balance;
-      uint104 toBalanceBefore = _balances[to].balance;
+    uint256 internal _totalSupply;
 
-      require(fromBalanceBefore >= amount, 'ERC20: transfer amount exceeds balance');
-      unchecked {
-        _balances[from].balance = fromBalanceBefore - uint104(amount);
-      }
+    string internal _name;
+    string internal _symbol;
 
-      _balances[to].balance = toBalanceBefore + uint104(amount);
+    // @dev DEPRECATED
+    // kept for backwards compatibility with old storage layout
+    uint8 private ______DEPRECATED_OLD_ERC20_DECIMALS;
 
-      _afterTokenTransfer(from, to, fromBalanceBefore, toBalanceBefore, amount);
+    /**
+     * @dev Returns the name of the token.
+     */
+    function name() public view virtual override returns (string memory) {
+        return _name;
     }
-    emit Transfer(from, to, amount);
-  }
 
-  function _approve(
-    address owner,
-    address spender,
-    uint256 amount
-  ) internal virtual {
-    require(owner != address(0), 'ERC20: approve from the zero address');
-    require(spender != address(0), 'ERC20: approve to the zero address');
-
-    _allowances[owner][spender] = amount;
-    emit Approval(owner, spender, amount);
-  }
-
-  function _spendAllowance(
-    address owner,
-    address spender,
-    uint256 amount
-  ) internal virtual {
-    uint256 currentAllowance = allowance(owner, spender);
-    if (currentAllowance != type(uint256).max) {
-      require(currentAllowance >= amount, 'ERC20: insufficient allowance');
-      unchecked {
-        _approve(owner, spender, currentAllowance - amount);
-      }
+    /**
+     * @dev Returns the symbol of the token, usually a shorter version of the
+     * name.
+     */
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
     }
-  }
 
-  /**
-   * @dev after token transfer hook, added for delegation system
-   * @param from token sender
-   * @param to token recipient
-   * @param fromBalanceBefore balance of the sender before transfer
-   * @param toBalanceBefore balance of the recipient before transfer
-   * @param amount amount of tokens sent
-   **/
-  function _afterTokenTransfer(
-    address from,
-    address to,
-    uint256 fromBalanceBefore,
-    uint256 toBalanceBefore,
-    uint256 amount
-  ) internal virtual {}
+    function decimals() public view virtual override returns (uint8) {
+        return 18;
+    }
+
+    function totalSupply() public view virtual override returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address account) public view virtual override returns (uint256) {
+        return _balances[account].balance;
+    }
+
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+        address owner = _msgSender();
+        _transfer(owner, to, amount);
+        return true;
+    }
+
+    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+        address owner = _msgSender();
+        _approve(owner, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        address spender = _msgSender();
+        _spendAllowance(from, spender, amount);
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        address owner = _msgSender();
+        _approve(owner, spender, _allowances[owner][spender] + addedValue);
+        return true;
+    }
+
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        address owner = _msgSender();
+        uint256 currentAllowance = _allowances[owner][spender];
+        require(currentAllowance >= subtractedValue, "ERC20: decreased allowance below zero");
+        unchecked {
+            _approve(owner, spender, currentAllowance - subtractedValue);
+        }
+
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal virtual {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
+
+        if (from != to) {
+            uint104 fromBalanceBefore = _balances[from].balance;
+            uint104 toBalanceBefore = _balances[to].balance;
+
+            require(fromBalanceBefore >= amount, "ERC20: transfer amount exceeds balance");
+            unchecked {
+                _balances[from].balance = fromBalanceBefore - uint104(amount);
+            }
+
+            _balances[to].balance = toBalanceBefore + uint104(amount);
+
+            _afterTokenTransfer(from, to, fromBalanceBefore, toBalanceBefore, amount);
+        }
+        emit Transfer(from, to, amount);
+    }
+
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    function _spendAllowance(address owner, address spender, uint256 amount) internal virtual {
+        uint256 currentAllowance = allowance(owner, spender);
+        if (currentAllowance != type(uint256).max) {
+            require(currentAllowance >= amount, "ERC20: insufficient allowance");
+            unchecked {
+                _approve(owner, spender, currentAllowance - amount);
+            }
+        }
+    }
+
+    /**
+     * @dev after token transfer hook, added for delegation system
+     * @param from token sender
+     * @param to token recipient
+     * @param fromBalanceBefore balance of the sender before transfer
+     * @param toBalanceBefore balance of the recipient before transfer
+     * @param amount amount of tokens sent
+     *
+     */
+    function _afterTokenTransfer(
+        address from,
+        address to,
+        uint256 fromBalanceBefore,
+        uint256 toBalanceBefore,
+        uint256 amount
+    ) internal virtual {}
 }
 
 // SPDX-License-Identifier: agpl-3.0
@@ -4916,7 +4550,7 @@ library DistributionTypes {
 
 pragma solidity ^0.8.0;
 
-import {IERC20} from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./Address.sol";
 
 /**
@@ -4931,27 +4565,12 @@ import "./Address.sol";
 library SafeERC20 {
     using Address for address;
 
-    function safeTransfer(
-        IERC20 token,
-        address to,
-        uint256 value
-    ) internal {
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.transfer.selector, to, value)
-        );
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.transfer.selector, to, value));
     }
 
-    function safeTransferFrom(
-        IERC20 token,
-        address from,
-        address to,
-        uint256 value
-    ) internal {
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.transferFrom.selector, from, to, value)
-        );
+    function safeTransferFrom(IERC20 token, address from, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.transferFrom.selector, from, to, value));
     }
 
     /**
@@ -4961,11 +4580,7 @@ library SafeERC20 {
      * Whenever possible, use {safeIncreaseAllowance} and
      * {safeDecreaseAllowance} instead.
      */
-    function safeApprove(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
+    function safeApprove(IERC20 token, address spender, uint256 value) internal {
         // safeApprove should only be called when setting an initial allowance,
         // or when resetting it to zero. To increase and decrease it, use
         // 'safeIncreaseAllowance' and 'safeDecreaseAllowance'
@@ -4973,48 +4588,20 @@ library SafeERC20 {
             (value == 0) || (token.allowance(address(this), spender) == 0),
             "SafeERC20: approve from non-zero to non-zero allowance"
         );
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.approve.selector, spender, value)
-        );
+        _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
     }
 
-    function safeIncreaseAllowance(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
+    function safeIncreaseAllowance(IERC20 token, address spender, uint256 value) internal {
         uint256 newAllowance = token.allowance(address(this), spender) + value;
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(
-                token.approve.selector,
-                spender,
-                newAllowance
-            )
-        );
+        _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, newAllowance));
     }
 
-    function safeDecreaseAllowance(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
+    function safeDecreaseAllowance(IERC20 token, address spender, uint256 value) internal {
         unchecked {
             uint256 oldAllowance = token.allowance(address(this), spender);
-            require(
-                oldAllowance >= value,
-                "SafeERC20: decreased allowance below zero"
-            );
+            require(oldAllowance >= value, "SafeERC20: decreased allowance below zero");
             uint256 newAllowance = oldAllowance - value;
-            _callOptionalReturn(
-                token,
-                abi.encodeWithSelector(
-                    token.approve.selector,
-                    spender,
-                    newAllowance
-                )
-            );
+            _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, newAllowance));
         }
     }
 
@@ -5029,16 +4616,10 @@ library SafeERC20 {
         // we're implementing it ourselves. We use {Address.functionCall} to perform this call, which verifies that
         // the target address contains contract code and also asserts for success in the low-level call.
 
-        bytes memory returndata = address(token).functionCall(
-            data,
-            "SafeERC20: low-level call failed"
-        );
+        bytes memory returndata = address(token).functionCall(data, "SafeERC20: low-level call failed");
         if (returndata.length > 0) {
             // Return data is optional
-            require(
-                abi.decode(returndata, (bool)),
-                "SafeERC20: ERC20 operation did not succeed"
-            );
+            require(abi.decode(returndata, (bool)), "SafeERC20: ERC20 operation did not succeed");
         }
     }
 }
@@ -5047,192 +4628,164 @@ library SafeERC20 {
 pragma solidity ^0.8.0;
 
 interface IGovernancePowerDelegationToken {
-  enum GovernancePowerType {
-    VOTING,
-    PROPOSITION
-  }
+    enum GovernancePowerType {
+        VOTING,
+        PROPOSITION
+    }
 
-  /**
-   * @dev emitted when a user delegates to another
-   * @param delegator the user which delegated governance power
-   * @param delegatee the delegatee
-   * @param delegationType the type of delegation (VOTING, PROPOSITION)
-   **/
-  event DelegateChanged(
-    address indexed delegator,
-    address indexed delegatee,
-    GovernancePowerType delegationType
-  );
+    /**
+     * @dev emitted when a user delegates to another
+     * @param delegator the user which delegated governance power
+     * @param delegatee the delegatee
+     * @param delegationType the type of delegation (VOTING, PROPOSITION)
+     *
+     */
+    event DelegateChanged(address indexed delegator, address indexed delegatee, GovernancePowerType delegationType);
 
-  // @dev we removed DelegatedPowerChanged event because to reconstruct the full state of the system,
-  // is enough to have Transfer and DelegateChanged TODO: document it
+    // @dev we removed DelegatedPowerChanged event because to reconstruct the full state of the system,
+    // is enough to have Transfer and DelegateChanged TODO: document it
 
-  /**
-   * @dev delegates the specific power to a delegatee
-   * @param delegatee the user which delegated power will change
-   * @param delegationType the type of delegation (VOTING, PROPOSITION)
-   **/
-  function delegateByType(address delegatee, GovernancePowerType delegationType) external;
+    /**
+     * @dev delegates the specific power to a delegatee
+     * @param delegatee the user which delegated power will change
+     * @param delegationType the type of delegation (VOTING, PROPOSITION)
+     *
+     */
+    function delegateByType(address delegatee, GovernancePowerType delegationType) external;
 
-  /**
-   * @dev delegates all the governance powers to a specific user
-   * @param delegatee the user to which the powers will be delegated
-   **/
-  function delegate(address delegatee) external;
+    /**
+     * @dev delegates all the governance powers to a specific user
+     * @param delegatee the user to which the powers will be delegated
+     *
+     */
+    function delegate(address delegatee) external;
 
-  /**
-   * @dev returns the delegatee of an user
-   * @param delegator the address of the delegator
-   * @param delegationType the type of delegation (VOTING, PROPOSITION)
-   * @return address of the specified delegatee
-   **/
-  function getDelegateeByType(address delegator, GovernancePowerType delegationType)
-    external
-    view
-    returns (address);
+    /**
+     * @dev returns the delegatee of an user
+     * @param delegator the address of the delegator
+     * @param delegationType the type of delegation (VOTING, PROPOSITION)
+     * @return address of the specified delegatee
+     *
+     */
+    function getDelegateeByType(address delegator, GovernancePowerType delegationType) external view returns (address);
 
-  /**
-   * @dev returns delegates of an user
-   * @param delegator the address of the delegator
-   * @return a tuple of addresses the VOTING and PROPOSITION delegatee
-   **/
-  function getDelegates(address delegator)
-    external
-    view
-    returns (address, address);
+    /**
+     * @dev returns delegates of an user
+     * @param delegator the address of the delegator
+     * @return a tuple of addresses the VOTING and PROPOSITION delegatee
+     *
+     */
+    function getDelegates(address delegator) external view returns (address, address);
 
-  /**
-   * @dev returns the current voting or proposition power of a user.
-   * @param user the user
-   * @param delegationType the type of delegation (VOTING, PROPOSITION)
-   * @return the current voting or proposition power of a user
-   **/
-  function getPowerCurrent(address user, GovernancePowerType delegationType)
-    external
-    view
-    returns (uint256);
+    /**
+     * @dev returns the current voting or proposition power of a user.
+     * @param user the user
+     * @param delegationType the type of delegation (VOTING, PROPOSITION)
+     * @return the current voting or proposition power of a user
+     *
+     */
+    function getPowerCurrent(address user, GovernancePowerType delegationType) external view returns (uint256);
 
-  /**
-   * @dev returns the current voting or proposition power of a user.
-   * @param user the user
-   * @return the current voting and proposition power of a user
-   **/
-  function getPowersCurrent(address user)
-    external
-    view
-    returns (uint256, uint256);
+    /**
+     * @dev returns the current voting or proposition power of a user.
+     * @param user the user
+     * @return the current voting and proposition power of a user
+     *
+     */
+    function getPowersCurrent(address user) external view returns (uint256, uint256);
 
-  /**
-   * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
-   * @param delegator the owner of the funds
-   * @param delegatee the user to who owner delegates his governance power
-   * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
-   * @param deadline the deadline timestamp, type(uint256).max for no deadline
-   * @param v signature param
-   * @param s signature param
-   * @param r signature param
-   */
-  function metaDelegateByType(
-    address delegator,
-    address delegatee,
-    GovernancePowerType delegationType,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external;
+    /**
+     * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
+     * @param delegator the owner of the funds
+     * @param delegatee the user to who owner delegates his governance power
+     * @param delegationType the type of governance power delegation (VOTING, PROPOSITION)
+     * @param deadline the deadline timestamp, type(uint256).max for no deadline
+     * @param v signature param
+     * @param s signature param
+     * @param r signature param
+     */
+    function metaDelegateByType(
+        address delegator,
+        address delegatee,
+        GovernancePowerType delegationType,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
 
-  /**
-   * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
-   * @param delegator the owner of the funds
-   * @param delegatee the user to who delegator delegates his voting and proposition governance power
-   * @param deadline the deadline timestamp, type(uint256).max for no deadline
-   * @param v signature param
-   * @param s signature param
-   * @param r signature param
-   */
-  function metaDelegate(
-    address delegator,
-    address delegatee,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external;
+    /**
+     * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
+     * @param delegator the owner of the funds
+     * @param delegatee the user to who delegator delegates his voting and proposition governance power
+     * @param deadline the deadline timestamp, type(uint256).max for no deadline
+     * @param v signature param
+     * @param s signature param
+     * @param r signature param
+     */
+    function metaDelegate(address delegator, address delegatee, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external;
 }
 
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity ^0.8.0;
 
 interface IStakedTokenV2 {
-  struct CooldownSnapshot {
-    uint40 timestamp;
-    uint216 amount;
-  }
+    struct CooldownSnapshot {
+        uint40 timestamp;
+        uint216 amount;
+    }
 
-  event RewardsAccrued(address user, uint256 amount);
-  event RewardsClaimed(
-    address indexed from,
-    address indexed to,
-    uint256 amount
-  );
-  event Cooldown(address indexed user, uint256 amount);
+    event RewardsAccrued(address user, uint256 amount);
+    event RewardsClaimed(address indexed from, address indexed to, uint256 amount);
+    event Cooldown(address indexed user, uint256 amount);
 
-  /**
-   * @dev Allows staking a specified amount of STAKED_TOKEN
-   * @param to The address to receiving the shares
-   * @param amount The amount of assets to be staked
-   */
-  function stake(address to, uint256 amount) external;
+    /**
+     * @dev Allows staking a specified amount of STAKED_TOKEN
+     * @param to The address to receiving the shares
+     * @param amount The amount of assets to be staked
+     */
+    function stake(address to, uint256 amount) external;
 
-  /**
-   * @dev Redeems shares, and stop earning rewards
-   * @param to Address to redeem to
-   * @param amount Amount of shares to redeem
-   */
-  function redeem(address to, uint256 amount) external;
+    /**
+     * @dev Redeems shares, and stop earning rewards
+     * @param to Address to redeem to
+     * @param amount Amount of shares to redeem
+     */
+    function redeem(address to, uint256 amount) external;
 
-  /**
-   * @dev Activates the cooldown period to unstake
-   * - It can't be called if the user is not staking
-   */
-  function cooldown() external;
+    /**
+     * @dev Activates the cooldown period to unstake
+     * - It can't be called if the user is not staking
+     */
+    function cooldown() external;
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to`
-   * @param to Address to send the claimed rewards
-   * @param amount Amount to stake
-   */
-  function claimRewards(address to, uint256 amount) external;
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to`
+     * @param to Address to send the claimed rewards
+     * @param amount Amount to stake
+     */
+    function claimRewards(address to, uint256 amount) external;
 
-  /**
-   * @dev Return the total rewards pending to claim by an staker
-   * @param staker The staker address
-   * @return The rewards
-   */
-  function getTotalRewardsBalance(
-    address staker
-  ) external view returns (uint256);
+    /**
+     * @dev Return the total rewards pending to claim by an staker
+     * @param staker The staker address
+     * @return The rewards
+     */
+    function getTotalRewardsBalance(address staker) external view returns (uint256);
 
-  /**
-   * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
-   * @param owner the owner of the funds
-   * @param spender the spender
-   * @param value the amount
-   * @param deadline the deadline timestamp, type(uint256).max for no deadline
-   * @param v signature param
-   * @param s signature param
-   * @param r signature param
-   */
-  function permit(
-    address owner,
-    address spender,
-    uint256 value,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-  ) external;
+    /**
+     * @dev implements the permit function as for https://github.com/ethereum/EIPs/blob/8a34d644aacf0f9f8f00815307fd7dd5da07655f/EIPS/eip-2612.md
+     * @param owner the owner of the funds
+     * @param spender the spender
+     * @param value the amount
+     * @param deadline the deadline timestamp, type(uint256).max for no deadline
+     * @param v signature param
+     * @param s signature param
+     * @param r signature param
+     */
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external;
 }
 
 // SPDX-License-Identifier: MIT
@@ -5375,12 +4928,11 @@ library ECDSA {
      *
      * _Available since v4.3._
      */
-    function tryRecover(
-        bytes32 hash,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) internal pure returns (address, RecoverError, bytes32) {
+    function tryRecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s)
+        internal
+        pure
+        returns (address, RecoverError, bytes32)
+    {
         // EIP-2 still allows signature malleability for ecrecover(). Remove this possibility and make the signature
         // unique. Appendix F in the Ethereum Yellow paper (https://ethereum.github.io/yellowpaper/paper.pdf), defines
         // the valid range for s in (301): 0 < s < secp256k1n ÷ 2 + 1, and for v in (302): v ∈ {27, 28}. Most
@@ -5457,7 +5009,7 @@ library ECDSA {
         /// @solidity memory-safe-assembly
         assembly {
             let ptr := mload(0x40)
-            mstore(ptr, hex"19_01")
+            mstore(ptr, hex"1901")
             mstore(add(ptr, 0x02), domainSeparator)
             mstore(add(ptr, 0x22), structHash)
             data := keccak256(ptr, 0x42)
@@ -5471,7 +5023,7 @@ library ECDSA {
      * See {recover}.
      */
     function toDataWithIntendedValidatorHash(address validator, bytes memory data) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(hex"19_00", validator, data));
+        return keccak256(abi.encodePacked(hex"1900", validator, data));
     }
 }
 

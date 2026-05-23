@@ -12,6 +12,9 @@ durable protocol logic should live here.
   generation, trigger emission, source provenance, and candidate scoring.
 - Rust in `rust/src` owns latency-sensitive deterministic helpers exposed through the maturin-built
   `degenbot_rs` binding.
+- Stylus in `stylus/` owns WASM contract ports and parity harnesses that are reusable from this
+  integration. These ports are not executable replacements until ABI parity, storage layout, and
+  deployment/reactivation checks pass.
 - TypeScript stays in the parent `coordinator/` and owns decisions, external TS SDK workflows,
   routing orchestration, and submitter handoff.
 - Solidity stays in the parent `contracts/` and owns deterministic settlement, callback checks,

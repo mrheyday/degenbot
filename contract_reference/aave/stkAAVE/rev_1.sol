@@ -9,97 +9,91 @@ pragma experimental ABIEncoderV2;
  * From https://github.com/OpenZeppelin/openzeppelin-contracts
  */
 interface IERC20 {
-  /**
-   * @dev Returns the amount of tokens in existence.
-   */
-  function totalSupply() external view returns (uint256);
+    /**
+     * @dev Returns the amount of tokens in existence.
+     */
+    function totalSupply() external view returns (uint256);
 
-  /**
-   * @dev Returns the amount of tokens owned by `account`.
-   */
-  function balanceOf(address account) external view returns (uint256);
+    /**
+     * @dev Returns the amount of tokens owned by `account`.
+     */
+    function balanceOf(address account) external view returns (uint256);
 
-  /**
-   * @dev Moves `amount` tokens from the caller's account to `recipient`.
-   *
-   * Returns a boolean value indicating whether the operation succeeded.
-   *
-   * Emits a {Transfer} event.
-   */
-  function transfer(address recipient, uint256 amount) external returns (bool);
+    /**
+     * @dev Moves `amount` tokens from the caller's account to `recipient`.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transfer(address recipient, uint256 amount) external returns (bool);
 
-  /**
-   * @dev Returns the remaining number of tokens that `spender` will be
-   * allowed to spend on behalf of `owner` through {transferFrom}. This is
-   * zero by default.
-   *
-   * This value changes when {approve} or {transferFrom} are called.
-   */
-  function allowance(address owner, address spender) external view returns (uint256);
+    /**
+     * @dev Returns the remaining number of tokens that `spender` will be
+     * allowed to spend on behalf of `owner` through {transferFrom}. This is
+     * zero by default.
+     *
+     * This value changes when {approve} or {transferFrom} are called.
+     */
+    function allowance(address owner, address spender) external view returns (uint256);
 
-  /**
-   * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
-   *
-   * Returns a boolean value indicating whether the operation succeeded.
-   *
-   * IMPORTANT: Beware that changing an allowance with this method brings the risk
-   * that someone may use both the old and the new allowance by unfortunate
-   * transaction ordering. One possible solution to mitigate this race
-   * condition is to first reduce the spender's allowance to 0 and set the
-   * desired value afterwards:
-   * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
-   *
-   * Emits an {Approval} event.
-   */
-  function approve(address spender, uint256 amount) external returns (bool);
+    /**
+     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * IMPORTANT: Beware that changing an allowance with this method brings the risk
+     * that someone may use both the old and the new allowance by unfortunate
+     * transaction ordering. One possible solution to mitigate this race
+     * condition is to first reduce the spender's allowance to 0 and set the
+     * desired value afterwards:
+     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+     *
+     * Emits an {Approval} event.
+     */
+    function approve(address spender, uint256 amount) external returns (bool);
 
-  /**
-   * @dev Moves `amount` tokens from `sender` to `recipient` using the
-   * allowance mechanism. `amount` is then deducted from the caller's
-   * allowance.
-   *
-   * Returns a boolean value indicating whether the operation succeeded.
-   *
-   * Emits a {Transfer} event.
-   */
-  function transferFrom(
-    address sender,
-    address recipient,
-    uint256 amount
-  ) external returns (bool);
+    /**
+     * @dev Moves `amount` tokens from `sender` to `recipient` using the
+     * allowance mechanism. `amount` is then deducted from the caller's
+     * allowance.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
 
-  /**
-   * @dev Emitted when `value` tokens are moved from one account (`from`) to
-   * another (`to`).
-   *
-   * Note that `value` may be zero.
-   */
-  event Transfer(address indexed from, address indexed to, uint256 value);
+    /**
+     * @dev Emitted when `value` tokens are moved from one account (`from`) to
+     * another (`to`).
+     *
+     * Note that `value` may be zero.
+     */
+    event Transfer(address indexed from, address indexed to, uint256 value);
 
-  /**
-   * @dev Emitted when the allowance of a `spender` for an `owner` is set by
-   * a call to {approve}. `value` is the new allowance.
-   */
-  event Approval(address indexed owner, address indexed spender, uint256 value);
+    /**
+     * @dev Emitted when the allowance of a `spender` for an `owner` is set by
+     * a call to {approve}. `value` is the new allowance.
+     */
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
 // File: contracts/interfaces/IStakedAave.sol
 
-
 pragma solidity 0.6.12;
 
 interface IStakedAave {
-  function stake(address to, uint256 amount) external;
+    function stake(address to, uint256 amount) external;
 
-  function redeem(address to, uint256 amount) external;
+    function redeem(address to, uint256 amount) external;
 
-  function cooldown() external;
+    function cooldown() external;
 
-  function claimRewards(address to, uint256 amount) external;
+    function claimRewards(address to, uint256 amount) external;
 }
 
 // File: contracts/interfaces/ITransferHook.sol
-
 
 pragma solidity 0.6.12;
 
@@ -108,8 +102,6 @@ interface ITransferHook {
 }
 
 // File: contracts/lib/Context.sol
-
-
 
 pragma solidity 0.6.12;
 
@@ -125,11 +117,11 @@ pragma solidity 0.6.12;
  * This contract is only required for intermediate, library-like contracts.
  */
 abstract contract Context {
-    function _msgSender() internal virtual view returns (address payable) {
+    function _msgSender() internal view virtual returns (address payable) {
         return msg.sender;
     }
 
-    function _msgData() internal virtual view returns (bytes memory) {
+    function _msgData() internal view virtual returns (bytes memory) {
         this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
         return msg.data;
     }
@@ -137,13 +129,12 @@ abstract contract Context {
 
 // File: contracts/interfaces/IERC20Detailed.sol
 
-
 pragma solidity 0.6.12;
-
 
 /**
  * @dev Interface for ERC20 including metadata
- **/
+ *
+ */
 interface IERC20Detailed is IERC20 {
     function name() external view returns (string memory);
     function symbol() external view returns (string memory);
@@ -151,7 +142,6 @@ interface IERC20Detailed is IERC20 {
 }
 
 // File: contracts/lib/SafeMath.sol
-
 
 pragma solidity 0.6.12;
 
@@ -181,7 +171,7 @@ library SafeMath {
      */
     function add(uint256 a, uint256 b) internal pure returns (uint256) {
         uint256 c = a + b;
-        require(c >= a, 'SafeMath: addition overflow');
+        require(c >= a, "SafeMath: addition overflow");
 
         return c;
     }
@@ -196,7 +186,7 @@ library SafeMath {
      * - Subtraction cannot overflow.
      */
     function sub(uint256 a, uint256 b) internal pure returns (uint256) {
-        return sub(a, b, 'SafeMath: subtraction overflow');
+        return sub(a, b, "SafeMath: subtraction overflow");
     }
 
     /**
@@ -208,11 +198,7 @@ library SafeMath {
      * Requirements:
      * - Subtraction cannot overflow.
      */
-    function sub(
-        uint256 a,
-        uint256 b,
-        string memory errorMessage
-    ) internal pure returns (uint256) {
+    function sub(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
         require(b <= a, errorMessage);
         uint256 c = a - b;
 
@@ -237,7 +223,7 @@ library SafeMath {
         }
 
         uint256 c = a * b;
-        require(c / a == b, 'SafeMath: multiplication overflow');
+        require(c / a == b, "SafeMath: multiplication overflow");
 
         return c;
     }
@@ -254,7 +240,7 @@ library SafeMath {
      * - The divisor cannot be zero.
      */
     function div(uint256 a, uint256 b) internal pure returns (uint256) {
-        return div(a, b, 'SafeMath: division by zero');
+        return div(a, b, "SafeMath: division by zero");
     }
 
     /**
@@ -268,11 +254,7 @@ library SafeMath {
      * Requirements:
      * - The divisor cannot be zero.
      */
-    function div(
-        uint256 a,
-        uint256 b,
-        string memory errorMessage
-    ) internal pure returns (uint256) {
+    function div(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
         // Solidity only automatically asserts when dividing by 0
         require(b > 0, errorMessage);
         uint256 c = a / b;
@@ -293,7 +275,7 @@ library SafeMath {
      * - The divisor cannot be zero.
      */
     function mod(uint256 a, uint256 b) internal pure returns (uint256) {
-        return mod(a, b, 'SafeMath: modulo by zero');
+        return mod(a, b, "SafeMath: modulo by zero");
     }
 
     /**
@@ -307,11 +289,7 @@ library SafeMath {
      * Requirements:
      * - The divisor cannot be zero.
      */
-    function mod(
-        uint256 a,
-        uint256 b,
-        string memory errorMessage
-    ) internal pure returns (uint256) {
+    function mod(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
         require(b != 0, errorMessage);
         return a % b;
     }
@@ -319,252 +297,223 @@ library SafeMath {
 
 // File: contracts/lib/ERC20.sol
 
-
 pragma solidity 0.6.12;
-
-
-
-
 
 /**
  * @title ERC20
  * @notice Basic ERC20 implementation
  * @author Aave
- **/
+ *
+ */
 contract ERC20 is Context, IERC20, IERC20Detailed {
-  using SafeMath for uint256;
+    using SafeMath for uint256;
 
-  mapping(address => uint256) private _balances;
-  mapping(address => mapping(address => uint256)) private _allowances;
-  uint256 private _totalSupply;
-  string private _name;
-  string private _symbol;
-  uint8 private _decimals;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    uint256 private _totalSupply;
+    string private _name;
+    string private _symbol;
+    uint8 private _decimals;
 
-  constructor(
-    string memory name,
-    string memory symbol,
-    uint8 decimals
-  ) public {
-    _name = name;
-    _symbol = symbol;
-    _decimals = decimals;
-  }
+    constructor(string memory name, string memory symbol, uint8 decimals) public {
+        _name = name;
+        _symbol = symbol;
+        _decimals = decimals;
+    }
 
-  /**
-   * @return the name of the token
-   **/
-  function name() public override view returns (string memory) {
-    return _name;
-  }
+    /**
+     * @return the name of the token
+     *
+     */
+    function name() public view override returns (string memory) {
+        return _name;
+    }
 
-  /**
-   * @return the symbol of the token
-   **/
-  function symbol() public override view returns (string memory) {
-    return _symbol;
-  }
+    /**
+     * @return the symbol of the token
+     *
+     */
+    function symbol() public view override returns (string memory) {
+        return _symbol;
+    }
 
-  /**
-   * @return the decimals of the token
-   **/
-  function decimals() public override view returns (uint8) {
-    return _decimals;
-  }
+    /**
+     * @return the decimals of the token
+     *
+     */
+    function decimals() public view override returns (uint8) {
+        return _decimals;
+    }
 
-  /**
-   * @return the total supply of the token
-   **/
-  function totalSupply() public override view returns (uint256) {
-    return _totalSupply;
-  }
+    /**
+     * @return the total supply of the token
+     *
+     */
+    function totalSupply() public view override returns (uint256) {
+        return _totalSupply;
+    }
 
-  /**
-   * @return the balance of the token
-   **/
-  function balanceOf(address account) public override view returns (uint256) {
-    return _balances[account];
-  }
+    /**
+     * @return the balance of the token
+     *
+     */
+    function balanceOf(address account) public view override returns (uint256) {
+        return _balances[account];
+    }
 
-  /**
-   * @dev executes a transfer of tokens from msg.sender to recipient
-   * @param recipient the recipient of the tokens
-   * @param amount the amount of tokens being transferred
-   * @return true if the transfer succeeds, false otherwise
-   **/
-  function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
-    _transfer(_msgSender(), recipient, amount);
-    return true;
-  }
+    /**
+     * @dev executes a transfer of tokens from msg.sender to recipient
+     * @param recipient the recipient of the tokens
+     * @param amount the amount of tokens being transferred
+     * @return true if the transfer succeeds, false otherwise
+     *
+     */
+    function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
 
-  /**
-   * @dev returns the allowance of spender on the tokens owned by owner
-   * @param owner the owner of the tokens
-   * @param spender the user allowed to spend the owner's tokens
-   * @return the amount of owner's tokens spender is allowed to spend
-   **/
-  function allowance(address owner, address spender)
-    public
-    virtual
-    override
-    view
-    returns (uint256)
-  {
-    return _allowances[owner][spender];
-  }
+    /**
+     * @dev returns the allowance of spender on the tokens owned by owner
+     * @param owner the owner of the tokens
+     * @param spender the user allowed to spend the owner's tokens
+     * @return the amount of owner's tokens spender is allowed to spend
+     *
+     */
+    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+        return _allowances[owner][spender];
+    }
 
-  /**
-   * @dev allows spender to spend the tokens owned by msg.sender
-   * @param spender the user allowed to spend msg.sender tokens
-   * @return true
-   **/
-  function approve(address spender, uint256 amount) public virtual override returns (bool) {
-    _approve(_msgSender(), spender, amount);
-    return true;
-  }
+    /**
+     * @dev allows spender to spend the tokens owned by msg.sender
+     * @param spender the user allowed to spend msg.sender tokens
+     * @return true
+     *
+     */
+    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
 
-  /**
-   * @dev executes a transfer of token from sender to recipient, if msg.sender is allowed to do so
-   * @param sender the owner of the tokens
-   * @param recipient the recipient of the tokens
-   * @param amount the amount of tokens being transferred
-   * @return true if the transfer succeeds, false otherwise
-   **/
-  function transferFrom(
-    address sender,
-    address recipient,
-    uint256 amount
-  ) public virtual override returns (bool) {
-    _transfer(sender, recipient, amount);
-    _approve(
-      sender,
-      _msgSender(),
-      _allowances[sender][_msgSender()].sub(amount, 'ERC20: transfer amount exceeds allowance')
-    );
-    return true;
-  }
+    /**
+     * @dev executes a transfer of token from sender to recipient, if msg.sender is allowed to do so
+     * @param sender the owner of the tokens
+     * @param recipient the recipient of the tokens
+     * @param amount the amount of tokens being transferred
+     * @return true if the transfer succeeds, false otherwise
+     *
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) {
+        _transfer(sender, recipient, amount);
+        _approve(
+            sender,
+            _msgSender(),
+            _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance")
+        );
+        return true;
+    }
 
-  /**
-   * @dev increases the allowance of spender to spend msg.sender tokens
-   * @param spender the user allowed to spend on behalf of msg.sender
-   * @param addedValue the amount being added to the allowance
-   * @return true
-   **/
-  function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-    _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
-    return true;
-  }
+    /**
+     * @dev increases the allowance of spender to spend msg.sender tokens
+     * @param spender the user allowed to spend on behalf of msg.sender
+     * @param addedValue the amount being added to the allowance
+     * @return true
+     *
+     */
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
+        return true;
+    }
 
-  /**
-   * @dev decreases the allowance of spender to spend msg.sender tokens
-   * @param spender the user allowed to spend on behalf of msg.sender
-   * @param subtractedValue the amount being subtracted to the allowance
-   * @return true
-   **/
-  function decreaseAllowance(address spender, uint256 subtractedValue)
-    public
-    virtual
-    returns (bool)
-  {
-    _approve(
-      _msgSender(),
-      spender,
-      _allowances[_msgSender()][spender].sub(
-        subtractedValue,
-        'ERC20: decreased allowance below zero'
-      )
-    );
-    return true;
-  }
+    /**
+     * @dev decreases the allowance of spender to spend msg.sender tokens
+     * @param spender the user allowed to spend on behalf of msg.sender
+     * @param subtractedValue the amount being subtracted to the allowance
+     * @return true
+     *
+     */
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        _approve(
+            _msgSender(),
+            spender,
+            _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero")
+        );
+        return true;
+    }
 
-  function _transfer(
-    address sender,
-    address recipient,
-    uint256 amount
-  ) internal virtual {
-    require(sender != address(0), 'ERC20: transfer from the zero address');
-    require(recipient != address(0), 'ERC20: transfer to the zero address');
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
 
-    _beforeTokenTransfer(sender, recipient, amount);
+        _beforeTokenTransfer(sender, recipient, amount);
 
-    _balances[sender] = _balances[sender].sub(amount, 'ERC20: transfer amount exceeds balance');
-    _balances[recipient] = _balances[recipient].add(amount);
-    emit Transfer(sender, recipient, amount);
-  }
+        _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
+        _balances[recipient] = _balances[recipient].add(amount);
+        emit Transfer(sender, recipient, amount);
+    }
 
-  function _mint(address account, uint256 amount) internal virtual {
-    require(account != address(0), 'ERC20: mint to the zero address');
+    function _mint(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: mint to the zero address");
 
-    _beforeTokenTransfer(address(0), account, amount);
+        _beforeTokenTransfer(address(0), account, amount);
 
-    _totalSupply = _totalSupply.add(amount);
-    _balances[account] = _balances[account].add(amount);
-    emit Transfer(address(0), account, amount);
-  }
+        _totalSupply = _totalSupply.add(amount);
+        _balances[account] = _balances[account].add(amount);
+        emit Transfer(address(0), account, amount);
+    }
 
-  function _burn(address account, uint256 amount) internal virtual {
-    require(account != address(0), 'ERC20: burn from the zero address');
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: burn from the zero address");
 
-    _beforeTokenTransfer(account, address(0), amount);
+        _beforeTokenTransfer(account, address(0), amount);
 
-    _balances[account] = _balances[account].sub(amount, 'ERC20: burn amount exceeds balance');
-    _totalSupply = _totalSupply.sub(amount);
-    emit Transfer(account, address(0), amount);
-  }
+        _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+        _totalSupply = _totalSupply.sub(amount);
+        emit Transfer(account, address(0), amount);
+    }
 
-  function _approve(
-    address owner,
-    address spender,
-    uint256 amount
-  ) internal virtual {
-    require(owner != address(0), 'ERC20: approve from the zero address');
-    require(spender != address(0), 'ERC20: approve to the zero address');
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
 
-    _allowances[owner][spender] = amount;
-    emit Approval(owner, spender, amount);
-  }
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
 
-  function _setName(string memory newName) internal {
-    _name = newName;
-  }
+    function _setName(string memory newName) internal {
+        _name = newName;
+    }
 
-  function _setSymbol(string memory newSymbol) internal {
-    _symbol = newSymbol;
-  }
+    function _setSymbol(string memory newSymbol) internal {
+        _symbol = newSymbol;
+    }
 
-  function _setDecimals(uint8 newDecimals) internal {
-    _decimals = newDecimals;
-  }
+    function _setDecimals(uint8 newDecimals) internal {
+        _decimals = newDecimals;
+    }
 
-  function _beforeTokenTransfer(
-    address from,
-    address to,
-    uint256 amount
-  ) internal virtual {}
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual {}
 }
 
 // File: contracts/lib/ERC20WithSnapshot.sol
 
-
 pragma solidity 0.6.12;
-
-
 
 /**
  * @title ERC20WithSnapshot
  * @notice ERC20 including snapshots of balances on transfer-related actions
  * @author Aave
- **/
+ *
+ */
 contract ERC20WithSnapshot is ERC20 {
-
     /// @dev snapshot of a value on a specific block, used for balances
     struct Snapshot {
         uint128 blockNumber;
         uint128 value;
     }
 
-    mapping (address => mapping (uint256 => Snapshot)) public _snapshots;
-    mapping (address => uint256) public _countsSnapshots;
+    mapping(address => mapping(uint256 => Snapshot)) public _snapshots;
+    mapping(address => uint256) public _countsSnapshots;
     /// @dev reference to the Aave governance contract to call (if initialized) on _beforeTokenTransfer
     /// !!! IMPORTANT The Aave governance is considered a trustable contract, being its responsibility
     /// to control all potential reentrancies by calling back the this contract
@@ -579,16 +528,16 @@ contract ERC20WithSnapshot is ERC20 {
     }
 
     /**
-    * @dev Writes a snapshot for an owner of tokens
-    * @param owner The owner of the tokens
-    * @param oldValue The value before the operation that is gonna be executed after the snapshot
-    * @param newValue The value after the operation
-    */
+     * @dev Writes a snapshot for an owner of tokens
+     * @param owner The owner of the tokens
+     * @param oldValue The value before the operation that is gonna be executed after the snapshot
+     * @param newValue The value after the operation
+     */
     function _writeSnapshot(address owner, uint128 oldValue, uint128 newValue) internal virtual {
         uint128 currentBlock = uint128(block.number);
 
         uint256 ownerCountOfSnapshots = _countsSnapshots[owner];
-        mapping (uint256 => Snapshot) storage snapshotsOwner = _snapshots[owner];
+        mapping(uint256 => Snapshot) storage snapshotsOwner = _snapshots[owner];
 
         // Doing multiple operations in the same block
         if (ownerCountOfSnapshots != 0 && snapshotsOwner[ownerCountOfSnapshots.sub(1)].blockNumber == currentBlock) {
@@ -602,14 +551,14 @@ contract ERC20WithSnapshot is ERC20 {
     }
 
     /**
-    * @dev Writes a snapshot before any operation involving transfer of value: _transfer, _mint and _burn
-    * - On _transfer, it writes snapshots for both "from" and "to"
-    * - On _mint, only for _to
-    * - On _burn, only for _from
-    * @param from the from address
-    * @param to the to address
-    * @param amount the amount to transfer
-    */
+     * @dev Writes a snapshot before any operation involving transfer of value: _transfer, _mint and _burn
+     * - On _transfer, it writes snapshots for both "from" and "to"
+     * - On _mint, only for _to
+     * - On _burn, only for _from
+     * @param from the from address
+     * @param to the to address
+     * @param amount the amount to transfer
+     */
     function _beforeTokenTransfer(address from, address to, uint256 amount) internal override {
         if (from == to) {
             return;
@@ -633,7 +582,6 @@ contract ERC20WithSnapshot is ERC20 {
 }
 
 // File: contracts/lib/Address.sol
-
 
 pragma solidity 0.6.12;
 
@@ -689,22 +637,17 @@ library Address {
      * https://solidity.readthedocs.io/en/v0.5.11/security-considerations.html#use-the-checks-effects-interactions-pattern[checks-effects-interactions pattern].
      */
     function sendValue(address payable recipient, uint256 amount) internal {
-        require(address(this).balance >= amount, 'Address: insufficient balance');
+        require(address(this).balance >= amount, "Address: insufficient balance");
 
         // solhint-disable-next-line avoid-low-level-calls, avoid-call-value
-        (bool success, ) = recipient.call{value: amount}('');
-        require(success, 'Address: unable to send value, recipient may have reverted');
+        (bool success,) = recipient.call{value: amount}("");
+        require(success, "Address: unable to send value, recipient may have reverted");
     }
 }
 
 // File: contracts/lib/SafeERC20.sol
 
-
-
 pragma solidity 0.6.12;
-
-
-
 
 /**
  * @title SafeERC20
@@ -729,12 +672,13 @@ library SafeERC20 {
     }
 
     function safeApprove(IERC20 token, address spender, uint256 value) internal {
-        require((value == 0) || (token.allowance(address(this), spender) == 0),
+        require(
+            (value == 0) || (token.allowance(address(this), spender) == 0),
             "SafeERC20: approve from non-zero to non-zero allowance"
         );
         callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
     }
-    
+
     function callOptionalReturn(IERC20 token, bytes memory data) private {
         require(address(token).isContract(), "SafeERC20: call to non-contract");
 
@@ -742,15 +686,15 @@ library SafeERC20 {
         (bool success, bytes memory returndata) = address(token).call(data);
         require(success, "SafeERC20: low-level call failed");
 
-        if (returndata.length > 0) { // Return data is optional
-            // solhint-disable-next-line max-line-length
+        if (returndata.length > 0) {
+            // Return data is optional
+        // solhint-disable-next-line max-line-length
             require(abi.decode(returndata, (bool)), "SafeERC20: ERC20 operation did not succeed");
         }
     }
 }
 
 // File: contracts/utils/VersionedInitializable.sol
-
 
 pragma solidity 0.6.12;
 
@@ -779,10 +723,7 @@ abstract contract VersionedInitializable {
      */
     modifier initializer() {
         uint256 revision = getRevision();
-        require(
-            revision > lastInitializedRevision,
-            'Contract instance has already been initialized'
-        );
+        require(revision > lastInitializedRevision, "Contract instance has already been initialized");
 
         lastInitializedRevision = revision;
 
@@ -791,7 +732,7 @@ abstract contract VersionedInitializable {
 
     /// @dev returns the revision number of the contract.
     /// Needs to be defined in the inherited class as a constant.
-    function getRevision() internal virtual pure returns (uint256);
+    function getRevision() internal pure virtual returns (uint256);
 
     // Reserved storage space to allow for layout changes in the future.
     uint256[50] private ______gap;
@@ -799,618 +740,557 @@ abstract contract VersionedInitializable {
 
 // File: contracts/lib/DistributionTypes.sol
 
-
 pragma solidity 0.6.12;
 
-
 library DistributionTypes {
-  struct AssetConfigInput {
-    uint128 emissionPerSecond;
-    uint256 totalStaked;
-    address underlyingAsset;
-  }
+    struct AssetConfigInput {
+        uint128 emissionPerSecond;
+        uint256 totalStaked;
+        address underlyingAsset;
+    }
 
-  struct UserStakeInput {
-    address underlyingAsset;
-    uint256 stakedByUser;
-    uint256 totalStaked;
-  }
+    struct UserStakeInput {
+        address underlyingAsset;
+        uint256 stakedByUser;
+        uint256 totalStaked;
+    }
 }
 
 // File: contracts/interfaces/IAaveDistributionManager.sol
 
-
 pragma solidity 0.6.12;
 
-
-
 interface IAaveDistributionManager {
-  function configureAssets(DistributionTypes.AssetConfigInput[] calldata assetsConfigInput) external;
+    function configureAssets(DistributionTypes.AssetConfigInput[] calldata assetsConfigInput) external;
 }
 
 // File: contracts/stake/AaveDistributionManager.sol
 
-
 pragma solidity 0.6.12;
-
-
-
-
 
 /**
  * @title AaveDistributionManager
  * @notice Accounting contract to manage multiple staking distributions
  * @author Aave
- **/
+ *
+ */
 contract AaveDistributionManager is IAaveDistributionManager {
-  using SafeMath for uint256;
+    using SafeMath for uint256;
 
-  struct AssetData {
-    uint128 emissionPerSecond;
-    uint128 lastUpdateTimestamp;
-    uint256 index;
-    mapping(address => uint256) users;
-  }
-
-  uint256 public immutable DISTRIBUTION_END;
-
-  address public immutable EMISSION_MANAGER;
-
-  uint8 public constant PRECISION = 18;
-
-  mapping(address => AssetData) public assets;
-
-  event AssetConfigUpdated(address indexed asset, uint256 emission);
-  event AssetIndexUpdated(address indexed asset, uint256 index);
-  event UserIndexUpdated(address indexed user, address indexed asset, uint256 index);
-
-  constructor(address emissionManager, uint256 distributionDuration) public {
-    DISTRIBUTION_END = block.timestamp.add(distributionDuration);
-    EMISSION_MANAGER = emissionManager;
-  }
-
-  /**
-   * @dev Configures the distribution of rewards for a list of assets
-   * @param assetsConfigInput The list of configurations to apply
-   **/
-  function configureAssets(DistributionTypes.AssetConfigInput[] calldata assetsConfigInput) external override {
-    require(msg.sender == EMISSION_MANAGER, 'ONLY_EMISSION_MANAGER');
-
-    for (uint256 i = 0; i < assetsConfigInput.length; i++) {
-      AssetData storage assetConfig = assets[assetsConfigInput[i].underlyingAsset];
-
-      _updateAssetStateInternal(
-        assetsConfigInput[i].underlyingAsset,
-        assetConfig,
-        assetsConfigInput[i].totalStaked
-      );
-
-      assetConfig.emissionPerSecond = assetsConfigInput[i].emissionPerSecond;
-
-      emit AssetConfigUpdated(
-        assetsConfigInput[i].underlyingAsset,
-        assetsConfigInput[i].emissionPerSecond
-      );
-    }
-  }
-
-  /**
-   * @dev Updates the state of one distribution, mainly rewards index and timestamp
-   * @param underlyingAsset The address used as key in the distribution, for example sAAVE or the aTokens addresses on Aave
-   * @param assetConfig Storage pointer to the distribution's config
-   * @param totalStaked Current total of staked assets for this distribution
-   * @return The new distribution index
-   **/
-  function _updateAssetStateInternal(
-    address underlyingAsset,
-    AssetData storage assetConfig,
-    uint256 totalStaked
-  ) internal returns (uint256) {
-    uint256 oldIndex = assetConfig.index;
-    uint128 lastUpdateTimestamp = assetConfig.lastUpdateTimestamp;
-
-    if (block.timestamp == lastUpdateTimestamp) {
-      return oldIndex;
+    struct AssetData {
+        uint128 emissionPerSecond;
+        uint128 lastUpdateTimestamp;
+        uint256 index;
+        mapping(address => uint256) users;
     }
 
-    uint256 newIndex = _getAssetIndex(
-      oldIndex,
-      assetConfig.emissionPerSecond,
-      lastUpdateTimestamp,
-      totalStaked
-    );
+    uint256 public immutable DISTRIBUTION_END;
 
-    if (newIndex != oldIndex) {
-      assetConfig.index = newIndex;
-      emit AssetIndexUpdated(underlyingAsset, newIndex);
+    address public immutable EMISSION_MANAGER;
+
+    uint8 public constant PRECISION = 18;
+
+    mapping(address => AssetData) public assets;
+
+    event AssetConfigUpdated(address indexed asset, uint256 emission);
+    event AssetIndexUpdated(address indexed asset, uint256 index);
+    event UserIndexUpdated(address indexed user, address indexed asset, uint256 index);
+
+    constructor(address emissionManager, uint256 distributionDuration) public {
+        DISTRIBUTION_END = block.timestamp.add(distributionDuration);
+        EMISSION_MANAGER = emissionManager;
     }
 
-    assetConfig.lastUpdateTimestamp = uint128(block.timestamp);
+    /**
+     * @dev Configures the distribution of rewards for a list of assets
+     * @param assetsConfigInput The list of configurations to apply
+     *
+     */
+    function configureAssets(DistributionTypes.AssetConfigInput[] calldata assetsConfigInput) external override {
+        require(msg.sender == EMISSION_MANAGER, "ONLY_EMISSION_MANAGER");
 
-    return newIndex;
-  }
+        for (uint256 i = 0; i < assetsConfigInput.length; i++) {
+            AssetData storage assetConfig = assets[assetsConfigInput[i].underlyingAsset];
 
-  /**
-   * @dev Updates the state of an user in a distribution
-   * @param user The user's address
-   * @param asset The address of the reference asset of the distribution
-   * @param stakedByUser Amount of tokens staked by the user in the distribution at the moment
-   * @param totalStaked Total tokens staked in the distribution
-   * @return The accrued rewards for the user until the moment
-   **/
-  function _updateUserAssetInternal(
-    address user,
-    address asset,
-    uint256 stakedByUser,
-    uint256 totalStaked
-  ) internal returns (uint256) {
-    AssetData storage assetData = assets[asset];
-    uint256 userIndex = assetData.users[user];
-    uint256 accruedRewards = 0;
+            _updateAssetStateInternal(
+                assetsConfigInput[i].underlyingAsset, assetConfig, assetsConfigInput[i].totalStaked
+            );
 
-    uint256 newIndex = _updateAssetStateInternal(asset, assetData, totalStaked);
+            assetConfig.emissionPerSecond = assetsConfigInput[i].emissionPerSecond;
 
-    if (userIndex != newIndex) {
-      if (stakedByUser != 0) {
-        accruedRewards = _getRewards(stakedByUser, newIndex, userIndex);
-      }
-
-      assetData.users[user] = newIndex;
-      emit UserIndexUpdated(user, asset, newIndex);
+            emit AssetConfigUpdated(assetsConfigInput[i].underlyingAsset, assetsConfigInput[i].emissionPerSecond);
+        }
     }
 
-    return accruedRewards;
-  }
+    /**
+     * @dev Updates the state of one distribution, mainly rewards index and timestamp
+     * @param underlyingAsset The address used as key in the distribution, for example sAAVE or the aTokens addresses on Aave
+     * @param assetConfig Storage pointer to the distribution's config
+     * @param totalStaked Current total of staked assets for this distribution
+     * @return The new distribution index
+     *
+     */
+    function _updateAssetStateInternal(address underlyingAsset, AssetData storage assetConfig, uint256 totalStaked)
+        internal
+        returns (uint256)
+    {
+        uint256 oldIndex = assetConfig.index;
+        uint128 lastUpdateTimestamp = assetConfig.lastUpdateTimestamp;
 
-  /**
-   * @dev Used by "frontend" stake contracts to update the data of an user when claiming rewards from there
-   * @param user The address of the user
-   * @param stakes List of structs of the user data related with his stake
-   * @return The accrued rewards for the user until the moment
-   **/
-  function _claimRewards(address user, DistributionTypes.UserStakeInput[] memory stakes)
-    internal
-    returns (uint256)
-  {
-    uint256 accruedRewards = 0;
+        if (block.timestamp == lastUpdateTimestamp) {
+            return oldIndex;
+        }
 
-    for (uint256 i = 0; i < stakes.length; i++) {
-      accruedRewards = accruedRewards.add(
-        _updateUserAssetInternal(
-          user,
-          stakes[i].underlyingAsset,
-          stakes[i].stakedByUser,
-          stakes[i].totalStaked
-        )
-      );
+        uint256 newIndex = _getAssetIndex(oldIndex, assetConfig.emissionPerSecond, lastUpdateTimestamp, totalStaked);
+
+        if (newIndex != oldIndex) {
+            assetConfig.index = newIndex;
+            emit AssetIndexUpdated(underlyingAsset, newIndex);
+        }
+
+        assetConfig.lastUpdateTimestamp = uint128(block.timestamp);
+
+        return newIndex;
     }
 
-    return accruedRewards;
-  }
+    /**
+     * @dev Updates the state of an user in a distribution
+     * @param user The user's address
+     * @param asset The address of the reference asset of the distribution
+     * @param stakedByUser Amount of tokens staked by the user in the distribution at the moment
+     * @param totalStaked Total tokens staked in the distribution
+     * @return The accrued rewards for the user until the moment
+     *
+     */
+    function _updateUserAssetInternal(address user, address asset, uint256 stakedByUser, uint256 totalStaked)
+        internal
+        returns (uint256)
+    {
+        AssetData storage assetData = assets[asset];
+        uint256 userIndex = assetData.users[user];
+        uint256 accruedRewards = 0;
 
-  /**
-   * @dev Return the accrued rewards for an user over a list of distribution
-   * @param user The address of the user
-   * @param stakes List of structs of the user data related with his stake
-   * @return The accrued rewards for the user until the moment
-   **/
-  function _getUnclaimedRewards(address user, DistributionTypes.UserStakeInput[] memory stakes)
-    internal
-    view
-    returns (uint256)
-  {
-    uint256 accruedRewards = 0;
+        uint256 newIndex = _updateAssetStateInternal(asset, assetData, totalStaked);
 
-    for (uint256 i = 0; i < stakes.length; i++) {
-      AssetData storage assetConfig = assets[stakes[i].underlyingAsset];
-      uint256 assetIndex = _getAssetIndex(
-        assetConfig.index,
-        assetConfig.emissionPerSecond,
-        assetConfig.lastUpdateTimestamp,
-        stakes[i].totalStaked
-      );
+        if (userIndex != newIndex) {
+            if (stakedByUser != 0) {
+                accruedRewards = _getRewards(stakedByUser, newIndex, userIndex);
+            }
 
-      accruedRewards = accruedRewards.add(
-        _getRewards(stakes[i].stakedByUser, assetIndex, assetConfig.users[user])
-      );
-    }
-    return accruedRewards;
-  }
+            assetData.users[user] = newIndex;
+            emit UserIndexUpdated(user, asset, newIndex);
+        }
 
-  /**
-   * @dev Internal function for the calculation of user's rewards on a distribution
-   * @param principalUserBalance Amount staked by the user on a distribution
-   * @param reserveIndex Current index of the distribution
-   * @param userIndex Index stored for the user, representation his staking moment
-   * @return The rewards
-   **/
-  function _getRewards(
-    uint256 principalUserBalance,
-    uint256 reserveIndex,
-    uint256 userIndex
-  ) internal pure returns (uint256) {
-    return principalUserBalance.mul(reserveIndex.sub(userIndex)).div(10**uint256(PRECISION));
-  }
-
-  /**
-   * @dev Calculates the next value of an specific distribution index, with validations
-   * @param currentIndex Current index of the distribution
-   * @param emissionPerSecond Representing the total rewards distributed per second per asset unit, on the distribution
-   * @param lastUpdateTimestamp Last moment this distribution was updated
-   * @param totalBalance of tokens considered for the distribution
-   * @return The new index.
-   **/
-  function _getAssetIndex(
-    uint256 currentIndex,
-    uint256 emissionPerSecond,
-    uint128 lastUpdateTimestamp,
-    uint256 totalBalance
-  ) internal view returns (uint256) {
-    if (
-      emissionPerSecond == 0 ||
-      totalBalance == 0 ||
-      lastUpdateTimestamp == block.timestamp ||
-      lastUpdateTimestamp >= DISTRIBUTION_END
-    ) {
-      return currentIndex;
+        return accruedRewards;
     }
 
-    uint256 currentTimestamp = block.timestamp > DISTRIBUTION_END
-      ? DISTRIBUTION_END
-      : block.timestamp;
-    uint256 timeDelta = currentTimestamp.sub(lastUpdateTimestamp);
-    return
-      emissionPerSecond.mul(timeDelta).mul(10**uint256(PRECISION)).div(totalBalance).add(
-        currentIndex
-      );
-  }
+    /**
+     * @dev Used by "frontend" stake contracts to update the data of an user when claiming rewards from there
+     * @param user The address of the user
+     * @param stakes List of structs of the user data related with his stake
+     * @return The accrued rewards for the user until the moment
+     *
+     */
+    function _claimRewards(address user, DistributionTypes.UserStakeInput[] memory stakes) internal returns (uint256) {
+        uint256 accruedRewards = 0;
 
-  /**
-   * @dev Returns the data of an user on a distribution
-   * @param user Address of the user
-   * @param asset The address of the reference asset of the distribution
-   * @return The new index
-   **/
-  function getUserAssetData(address user, address asset) public view returns (uint256) {
-    return assets[asset].users[user];
-  }
+        for (uint256 i = 0; i < stakes.length; i++) {
+            accruedRewards = accruedRewards.add(
+                _updateUserAssetInternal(user, stakes[i].underlyingAsset, stakes[i].stakedByUser, stakes[i].totalStaked)
+            );
+        }
+
+        return accruedRewards;
+    }
+
+    /**
+     * @dev Return the accrued rewards for an user over a list of distribution
+     * @param user The address of the user
+     * @param stakes List of structs of the user data related with his stake
+     * @return The accrued rewards for the user until the moment
+     *
+     */
+    function _getUnclaimedRewards(address user, DistributionTypes.UserStakeInput[] memory stakes)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 accruedRewards = 0;
+
+        for (uint256 i = 0; i < stakes.length; i++) {
+            AssetData storage assetConfig = assets[stakes[i].underlyingAsset];
+            uint256 assetIndex = _getAssetIndex(
+                assetConfig.index, assetConfig.emissionPerSecond, assetConfig.lastUpdateTimestamp, stakes[i].totalStaked
+            );
+
+            accruedRewards =
+                accruedRewards.add(_getRewards(stakes[i].stakedByUser, assetIndex, assetConfig.users[user]));
+        }
+        return accruedRewards;
+    }
+
+    /**
+     * @dev Internal function for the calculation of user's rewards on a distribution
+     * @param principalUserBalance Amount staked by the user on a distribution
+     * @param reserveIndex Current index of the distribution
+     * @param userIndex Index stored for the user, representation his staking moment
+     * @return The rewards
+     *
+     */
+    function _getRewards(uint256 principalUserBalance, uint256 reserveIndex, uint256 userIndex)
+        internal
+        pure
+        returns (uint256)
+    {
+        return principalUserBalance.mul(reserveIndex.sub(userIndex)).div(10 ** uint256(PRECISION));
+    }
+
+    /**
+     * @dev Calculates the next value of an specific distribution index, with validations
+     * @param currentIndex Current index of the distribution
+     * @param emissionPerSecond Representing the total rewards distributed per second per asset unit, on the distribution
+     * @param lastUpdateTimestamp Last moment this distribution was updated
+     * @param totalBalance of tokens considered for the distribution
+     * @return The new index.
+     *
+     */
+    function _getAssetIndex(
+        uint256 currentIndex,
+        uint256 emissionPerSecond,
+        uint128 lastUpdateTimestamp,
+        uint256 totalBalance
+    ) internal view returns (uint256) {
+        if (
+            emissionPerSecond == 0 || totalBalance == 0 || lastUpdateTimestamp == block.timestamp
+                || lastUpdateTimestamp >= DISTRIBUTION_END
+        ) {
+            return currentIndex;
+        }
+
+        uint256 currentTimestamp = block.timestamp > DISTRIBUTION_END ? DISTRIBUTION_END : block.timestamp;
+        uint256 timeDelta = currentTimestamp.sub(lastUpdateTimestamp);
+        return emissionPerSecond.mul(timeDelta).mul(10 ** uint256(PRECISION)).div(totalBalance).add(currentIndex);
+    }
+
+    /**
+     * @dev Returns the data of an user on a distribution
+     * @param user Address of the user
+     * @param asset The address of the reference asset of the distribution
+     * @return The new index
+     *
+     */
+    function getUserAssetData(address user, address asset) public view returns (uint256) {
+        return assets[asset].users[user];
+    }
 }
 
 // File: contracts/stake/StakedToken.sol
 
-
 pragma solidity 0.6.12;
-
-
-
-
-
-
-
-
-
 
 /**
  * @title StakedToken
  * @notice Contract to stake Aave token, tokenize the position and get rewards, inheriting from a distribution manager contract
  * @author Aave
- **/
+ *
+ */
 contract StakedToken is IStakedAave, ERC20WithSnapshot, VersionedInitializable, AaveDistributionManager {
-  using SafeERC20 for IERC20;
+    using SafeERC20 for IERC20;
 
-  uint256 public constant REVISION = 1;
+    uint256 public constant REVISION = 1;
 
-  IERC20 public immutable STAKED_TOKEN;
-  IERC20 public immutable REWARD_TOKEN;
-  uint256 public immutable COOLDOWN_SECONDS;
+    IERC20 public immutable STAKED_TOKEN;
+    IERC20 public immutable REWARD_TOKEN;
+    uint256 public immutable COOLDOWN_SECONDS;
 
-  /// @notice Seconds available to redeem once the cooldown period is fullfilled
-  uint256 public immutable UNSTAKE_WINDOW;
+    /// @notice Seconds available to redeem once the cooldown period is fullfilled
+    uint256 public immutable UNSTAKE_WINDOW;
 
-  /// @notice Address to pull from the rewards, needs to have approved this contract
-  address public immutable REWARDS_VAULT;
+    /// @notice Address to pull from the rewards, needs to have approved this contract
+    address public immutable REWARDS_VAULT;
 
-  mapping(address => uint256) public stakerRewardsToClaim;
-  mapping(address => uint256) public stakersCooldowns;
+    mapping(address => uint256) public stakerRewardsToClaim;
+    mapping(address => uint256) public stakersCooldowns;
 
-  event Staked(address indexed from, address indexed onBehalfOf, uint256 amount);
-  event Redeem(address indexed from, address indexed to, uint256 amount);
+    event Staked(address indexed from, address indexed onBehalfOf, uint256 amount);
+    event Redeem(address indexed from, address indexed to, uint256 amount);
 
-  event RewardsAccrued(address user, uint256 amount);
-  event RewardsClaimed(address indexed from, address indexed to, uint256 amount);
+    event RewardsAccrued(address user, uint256 amount);
+    event RewardsClaimed(address indexed from, address indexed to, uint256 amount);
 
-  event Cooldown(address indexed user);
+    event Cooldown(address indexed user);
 
-  constructor(
-    IERC20 stakedToken,
-    IERC20 rewardToken,
-    uint256 cooldownSeconds,
-    uint256 unstakeWindow,
-    address rewardsVault,
-    address emissionManager,
-    uint128 distributionDuration,
-    string memory name,
-    string memory symbol,
-    uint8 decimals
-  ) public ERC20WithSnapshot(name, symbol, decimals) AaveDistributionManager(emissionManager, distributionDuration) {
-    STAKED_TOKEN = stakedToken;
-    REWARD_TOKEN = rewardToken;
-    COOLDOWN_SECONDS = cooldownSeconds;
-    UNSTAKE_WINDOW = unstakeWindow;
-    REWARDS_VAULT = rewardsVault;
-  }
-
-  /**
-   * @dev Called by the proxy contract
-   **/
-  function initialize(ITransferHook aaveGovernance, string calldata name, string calldata symbol, uint8 decimals) external initializer {
-    _setName(name);
-    _setSymbol(symbol);
-    _setDecimals(decimals);
-    _setAaveGovernance(aaveGovernance);
-  }
-
-  function stake(address onBehalfOf, uint256 amount) external override {
-    require(amount != 0, 'INVALID_ZERO_AMOUNT');
-    uint256 balanceOfUser = balanceOf(onBehalfOf);
-
-    uint256 accruedRewards = _updateUserAssetInternal(
-      onBehalfOf,
-      address(this),
-      balanceOfUser,
-      totalSupply()
-    );
-    if (accruedRewards != 0) {
-      emit RewardsAccrued(onBehalfOf, accruedRewards);
-      stakerRewardsToClaim[onBehalfOf] = stakerRewardsToClaim[onBehalfOf].add(accruedRewards);
+    constructor(
+        IERC20 stakedToken,
+        IERC20 rewardToken,
+        uint256 cooldownSeconds,
+        uint256 unstakeWindow,
+        address rewardsVault,
+        address emissionManager,
+        uint128 distributionDuration,
+        string memory name,
+        string memory symbol,
+        uint8 decimals
+    ) public ERC20WithSnapshot(name, symbol, decimals) AaveDistributionManager(emissionManager, distributionDuration) {
+        STAKED_TOKEN = stakedToken;
+        REWARD_TOKEN = rewardToken;
+        COOLDOWN_SECONDS = cooldownSeconds;
+        UNSTAKE_WINDOW = unstakeWindow;
+        REWARDS_VAULT = rewardsVault;
     }
 
-    stakersCooldowns[onBehalfOf] = getNextCooldownTimestamp(0, amount, onBehalfOf, balanceOfUser);
-
-    _mint(onBehalfOf, amount);
-    IERC20(STAKED_TOKEN).safeTransferFrom(msg.sender, address(this), amount);
-
-    emit Staked(msg.sender, onBehalfOf, amount);
-  }
-
-  /**
-   * @dev Redeems staked tokens, and stop earning rewards
-   * @param to Address to redeem to
-   * @param amount Amount to redeem
-   **/
-  function redeem(address to, uint256 amount) external override {
-    require(amount != 0, 'INVALID_ZERO_AMOUNT');
-    //solium-disable-next-line
-    uint256 cooldownStartTimestamp = stakersCooldowns[msg.sender];
-    require(
-      block.timestamp > cooldownStartTimestamp.add(COOLDOWN_SECONDS),
-      'INSUFFICIENT_COOLDOWN'
-    );
-    require(
-      block.timestamp.sub(cooldownStartTimestamp.add(COOLDOWN_SECONDS)) <= UNSTAKE_WINDOW,
-      'UNSTAKE_WINDOW_FINISHED'
-    );
-    uint256 balanceOfMessageSender = balanceOf(msg.sender);
-
-    uint256 amountToRedeem = (amount > balanceOfMessageSender) ? balanceOfMessageSender : amount;
-
-    _updateCurrentUnclaimedRewards(msg.sender, balanceOfMessageSender, true);
-
-    _burn(msg.sender, amountToRedeem);
-
-    if (balanceOfMessageSender.sub(amountToRedeem) == 0) {
-      stakersCooldowns[msg.sender] = 0;
+    /**
+     * @dev Called by the proxy contract
+     *
+     */
+    function initialize(ITransferHook aaveGovernance, string calldata name, string calldata symbol, uint8 decimals)
+        external
+        initializer
+    {
+        _setName(name);
+        _setSymbol(symbol);
+        _setDecimals(decimals);
+        _setAaveGovernance(aaveGovernance);
     }
 
-    IERC20(STAKED_TOKEN).safeTransfer(to, amountToRedeem);
+    function stake(address onBehalfOf, uint256 amount) external override {
+        require(amount != 0, "INVALID_ZERO_AMOUNT");
+        uint256 balanceOfUser = balanceOf(onBehalfOf);
 
-    emit Redeem(msg.sender, to, amountToRedeem);
-  }
+        uint256 accruedRewards = _updateUserAssetInternal(onBehalfOf, address(this), balanceOfUser, totalSupply());
+        if (accruedRewards != 0) {
+            emit RewardsAccrued(onBehalfOf, accruedRewards);
+            stakerRewardsToClaim[onBehalfOf] = stakerRewardsToClaim[onBehalfOf].add(accruedRewards);
+        }
 
-  /**
-   * @dev Activates the cooldown period to unstake
-   * - It can't be called if the user is not staking
-   **/
-  function cooldown() external override {
-    require(balanceOf(msg.sender) != 0, "INVALID_BALANCE_ON_COOLDOWN");
-    //solium-disable-next-line
-    stakersCooldowns[msg.sender] = block.timestamp;
+        stakersCooldowns[onBehalfOf] = getNextCooldownTimestamp(0, amount, onBehalfOf, balanceOfUser);
 
-    emit Cooldown(msg.sender);
-  }
+        _mint(onBehalfOf, amount);
+        IERC20(STAKED_TOKEN).safeTransferFrom(msg.sender, address(this), amount);
 
-  /**
-   * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to`
-   * @param to Address to stake for
-   * @param amount Amount to stake
-   **/
-  function claimRewards(address to, uint256 amount) external override {
-    uint256 newTotalRewards = _updateCurrentUnclaimedRewards(
-      msg.sender,
-      balanceOf(msg.sender),
-      false
-    );
-    uint256 amountToClaim = (amount == type(uint256).max) ? newTotalRewards : amount;
-
-    stakerRewardsToClaim[msg.sender] = newTotalRewards.sub(amountToClaim, "INVALID_AMOUNT");
-
-    REWARD_TOKEN.safeTransferFrom(REWARDS_VAULT, to, amountToClaim);
-
-    emit RewardsClaimed(msg.sender, to, amountToClaim);
-  }
-
-  /**
-   * @dev Internal ERC20 _transfer of the tokenized staked tokens
-   * @param from Address to transfer from
-   * @param to Address to transfer to
-   * @param amount Amount to transfer
-   **/
-  function _transfer(
-    address from,
-    address to,
-    uint256 amount
-  ) internal override {
-    uint256 balanceOfFrom = balanceOf(from);
-    // Sender
-    _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
-
-    // Recipient
-    if (from != to) {
-      uint256 balanceOfTo = balanceOf(to);
-      _updateCurrentUnclaimedRewards(to, balanceOfTo, true);
-
-      uint256 previousSenderCooldown = stakersCooldowns[from];
-      stakersCooldowns[to] = getNextCooldownTimestamp(previousSenderCooldown, amount, to, balanceOfTo);
-      // if cooldown was set and whole balance of sender was transferred - clear cooldown
-      if (balanceOfFrom == amount && previousSenderCooldown != 0) {
-        stakersCooldowns[from] = 0;
-      }
+        emit Staked(msg.sender, onBehalfOf, amount);
     }
 
-    super._transfer(from, to, amount);
-  }
+    /**
+     * @dev Redeems staked tokens, and stop earning rewards
+     * @param to Address to redeem to
+     * @param amount Amount to redeem
+     *
+     */
+    function redeem(address to, uint256 amount) external override {
+        require(amount != 0, "INVALID_ZERO_AMOUNT");
+        //solium-disable-next-line
+        uint256 cooldownStartTimestamp = stakersCooldowns[msg.sender];
+        require(block.timestamp > cooldownStartTimestamp.add(COOLDOWN_SECONDS), "INSUFFICIENT_COOLDOWN");
+        require(
+            block.timestamp.sub(cooldownStartTimestamp.add(COOLDOWN_SECONDS)) <= UNSTAKE_WINDOW,
+            "UNSTAKE_WINDOW_FINISHED"
+        );
+        uint256 balanceOfMessageSender = balanceOf(msg.sender);
 
-  /**
-   * @dev Updates the user state related with his accrued rewards
-   * @param user Address of the user
-   * @param userBalance The current balance of the user
-   * @param updateStorage Boolean flag used to update or not the stakerRewardsToClaim of the user
-   * @return The unclaimed rewards that were added to the total accrued
-   **/
-  function _updateCurrentUnclaimedRewards(
-    address user,
-    uint256 userBalance,
-    bool updateStorage
-  ) internal returns (uint256) {
-    uint256 accruedRewards = _updateUserAssetInternal(
-      user,
-      address(this),
-      userBalance,
-      totalSupply()
-    );
-    uint256 unclaimedRewards = stakerRewardsToClaim[user].add(accruedRewards);
+        uint256 amountToRedeem = (amount > balanceOfMessageSender) ? balanceOfMessageSender : amount;
 
-    if (accruedRewards != 0) {
-      if (updateStorage) {
-        stakerRewardsToClaim[user] = unclaimedRewards;
-      }
-      emit RewardsAccrued(user, accruedRewards);
+        _updateCurrentUnclaimedRewards(msg.sender, balanceOfMessageSender, true);
+
+        _burn(msg.sender, amountToRedeem);
+
+        if (balanceOfMessageSender.sub(amountToRedeem) == 0) {
+            stakersCooldowns[msg.sender] = 0;
+        }
+
+        IERC20(STAKED_TOKEN).safeTransfer(to, amountToRedeem);
+
+        emit Redeem(msg.sender, to, amountToRedeem);
     }
 
-    return unclaimedRewards;
-  }
+    /**
+     * @dev Activates the cooldown period to unstake
+     * - It can't be called if the user is not staking
+     *
+     */
+    function cooldown() external override {
+        require(balanceOf(msg.sender) != 0, "INVALID_BALANCE_ON_COOLDOWN");
+        //solium-disable-next-line
+        stakersCooldowns[msg.sender] = block.timestamp;
 
-  /**
-   * @dev Calculates the how is gonna be a new cooldown timestamp depending on the sender/receiver situation
-   *  - If the timestamp of the sender is "better" or the timestamp of the recipient is 0, we take the one of the recipient
-   *  - Weighted average of from/to cooldown timestamps if:
-   *    # The sender doesn't have the cooldown activated (timestamp 0).
-   *    # The sender timestamp is expired
-   *    # The sender has a "worse" timestamp
-   *  - If the receiver's cooldown timestamp expired (too old), the next is 0
-   * @param fromCooldownTimestamp Cooldown timestamp of the sender
-   * @param amountToReceive Amount
-   * @param toAddress Address of the recipient
-   * @param toBalance Current balance of the receiver
-   * @return The new cooldown timestamp
-   **/
-  function getNextCooldownTimestamp(
-    uint256 fromCooldownTimestamp,
-    uint256 amountToReceive,
-    address toAddress,
-    uint256 toBalance
-  ) public returns (uint256) {
-    uint256 toCooldownTimestamp = stakersCooldowns[toAddress];
-    if (toCooldownTimestamp == 0) {
-      return 0;
+        emit Cooldown(msg.sender);
     }
 
-    uint256 minimalValidCooldownTimestamp = block.timestamp.sub(COOLDOWN_SECONDS).sub(
-      UNSTAKE_WINDOW
-    );
+    /**
+     * @dev Claims an `amount` of `REWARD_TOKEN` to the address `to`
+     * @param to Address to stake for
+     * @param amount Amount to stake
+     *
+     */
+    function claimRewards(address to, uint256 amount) external override {
+        uint256 newTotalRewards = _updateCurrentUnclaimedRewards(msg.sender, balanceOf(msg.sender), false);
+        uint256 amountToClaim = (amount == type(uint256).max) ? newTotalRewards : amount;
 
-    if (minimalValidCooldownTimestamp > toCooldownTimestamp) {
-      toCooldownTimestamp = 0;
-    } else {
-      uint256 fromCooldownTimestamp = (minimalValidCooldownTimestamp > fromCooldownTimestamp)
-        ? block.timestamp
-        : fromCooldownTimestamp;
+        stakerRewardsToClaim[msg.sender] = newTotalRewards.sub(amountToClaim, "INVALID_AMOUNT");
 
-      if (fromCooldownTimestamp < toCooldownTimestamp) {
+        REWARD_TOKEN.safeTransferFrom(REWARDS_VAULT, to, amountToClaim);
+
+        emit RewardsClaimed(msg.sender, to, amountToClaim);
+    }
+
+    /**
+     * @dev Internal ERC20 _transfer of the tokenized staked tokens
+     * @param from Address to transfer from
+     * @param to Address to transfer to
+     * @param amount Amount to transfer
+     *
+     */
+    function _transfer(address from, address to, uint256 amount) internal override {
+        uint256 balanceOfFrom = balanceOf(from);
+        // Sender
+        _updateCurrentUnclaimedRewards(from, balanceOfFrom, true);
+
+        // Recipient
+        if (from != to) {
+            uint256 balanceOfTo = balanceOf(to);
+            _updateCurrentUnclaimedRewards(to, balanceOfTo, true);
+
+            uint256 previousSenderCooldown = stakersCooldowns[from];
+            stakersCooldowns[to] = getNextCooldownTimestamp(previousSenderCooldown, amount, to, balanceOfTo);
+            // if cooldown was set and whole balance of sender was transferred - clear cooldown
+            if (balanceOfFrom == amount && previousSenderCooldown != 0) {
+                stakersCooldowns[from] = 0;
+            }
+        }
+
+        super._transfer(from, to, amount);
+    }
+
+    /**
+     * @dev Updates the user state related with his accrued rewards
+     * @param user Address of the user
+     * @param userBalance The current balance of the user
+     * @param updateStorage Boolean flag used to update or not the stakerRewardsToClaim of the user
+     * @return The unclaimed rewards that were added to the total accrued
+     *
+     */
+    function _updateCurrentUnclaimedRewards(address user, uint256 userBalance, bool updateStorage)
+        internal
+        returns (uint256)
+    {
+        uint256 accruedRewards = _updateUserAssetInternal(user, address(this), userBalance, totalSupply());
+        uint256 unclaimedRewards = stakerRewardsToClaim[user].add(accruedRewards);
+
+        if (accruedRewards != 0) {
+            if (updateStorage) {
+                stakerRewardsToClaim[user] = unclaimedRewards;
+            }
+            emit RewardsAccrued(user, accruedRewards);
+        }
+
+        return unclaimedRewards;
+    }
+
+    /**
+     * @dev Calculates the how is gonna be a new cooldown timestamp depending on the sender/receiver situation
+     *  - If the timestamp of the sender is "better" or the timestamp of the recipient is 0, we take the one of the recipient
+     *  - Weighted average of from/to cooldown timestamps if:
+     *    # The sender doesn't have the cooldown activated (timestamp 0).
+     *    # The sender timestamp is expired
+     *    # The sender has a "worse" timestamp
+     *  - If the receiver's cooldown timestamp expired (too old), the next is 0
+     * @param fromCooldownTimestamp Cooldown timestamp of the sender
+     * @param amountToReceive Amount
+     * @param toAddress Address of the recipient
+     * @param toBalance Current balance of the receiver
+     * @return The new cooldown timestamp
+     *
+     */
+    function getNextCooldownTimestamp(
+        uint256 fromCooldownTimestamp,
+        uint256 amountToReceive,
+        address toAddress,
+        uint256 toBalance
+    ) public returns (uint256) {
+        uint256 toCooldownTimestamp = stakersCooldowns[toAddress];
+        if (toCooldownTimestamp == 0) {
+            return 0;
+        }
+
+        uint256 minimalValidCooldownTimestamp = block.timestamp.sub(COOLDOWN_SECONDS).sub(UNSTAKE_WINDOW);
+
+        if (minimalValidCooldownTimestamp > toCooldownTimestamp) {
+            toCooldownTimestamp = 0;
+        } else {
+            uint256 fromCooldownTimestamp =
+                (minimalValidCooldownTimestamp > fromCooldownTimestamp) ? block.timestamp : fromCooldownTimestamp;
+
+            if (fromCooldownTimestamp < toCooldownTimestamp) {
+                return toCooldownTimestamp;
+            } else {
+                toCooldownTimestamp = (amountToReceive.mul(fromCooldownTimestamp)
+                        .add(toBalance.mul(toCooldownTimestamp)))
+                .div(amountToReceive.add(toBalance));
+            }
+        }
+        stakersCooldowns[toAddress] = toCooldownTimestamp;
+
         return toCooldownTimestamp;
-      } else {
-        toCooldownTimestamp = (
-          amountToReceive.mul(fromCooldownTimestamp).add(toBalance.mul(toCooldownTimestamp))
-        )
-          .div(amountToReceive.add(toBalance));
-      }
     }
-    stakersCooldowns[toAddress] = toCooldownTimestamp;
 
-    return toCooldownTimestamp;
-  }
+    /**
+     * @dev Return the total rewards pending to claim by an staker
+     * @param staker The staker address
+     * @return The rewards
+     */
+    function getTotalRewardsBalance(address staker) external view returns (uint256) {
+        DistributionTypes.UserStakeInput[] memory userStakeInputs = new DistributionTypes.UserStakeInput[](1);
+        userStakeInputs[0] = DistributionTypes.UserStakeInput({
+            underlyingAsset: address(this), stakedByUser: balanceOf(staker), totalStaked: totalSupply()
+        });
+        return stakerRewardsToClaim[staker].add(_getUnclaimedRewards(staker, userStakeInputs));
+    }
 
-  /**
-   * @dev Return the total rewards pending to claim by an staker
-   * @param staker The staker address
-   * @return The rewards
-   */
-  function getTotalRewardsBalance(address staker) external view returns (uint256) {
-
-      DistributionTypes.UserStakeInput[] memory userStakeInputs
-     = new DistributionTypes.UserStakeInput[](1);
-    userStakeInputs[0] = DistributionTypes.UserStakeInput({
-      underlyingAsset: address(this),
-      stakedByUser: balanceOf(staker),
-      totalStaked: totalSupply()
-    });
-    return stakerRewardsToClaim[staker].add(_getUnclaimedRewards(staker, userStakeInputs));
-  }
-
-  /**
-   * @dev returns the revision of the implementation contract
-   * @return The revision
-   */
-  function getRevision() internal override pure returns (uint256) {
-    return REVISION;
-  }
+    /**
+     * @dev returns the revision of the implementation contract
+     * @return The revision
+     */
+    function getRevision() internal pure override returns (uint256) {
+        return REVISION;
+    }
 }
 
 // File: contracts/stake/StakedAave.sol
 
-
 pragma solidity 0.6.12;
-
-
-
 
 /**
  * @title StakedAave
  * @notice StakedToken with AAVE token as staked token
  * @author Aave
- **/
+ *
+ */
 contract StakedAave is StakedToken {
-  string internal constant NAME = 'Staked Aave';
-  string internal constant SYMBOL = 'stkAAVE';
-  uint8 internal constant DECIMALS = 18;
-  
-  constructor(
-    IERC20 stakedToken,
-    IERC20 rewardToken,
-    uint256 cooldownSeconds,
-    uint256 unstakeWindow,
-    address rewardsVault,
-    address emissionManager,
-    uint128 distributionDuration
-  ) public StakedToken(
-    stakedToken,
-    rewardToken,
-    cooldownSeconds,
-    unstakeWindow,
-    rewardsVault,
-    emissionManager,
-    distributionDuration,
-    NAME,
-    SYMBOL,
-    DECIMALS) {}
+    string internal constant NAME = "Staked Aave";
+    string internal constant SYMBOL = "stkAAVE";
+    uint8 internal constant DECIMALS = 18;
+
+    constructor(
+        IERC20 stakedToken,
+        IERC20 rewardToken,
+        uint256 cooldownSeconds,
+        uint256 unstakeWindow,
+        address rewardsVault,
+        address emissionManager,
+        uint128 distributionDuration
+    )
+        public
+        StakedToken(
+            stakedToken,
+            rewardToken,
+            cooldownSeconds,
+            unstakeWindow,
+            rewardsVault,
+            emissionManager,
+            distributionDuration,
+            NAME,
+            SYMBOL,
+            DECIMALS
+        )
+    {}
 }

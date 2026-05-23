@@ -6,6 +6,8 @@ workflow scaffolding and removes unrelated Rails, Linear, setup, and generic tem
 ## What Belongs Here
 
 - Agents that help locate, analyze, and compare degenbot code paths.
+- Agents that govern MEV-Arbitrum execution boundaries, Stylus parity, Aave revision math, and
+  LangChain/LangGraph/Deep Agents/LangSmith framework fit when those topics are explicitly in scope.
 - Agents that mine DefiLlama sources for protocol evidence without vendoring upstream code.
 - Commands that standardize research, planning, implementation, validation, Aave debugging, local
   review, DefiLlama protocol intelligence, worktree setup, and commits.

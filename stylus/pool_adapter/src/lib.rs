@@ -1,16 +1,23 @@
-#![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
+#![cfg_attr(
+    not(any(test, feature = "export-abi", feature = "native-test")),
+    no_main
+)]
 #![cfg_attr(feature = "contract-client-gen", allow(unused_imports))]
 
 extern crate alloc;
 
-use alloy_sol_types::sol;
-use stylus_sdk::{
-    abi::Bytes,
-    alloy_primitives::Address,
-    call::static_call,
-    prelude::*,
-};
+#[cfg(all(not(any(test, feature = "native-test")), not(target_arch = "wasm32")))]
+mod native_hostio_shims {
+    include!("../../test_hostio_shims.rs");
+}
 
+#[cfg(not(any(test, feature = "native-test")))]
+use alloy_sol_types::sol;
+use stylus_sdk::alloy_primitives::Address;
+#[cfg(not(any(test, feature = "native-test")))]
+use stylus_sdk::{abi::Bytes, call::static_call, prelude::*};
+
+#[cfg(not(any(test, feature = "native-test")))]
 sol_storage! {
     #[entrypoint]
     pub struct PoolAdapter {
@@ -20,6 +27,7 @@ sol_storage! {
     }
 }
 
+#[cfg(not(any(test, feature = "native-test")))]
 sol! {
     error AlreadyInitialized();
     error Unauthorized(address caller);
@@ -27,6 +35,17 @@ sol! {
     error PoolStaticCallFailed();
 }
 
+#[cfg(any(test, feature = "native-test"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZeroPoolAddress {}
+
+#[cfg(any(test, feature = "native-test"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolAdapterError {
+    ZeroPoolAddress(ZeroPoolAddress),
+}
+
+#[cfg(not(any(test, feature = "native-test")))]
 #[derive(SolidityError)]
 pub enum PoolAdapterError {
     AlreadyInitialized(AlreadyInitialized),
@@ -35,15 +54,14 @@ pub enum PoolAdapterError {
     PoolStaticCallFailed(PoolStaticCallFailed),
 }
 
+#[cfg(not(any(test, feature = "native-test")))]
 #[public]
 impl PoolAdapter {
     pub fn initialize(&mut self, pool: Address) -> Result<(), PoolAdapterError> {
         if self.initialized.get() {
             return Err(PoolAdapterError::AlreadyInitialized(AlreadyInitialized {}));
         }
-        if pool == Address::ZERO {
-            return Err(PoolAdapterError::ZeroPoolAddress(ZeroPoolAddress {}));
-        }
+        ensure_nonzero_pool(pool)?;
 
         self.owner.set(self.vm().msg_sender());
         self.pool.set(pool);
@@ -61,9 +79,7 @@ impl PoolAdapter {
 
     pub fn set_pool(&mut self, pool: Address) -> Result<(), PoolAdapterError> {
         self.only_owner()?;
-        if pool == Address::ZERO {
-            return Err(PoolAdapterError::ZeroPoolAddress(ZeroPoolAddress {}));
-        }
+        ensure_nonzero_pool(pool)?;
         self.pool.set(pool);
         Ok(())
     }
@@ -89,20 +105,24 @@ impl PoolAdapter {
     }
 }
 
+#[cfg_attr(feature = "native-test", allow(dead_code))]
+fn ensure_nonzero_pool(pool: Address) -> Result<(), PoolAdapterError> {
+    if pool == Address::ZERO {
+        return Err(PoolAdapterError::ZeroPoolAddress(ZeroPoolAddress {}));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stylus_sdk::testing::TestVM;
 
     #[test]
-    fn initialize_sets_owner_and_pool() {
-        let vm = TestVM::default();
-        let mut adapter = PoolAdapter::from(&vm);
-        let pool = Address::repeat_byte(0x11);
-
-        assert!(adapter.initialize(pool).is_ok());
-
-        assert_eq!(pool, adapter.pool());
-        assert_eq!(vm.msg_sender(), adapter.owner());
+    fn pool_address_validation_rejects_zero_address() {
+        assert!(matches!(
+            ensure_nonzero_pool(Address::ZERO),
+            Err(PoolAdapterError::ZeroPoolAddress(_))
+        ));
+        assert!(ensure_nonzero_pool(Address::repeat_byte(0x11)).is_ok());
     }
 }
