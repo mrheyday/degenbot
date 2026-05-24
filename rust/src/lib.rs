@@ -50,6 +50,7 @@ pub mod execution_engine_py;
 pub mod execution_py;
 pub mod fixed_abi;
 pub mod hex_utils;
+pub mod monitor;
 pub mod provider;
 pub mod provider_py;
 pub mod py_cache;
@@ -58,6 +59,7 @@ pub mod runtime;
 pub mod signature_parser;
 pub mod signed_order_admission;
 pub mod signed_order_admission_py;
+pub mod simulation;
 pub mod tick_math;
 pub mod tick_math_py;
 

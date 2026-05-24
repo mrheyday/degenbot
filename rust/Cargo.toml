@@ -47,6 +47,17 @@ hotpath = { version = "0.16.1", optional = true }
 # extension for CoW solver-engine DTOs and swap-path route storage.
 cowprotocol-solvers-dto-alloy = { git = "https://github.com/mrheyday/cowprotocol-solvers-dto-alloy", branch = "main" }
 swap-path = { path = "../../swap-path-alloy2" }
+revm = "38"
+fastbloom = "0.17"
+base64 = "0.22"
+tokio-tungstenite = "0.21"
+tokio-stream = "0.1"
+dashmap = "6.1"
+ulid = "1.1"
+governor = "0.10"
+eyre = "0.6"
+tracing = "0.1"
+
 
 # Keep transitive Alloy 2.0.5 dependencies on the same pinned git source as the
 # direct dependency above. Without these patches, Cargo resolves a mixed graph
