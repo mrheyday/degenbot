@@ -84,6 +84,7 @@ format:
     cargo fmt --manifest-path rust/Cargo.toml
     cargo fmt --manifest-path stylus/core/Cargo.toml
     cargo fmt --manifest-path stylus/pool_adapter/Cargo.toml
+    cargo fmt --manifest-path stylus/runtime_adapter/Cargo.toml
     env -u RUST_LOG uv run ruff format src/
 
 # ========== CI/CD ==========
@@ -94,7 +95,14 @@ ci-rust: lint-rust test-rust
 
 # Simulate CI Stylus checks
 ci-stylus: lint-stylus test-stylus
-    cargo build --manifest-path stylus/core/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
+    cargo build --manifest-path stylus/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
+
+# Check deployable Stylus artifacts against an Arbitrum endpoint.
+stylus-check endpoint="https://arb1.arbitrum.io/rpc":
+    cargo build --manifest-path stylus/runtime_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
+    cargo build --manifest-path stylus/pool_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
+    cd stylus/runtime_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_runtime_adapter.wasm
+    cd stylus/pool_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_pool_adapter.wasm
 
 # Probe local WebAssembly inspection dependencies
 stylus-wasm-probe:

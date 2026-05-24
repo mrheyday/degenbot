@@ -10,6 +10,9 @@ interfaces, libraries, POCs, reverse-engineered runtimes, and swappers.
 This directory is degenbot's Stylus migration target. Ports here must compile with
 `cargo stylus check` and must not be treated as executable replacements until
 their ABI and behavior are proven against the Solidity source they replace.
+The oversized `core` crate is the semantic parity harness; deployable surfaces
+are split into activation-sized contracts such as `runtime_adapter/` and
+`pool_adapter/`.
 
 ## Ported Now
 
@@ -68,7 +71,8 @@ their ABI and behavior are proven against the Solidity source they replace.
   sender/initiator/transient-plan authentication, borrowed-token settlement,
   premium/min-profit accounting, idle-balance rejection, typed approval/call
   allowlist gates, and receipt digest binding for the accepted off-chain
-  dispatch payload -> `core::runtime_adapter`
+  dispatch payload -> `core::runtime_adapter` and deployable
+  `runtime_adapter/`
 - Stylus upgrade invariants -> `core::upgrade_policy`
 
 ## Not Yet Semantically Ported
@@ -93,6 +97,10 @@ their ABI and behavior are proven against the Solidity source they replace.
 - EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
   `TransientReentrancy`; slot constants and runtime proof semantics are covered,
   but actual Stylus host writes are not yet a replacement deployment.
+- Monolithic `core` activation on Arbitrum One currently exceeds EIP-170
+  single-contract size and falls into the CLI fragment path. Production
+  deployment must use split Stylus contracts until fragment activation is a
+  verified target in the operator environment.
 
 Those contracts include authorization, callback, transient-storage, token-flow,
 flash-loan, and external-protocol semantics. A mechanical rewrite without

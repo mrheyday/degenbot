@@ -15,10 +15,11 @@ vendored dependencies.
 
 ## Local Compatibility Baseline
 
-- `stylus/core/Cargo.toml` and `stylus/pool_adapter/Cargo.toml` currently pin
-  `stylus-sdk`, `stylus-core`, and `stylus-proc` to `0.10.7`. Native unit tests
-  use the local `native-test` feature instead of `stylus-test`/`stylus-tools` so
-  the Stylus lockfile does not pull the off-chain Alloy provider/RPC graph.
+- `stylus/core/Cargo.toml`, `stylus/pool_adapter/Cargo.toml`, and
+  `stylus/runtime_adapter/Cargo.toml` currently pin `stylus-sdk`,
+  `stylus-core`, and `stylus-proc` to `0.10.7`. Native unit tests use the local
+  `native-test` feature instead of `stylus-test`/`stylus-tools` so the Stylus
+  lockfile does not pull the off-chain Alloy provider/RPC graph.
 - `stylus/core/rust-toolchain.toml` requires the
   `wasm32-unknown-unknown` target.
 - `stylus/tools/wasm-inspect.sh --probe` checks `cargo-stylus`
@@ -27,8 +28,9 @@ vendored dependencies.
 
 ## Operational Rules
 
-- Use `cargo stylus check --wasm-file <artifact>` as the deployability gate for
-  any optimized wasm emitted by Binaryen.
+- Use `cargo stylus check --wasm-file <artifact>` from the artifact's contract
+  directory as the deployability gate for any optimized wasm emitted by
+  Binaryen.
 - Do not treat `awesome-stylus` examples as canonical for this repo. Many public
   examples target older `cargo-stylus` and `stylus-sdk` releases.
 - Keep Nitro/testnode sources as execution-environment references. Contract

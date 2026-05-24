@@ -94,12 +94,23 @@ Add the WASM target for the pinned local Rust toolchain:
 rustup target add wasm32-unknown-unknown --toolchain 1.91
 ```
 
-Build and check a local artifact:
+Build the local Stylus workspace:
 
 ```sh
-cargo build --manifest-path stylus/core/Cargo.toml --release --target wasm32-unknown-unknown
-cargo stylus check --wasm-file stylus/target/wasm32-unknown-unknown/release/degenbot_stylus_core.wasm
+cargo build --manifest-path stylus/Cargo.toml --release --target wasm32-unknown-unknown
 ```
+
+Check deployable artifacts from each contract directory so `cargo-stylus` can
+read the matching `Stylus.toml`:
+
+```sh
+just stylus-check
+```
+
+`stylus/core` is the monolithic semantic parity harness. On Arbitrum One it
+currently compresses above the EIP-170 single-contract limit and enters the
+fragment activation path, so it is not the deployment target unless the
+operator has independently verified fragment activation for that endpoint.
 
 For deployment dry runs against a dev node or configured Arbitrum endpoint,
 prefer gas estimation first:

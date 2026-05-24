@@ -631,6 +631,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "degenbot-runtime-adapter"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-type-parser",
+ "alloy-sol-types",
+ "stylus-core",
+ "stylus-proc",
+ "stylus-sdk",
+]
+
+[[package]]
 name = "degenbot-stylus-core"
 version = "0.1.0"
 dependencies = [

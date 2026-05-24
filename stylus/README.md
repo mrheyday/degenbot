@@ -10,6 +10,10 @@ the MEV-Arbitrum integration:
   adapter proof: callback auth, flash settlement, approval/call allowlists, and
   execution receipt hashing.
 - `pool_adapter/` exposes a guarded read-only pool adapter contract.
+- `runtime_adapter/` is the deployable Stylus contract for the live execution
+  adapter proof surface. It reuses `core::runtime_adapter` and stays below the
+  single-contract activation limit instead of relying on fragmented deployment
+  support for the monolithic semantic core.
 
 Run the local proof suite with:
 
@@ -17,5 +21,13 @@ Run the local proof suite with:
 just test-stylus
 ```
 
+Run endpoint-backed deployability checks for the deployable artifacts with:
+
+```sh
+just stylus-check
+```
+
 Contracts here are not production replacements until ABI parity, storage-layout
-review, and deployment/reactivation checks are complete.
+review, and deployment/reactivation checks are complete. The monolithic `core`
+crate is a semantic parity harness; production deployment should use split
+Stylus contracts such as `runtime_adapter/` and `pool_adapter/`.
