@@ -93,6 +93,22 @@ impl TokenRiskAdapter {
         (flags, safe)
     }
 
+    pub fn assess_batch_with_reasons(
+        &self,
+        tokens: Vec<Address>,
+    ) -> (Vec<U256>, Vec<bool>, Vec<Vec<String>>) {
+        let mut flags = Vec::with_capacity(tokens.len());
+        let mut safe = Vec::with_capacity(tokens.len());
+        let mut reasons = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let verdict = self.assess(token);
+            flags.push(verdict.flags);
+            safe.push(verdict.is_safe);
+            reasons.push(reason_strings(&verdict.reasons));
+        }
+        (flags, safe, reasons)
+    }
+
     pub fn update_cache(&mut self, token: Address) -> (U256, bool) {
         let verdict = self.assess(token);
         self.cached_risk.insert(token, verdict.flags);
@@ -211,10 +227,7 @@ fn decode_abi_bool(data: &[u8]) -> Option<bool> {
 }
 
 fn reason_strings(reasons: &[token_risk_filter::RiskReason]) -> Vec<String> {
-    reasons
-        .iter()
-        .map(|reason| String::from(token_risk_filter::reason_label(*reason)))
-        .collect()
+    reasons.iter().map(|reason| reason.to_label()).collect()
 }
 
 fn push_address_word(out: &mut Vec<u8>, value: Address) {
@@ -269,13 +282,43 @@ mod tests {
             vec![
                 String::from("token_has_no_code"),
                 String::from("transfer_failed_or_tax"),
+                String::from("has_blacklist_function"),
                 String::from("transfers_are_paused"),
             ],
             reason_strings(&[
                 token_risk_filter::RiskReason::TokenHasNoCode,
                 token_risk_filter::RiskReason::TransferFailedOrTax,
+                token_risk_filter::RiskReason::HasBlacklistFunction,
                 token_risk_filter::RiskReason::TransfersArePaused,
             ])
+        );
+    }
+
+    #[test]
+    fn batch_reason_strings_preserve_per_token_grouping() {
+        let reason_groups = [
+            vec![token_risk_filter::RiskReason::TokenHasNoCode],
+            vec![
+                token_risk_filter::RiskReason::TransferSimulationUnavailable,
+                token_risk_filter::RiskReason::HasBlacklistFunction,
+            ],
+            Vec::new(),
+        ];
+        let rendered: Vec<Vec<String>> = reason_groups
+            .iter()
+            .map(|group| reason_strings(group))
+            .collect();
+
+        assert_eq!(
+            vec![
+                vec![String::from("token_has_no_code")],
+                vec![
+                    String::from("transfer_simulation_unavailable"),
+                    String::from("has_blacklist_function"),
+                ],
+                Vec::<String>::new(),
+            ],
+            rendered
         );
     }
 }

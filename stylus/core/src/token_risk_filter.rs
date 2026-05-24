@@ -1,4 +1,7 @@
-use alloc::vec::Vec;
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use alloy_primitives::address;
 use stylus_sdk::alloy_primitives::{Address, U256};
@@ -48,16 +51,28 @@ pub enum RiskReason {
     TransfersArePaused,
 }
 
+impl RiskReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TokenHasNoCode => "token_has_no_code",
+            Self::TransferSimulationUnavailable => "transfer_simulation_unavailable",
+            Self::TransferFailedOrTax => "transfer_failed_or_tax",
+            Self::TransferReturnMalformed => "transfer_return_malformed",
+            Self::HasBlacklistFunction => "has_blacklist_function",
+            Self::TransfersArePaused => "transfers_are_paused",
+        }
+    }
+
+    #[must_use]
+    pub fn to_label(self) -> String {
+        self.as_str().to_string()
+    }
+}
+
 #[must_use]
 pub const fn reason_label(reason: RiskReason) -> &'static str {
-    match reason {
-        RiskReason::TokenHasNoCode => "token_has_no_code",
-        RiskReason::TransferSimulationUnavailable => "transfer_simulation_unavailable",
-        RiskReason::TransferFailedOrTax => "transfer_failed_or_tax",
-        RiskReason::TransferReturnMalformed => "transfer_return_malformed",
-        RiskReason::HasBlacklistFunction => "has_blacklist_function",
-        RiskReason::TransfersArePaused => "transfers_are_paused",
-    }
+    reason.as_str()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
