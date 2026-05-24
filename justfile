@@ -83,6 +83,7 @@ lint: lint-rust lint-stylus
 format: 
     cargo fmt --manifest-path rust/Cargo.toml
     cargo fmt --manifest-path stylus/core/Cargo.toml
+    cargo fmt --manifest-path stylus/lp_transfer_adapter/Cargo.toml
     cargo fmt --manifest-path stylus/pool_adapter/Cargo.toml
     cargo fmt --manifest-path stylus/runtime_adapter/Cargo.toml
     cargo fmt --manifest-path stylus/token_risk_adapter/Cargo.toml
@@ -101,9 +102,11 @@ ci-stylus: lint-stylus test-stylus
 # Check deployable Stylus artifacts against an Arbitrum endpoint.
 stylus-check endpoint="https://arb1.arbitrum.io/rpc":
     cargo build --manifest-path stylus/runtime_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
+    cargo build --manifest-path stylus/lp_transfer_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
     cargo build --manifest-path stylus/pool_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
     cargo build --manifest-path stylus/token_risk_adapter/Cargo.toml --release --target wasm32-unknown-unknown --locked --offline
     cd stylus/runtime_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_runtime_adapter.wasm
+    cd stylus/lp_transfer_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_lp_transfer_adapter.wasm
     cd stylus/pool_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_pool_adapter.wasm
     cd stylus/token_risk_adapter && cargo stylus check --endpoint {{endpoint}} --wasm-file ../target/wasm32-unknown-unknown/release/degenbot_token_risk_adapter.wasm
 

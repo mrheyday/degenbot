@@ -619,6 +619,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "degenbot-lp-transfer-adapter"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-type-parser",
+ "alloy-sol-types",
+ "stylus-core",
+ "stylus-proc",
+ "stylus-sdk",
+]
+
+[[package]]
 name = "degenbot-pool-adapter"
 version = "0.1.0"
 dependencies = [

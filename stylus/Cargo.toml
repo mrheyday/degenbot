@@ -1,5 +1,11 @@
 [workspace]
-members = ["core", "pool_adapter", "runtime_adapter", "token_risk_adapter"]
+members = [
+    "core",
+    "lp_transfer_adapter",
+    "pool_adapter",
+    "runtime_adapter",
+    "token_risk_adapter",
+]
 resolver = "2"
 
 [profile.release]

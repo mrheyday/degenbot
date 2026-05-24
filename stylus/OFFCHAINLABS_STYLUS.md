@@ -15,8 +15,8 @@ vendored dependencies.
 
 ## Local Compatibility Baseline
 
-- `stylus/core/Cargo.toml`, `stylus/pool_adapter/Cargo.toml`, and
-  `stylus/runtime_adapter/Cargo.toml`, and
+- `stylus/core/Cargo.toml`, `stylus/lp_transfer_adapter/Cargo.toml`,
+  `stylus/pool_adapter/Cargo.toml`, `stylus/runtime_adapter/Cargo.toml`, and
   `stylus/token_risk_adapter/Cargo.toml` currently pin `stylus-sdk`,
   `stylus-core`, and `stylus-proc` to `0.10.7`. Native unit tests use the
   local `native-test` feature instead of `stylus-test`/`stylus-tools` so the

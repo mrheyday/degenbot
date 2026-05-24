@@ -167,6 +167,14 @@ pub const SWAPPER_SOURCES: &[&str] = &["contracts/src/swappers/MultiHopCaller.so
 pub const SWAPPER_SEMANTIC_FRAGMENT_SOURCES: &[&str] =
     &["contracts/src/swappers/MultiHopCaller.sol"];
 
+pub const RUNTIME_ADAPTER_PROOF_SOURCES: &[&str] = &[
+    "contracts/src/executors/AtomicExecutor.sol",
+    "contracts/src/executors/Executor.sol",
+    "contracts/src/executors/LiquidationExecutor.sol",
+    "contracts/src/libraries/LpTransferLib.sol",
+    "contracts/src/libraries/TokenRiskFilter.sol",
+];
+
 pub const SOURCE_COUNT: usize = TOP_LEVEL_SOURCES.len()
     + AUTH_SOURCES.len()
     + EXECUTOR_SOURCES.len()
@@ -213,7 +221,7 @@ pub fn status_count(status: MigrationStatus) -> usize {
                 + SWAPPER_SOURCES.len()
                 + 1
         }
-        MigrationStatus::RuntimeAdapterProofPorted => EXECUTOR_SOURCES.len(),
+        MigrationStatus::RuntimeAdapterProofPorted => RUNTIME_ADAPTER_PROOF_SOURCES.len(),
     }
 }
 
@@ -269,6 +277,6 @@ mod tests {
         assert_eq!(16, status_count(MigrationStatus::AbiParityPorted));
         assert_eq!(38, status_count(MigrationStatus::PureSemanticPorted));
         assert_eq!(32, status_count(MigrationStatus::RuntimePortRequired));
-        assert_eq!(3, status_count(MigrationStatus::RuntimeAdapterProofPorted));
+        assert_eq!(5, status_count(MigrationStatus::RuntimeAdapterProofPorted));
     }
 }

@@ -12,7 +12,7 @@ This directory is degenbot's Stylus migration target. Ports here must compile wi
 their ABI and behavior are proven against the Solidity source they replace.
 The oversized `core` crate is the semantic parity harness; deployable surfaces
 are split into activation-sized contracts such as `runtime_adapter/`,
-`token_risk_adapter/`, and `pool_adapter/`.
+`lp_transfer_adapter/`, `token_risk_adapter/`, and `pool_adapter/`.
 
 ## Ported Now
 
@@ -48,6 +48,11 @@ are split into activation-sized contracts such as `runtime_adapter/`,
 - `interfaces/IPathFinder.sol` `Route` return ABI encoding for `(address[] path, uint8[] venues, uint24[] fees, uint256 amountOut)` -> `core::interface_surfaces`
 - `libraries/LibUniswap.sol` -> `core::lib_uniswap`
 - `libraries/LpTransferLib.sol` kind tags, selector constants, zero-parameter validation, and byte-exact forwarding payload builders -> `core::lp_transfer_lib`
+- `libraries/LpTransferLib.sol` runtime Stylus adapter: guarded ERC-20 LP
+  transfer, ERC-721 LP NFT `safeTransferFrom`, ERC-6909 claim transfer,
+  ERC-6909 operator updates, no-code target rejection, and deterministic
+  revert/false/malformed-return normalization -> deployable
+  `lp_transfer_adapter/`
 - `libraries/MegaMEVOptimizationLib.sol` CLZ/CTZ, bit-length, power-of-two, sqrt, full-precision `fullMulDiv`/`fullMulDivUp`-style fixed-point helpers, and reserve-shape heuristics -> `core::mega_mev_optimization`
 - `libraries/RouterRegistry.sol` -> `core::router_registry`
 - `libraries/SingletonArrays.sol` -> `core::singleton_arrays`
@@ -96,7 +101,6 @@ are split into activation-sized contracts such as `runtime_adapter/`,
   the pure `swapper_semantics` fragment
 - remaining executor/callback host calls and string-heavy dynamic codecs
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
-- `libraries/LpTransferLib.sol` runtime ERC-20/ERC-721/ERC-6909 calls and return-value/revert normalization
 - `libraries/TokenRiskFilter.sol` exact dynamic `string[] reasons` return ABI;
   the deployable Stylus adapter exposes deterministic flags and safety booleans
   for execution gating and keeps string diagnostics out of the hot path.

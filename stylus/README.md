@@ -14,6 +14,11 @@ the MEV-Arbitrum integration:
   adapter proof surface. It reuses `core::runtime_adapter` and stays below the
   single-contract activation limit instead of relying on fragmented deployment
   support for the monolithic semantic core.
+- `lp_transfer_adapter/` is the deployable Stylus contract for LP transfer
+  runtime normalization. It reuses `core::lp_transfer_lib`, calls ERC-20,
+  ERC-721, and ERC-6909 targets with bounded return data, rejects no-code
+  targets, and exposes deterministic status codes for revert, false-return,
+  and malformed-return cases.
 - `token_risk_adapter/` is the deployable Stylus contract for defensive token
   risk checks. It reuses `core::token_risk_filter`, performs bounded
   `staticcall` probes, and stores cache flags/timestamps in Stylus storage.
@@ -33,4 +38,5 @@ just stylus-check
 Contracts here are not production replacements until ABI parity, storage-layout
 review, and deployment/reactivation checks are complete. The monolithic `core`
 crate is a semantic parity harness; production deployment should use split
-Stylus contracts such as `runtime_adapter/` and `pool_adapter/`.
+Stylus contracts such as `runtime_adapter/`, `lp_transfer_adapter/`,
+`token_risk_adapter/`, and `pool_adapter/`.
