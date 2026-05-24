@@ -78,7 +78,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, trace};
 
 use crate::monitor::sequencer_broadcast::BroadcastFeedMessage;
-use crate::Message;
+use crate::monitor::Message;
 
 // =============================================================================
 // L2 message kinds (Nitro `arbstate/parse_l2.go`)

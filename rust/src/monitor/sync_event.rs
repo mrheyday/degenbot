@@ -18,7 +18,7 @@ use alloy::rpc::types::eth::Log;
 use alloy::sol_types::SolEvent;
 use eyre::Result;
 
-use crate::{PoolState, Reserves};
+use crate::monitor::{PoolState, Reserves};
 
 // The V4 `Swap` event carries 8 fields; the sol!-generated constructor
 // trips `too_many_arguments` on generated code we don't control, so the

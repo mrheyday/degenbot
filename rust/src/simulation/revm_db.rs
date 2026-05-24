@@ -23,7 +23,7 @@ use revm::{
     Context, ExecuteEvm, MainBuilder, MainContext,
 };
 
-use crate::PoolState;
+use crate::monitor::PoolState;
 
 /// Type-erased Alloy provider used by the REVM database backend.
 pub type RevmProvider = DynProvider<Ethereum>;
