@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use stylus_sdk::alloy_primitives::{Address, U256};
@@ -70,6 +71,15 @@ impl TokenRiskAdapter {
     pub fn assess_external(&self, token: Address) -> (U256, bool) {
         let verdict = self.assess(token);
         (verdict.flags, verdict.is_safe)
+    }
+
+    pub fn assess_external_with_reasons(&self, token: Address) -> (U256, bool, Vec<String>) {
+        let verdict = self.assess(token);
+        (
+            verdict.flags,
+            verdict.is_safe,
+            reason_strings(&verdict.reasons),
+        )
     }
 
     pub fn assess_batch(&self, tokens: Vec<Address>) -> (Vec<U256>, Vec<bool>) {
@@ -200,6 +210,13 @@ fn decode_abi_bool(data: &[u8]) -> Option<bool> {
     }
 }
 
+fn reason_strings(reasons: &[token_risk_filter::RiskReason]) -> Vec<String> {
+    reasons
+        .iter()
+        .map(|reason| String::from(token_risk_filter::reason_label(*reason)))
+        .collect()
+}
+
 fn push_address_word(out: &mut Vec<u8>, value: Address) {
     out.extend_from_slice(&[0_u8; 12]);
     out.extend_from_slice(value.as_slice());
@@ -244,5 +261,21 @@ mod tests {
         assert_eq!(Some(true), decode_abi_bool(&bool_word));
         bool_word[31] = 2;
         assert_eq!(None, decode_abi_bool(&bool_word));
+    }
+
+    #[test]
+    fn reason_strings_match_solidity_literals() {
+        assert_eq!(
+            vec![
+                String::from("token_has_no_code"),
+                String::from("transfer_failed_or_tax"),
+                String::from("transfers_are_paused"),
+            ],
+            reason_strings(&[
+                token_risk_filter::RiskReason::TokenHasNoCode,
+                token_risk_filter::RiskReason::TransferFailedOrTax,
+                token_risk_filter::RiskReason::TransfersArePaused,
+            ])
+        );
     }
 }

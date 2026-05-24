@@ -48,6 +48,18 @@ pub enum RiskReason {
     TransfersArePaused,
 }
 
+#[must_use]
+pub const fn reason_label(reason: RiskReason) -> &'static str {
+    match reason {
+        RiskReason::TokenHasNoCode => "token_has_no_code",
+        RiskReason::TransferSimulationUnavailable => "transfer_simulation_unavailable",
+        RiskReason::TransferFailedOrTax => "transfer_failed_or_tax",
+        RiskReason::TransferReturnMalformed => "transfer_return_malformed",
+        RiskReason::HasBlacklistFunction => "has_blacklist_function",
+        RiskReason::TransfersArePaused => "transfers_are_paused",
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferProbe {
     Unavailable,
