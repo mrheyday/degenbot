@@ -14,6 +14,9 @@ the MEV-Arbitrum integration:
   adapter proof surface. It reuses `core::runtime_adapter` and stays below the
   single-contract activation limit instead of relying on fragmented deployment
   support for the monolithic semantic core.
+- `token_risk_adapter/` is the deployable Stylus contract for defensive token
+  risk checks. It reuses `core::token_risk_filter`, performs bounded
+  `staticcall` probes, and stores cache flags/timestamps in Stylus storage.
 
 Run the local proof suite with:
 

@@ -655,6 +655,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "degenbot-token-risk-adapter"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-type-parser",
+ "alloy-sol-types",
+ "stylus-core",
+ "stylus-proc",
+ "stylus-sdk",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

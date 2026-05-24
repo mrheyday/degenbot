@@ -16,10 +16,11 @@ vendored dependencies.
 ## Local Compatibility Baseline
 
 - `stylus/core/Cargo.toml`, `stylus/pool_adapter/Cargo.toml`, and
-  `stylus/runtime_adapter/Cargo.toml` currently pin `stylus-sdk`,
-  `stylus-core`, and `stylus-proc` to `0.10.7`. Native unit tests use the local
-  `native-test` feature instead of `stylus-test`/`stylus-tools` so the Stylus
-  lockfile does not pull the off-chain Alloy provider/RPC graph.
+  `stylus/runtime_adapter/Cargo.toml`, and
+  `stylus/token_risk_adapter/Cargo.toml` currently pin `stylus-sdk`,
+  `stylus-core`, and `stylus-proc` to `0.10.7`. Native unit tests use the
+  local `native-test` feature instead of `stylus-test`/`stylus-tools` so the
+  Stylus lockfile does not pull the off-chain Alloy provider/RPC graph.
 - `stylus/core/rust-toolchain.toml` requires the
   `wasm32-unknown-unknown` target.
 - `stylus/tools/wasm-inspect.sh --probe` checks `cargo-stylus`

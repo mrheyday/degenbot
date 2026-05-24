@@ -11,8 +11,8 @@ This directory is degenbot's Stylus migration target. Ports here must compile wi
 `cargo stylus check` and must not be treated as executable replacements until
 their ABI and behavior are proven against the Solidity source they replace.
 The oversized `core` crate is the semantic parity harness; deployable surfaces
-are split into activation-sized contracts such as `runtime_adapter/` and
-`pool_adapter/`.
+are split into activation-sized contracts such as `runtime_adapter/`,
+`token_risk_adapter/`, and `pool_adapter/`.
 
 ## Ported Now
 
@@ -53,6 +53,10 @@ are split into activation-sized contracts such as `runtime_adapter/` and
 - `libraries/SingletonArrays.sol` -> `core::singleton_arrays`
 - `libraries/StepMerging.sol` pure route-merge algorithm -> `core::step_merging`
 - `libraries/TokenRiskFilter.sol` flag namespace, Arbitrum major-token whitelist, and deterministic probe-result reducer -> `core::token_risk_filter`
+- `libraries/TokenRiskFilter.sol` live Stylus token-risk adapter: major-token
+  fast path, code-size fail-closed check, bounded `owner()`, `transfer`,
+  blacklist-selector, and `paused()` static probes, cache storage, freshness
+  checks, and batch flags/safety ABI -> deployable `token_risk_adapter/`
 - `libraries/TokenStandardIds.sol` -> `core::token_standard_ids`
 - `libraries/TransientStorage.sol` slot namespace -> `core::transient_slots`
 - `libraries/TransientReentrancy.sol` flow-kind slot namespace -> `core::transient_slots`
@@ -93,7 +97,9 @@ are split into activation-sized contracts such as `runtime_adapter/` and
 - remaining executor/callback host calls and string-heavy dynamic codecs
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
 - `libraries/LpTransferLib.sol` runtime ERC-20/ERC-721/ERC-6909 calls and return-value/revert normalization
-- `libraries/TokenRiskFilter.sol` live token `staticcall` probes, cache storage, cache timestamp freshness, and external batch/cache ABI
+- `libraries/TokenRiskFilter.sol` exact dynamic `string[] reasons` return ABI;
+  the deployable Stylus adapter exposes deterministic flags and safety booleans
+  for execution gating and keeps string diagnostics out of the hot path.
 - EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
   `TransientReentrancy`; slot constants and runtime proof semantics are covered,
   but actual Stylus host writes are not yet a replacement deployment.
