@@ -21,9 +21,10 @@ the MEV-Arbitrum integration:
   and malformed-return cases.
 - `token_risk_adapter/` is the deployable Stylus contract for defensive token
   risk checks. It reuses `core::token_risk_filter`, performs bounded
-  `staticcall` probes, stores cache flags/timestamps in Stylus storage, and
-  exposes exact single-token `string[]` and batch `string[][]` reason
-  diagnostics for operator inspection.
+  `staticcall` probes, stores cache flags/timestamps in Stylus storage, exposes
+  Solidity-parity `RiskVerdict`/`RiskVerdict[]` returns for
+  `assessExternal`, `assessBatch`, and `updateCache`, and keeps explicit
+  flags/safety helper ABIs for hot execution gates.
 
 Run the local proof suite with:
 

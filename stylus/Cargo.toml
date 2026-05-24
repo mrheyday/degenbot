@@ -14,3 +14,6 @@ strip = true
 lto = true
 panic = "abort"
 opt-level = 3
+
+[patch.crates-io]
+proc-macro-error2 = { path = "../rust/vendor/proc-macro-error2" }

@@ -61,8 +61,10 @@ are split into activation-sized contracts such as `runtime_adapter/`,
 - `libraries/TokenRiskFilter.sol` live Stylus token-risk adapter: major-token
   fast path, code-size fail-closed check, bounded `owner()`, `transfer`,
   blacklist-selector, and `paused()` static probes, cache storage, freshness
-  checks, batch flags/safety ABI, exact single-token dynamic `string[]` reason
-  diagnostics, and exact batch `string[][]` reason diagnostics -> deployable
+  checks, exact `RiskVerdict`/`RiskVerdict[]` return ABI for
+  `assessExternal`, `assessBatch`, and `updateCache`, batch flags/safety
+  helper ABI, exact single-token dynamic `string[]` reason diagnostics, and
+  exact batch `string[][]` reason diagnostics -> deployable
   `token_risk_adapter/`
 - `libraries/TokenStandardIds.sol` -> `core::token_standard_ids`
 - `libraries/TransientStorage.sol` slot namespace -> `core::transient_slots`
@@ -103,10 +105,6 @@ are split into activation-sized contracts such as `runtime_adapter/`,
   the pure `swapper_semantics` fragment
 - remaining executor/callback host calls and string-heavy dynamic codecs
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
-- `libraries/TokenRiskFilter.sol` exact Solidity `RiskVerdict[]` struct-array
-  return shape; the deployable Stylus adapter exposes execution-safe parallel
-  flags/safety arrays plus exact single-token `string[]` and batch `string[][]`
-  diagnostics for operator inspection.
 - EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
   `TransientReentrancy`; slot constants and runtime proof semantics are covered,
   but actual Stylus host writes are not yet a replacement deployment.

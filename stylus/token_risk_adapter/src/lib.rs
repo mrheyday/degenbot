@@ -10,6 +10,10 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+#[cfg(not(any(test, feature = "native-test")))]
+use alloy_sol_types::sol;
+#[cfg(not(any(test, feature = "native-test")))]
+use stylus_proc::AbiType;
 use stylus_sdk::alloy_primitives::{Address, U256};
 
 #[path = "../../core/src/token_risk_filter.rs"]
@@ -35,6 +39,16 @@ const BLACKLIST_SELECTOR: [u8; 4] = [0x8e, 0xcf, 0xd9, 0xa7];
 #[cfg(not(any(test, feature = "native-test")))]
 const PAUSED_SELECTOR: [u8; 4] = [0x5c, 0x97, 0x5a, 0xbb];
 const TRANSFER_PROBE_AMOUNT: u128 = 1_000_000_000_000_000_000;
+
+#[cfg(not(any(test, feature = "native-test")))]
+sol! {
+    #[derive(Debug, PartialEq, AbiType)]
+    struct RiskVerdict {
+        uint256 flags;
+        bool isSafe;
+        string[] reasons;
+    }
+}
 
 #[cfg(not(any(test, feature = "native-test")))]
 sol_storage! {
@@ -68,7 +82,11 @@ impl TokenRiskAdapter {
         token_risk_filter::is_safe_flags(flags)
     }
 
-    pub fn assess_external(&self, token: Address) -> (U256, bool) {
+    pub fn assess_external(&self, token: Address) -> RiskVerdict {
+        to_abi_verdict(self.assess(token))
+    }
+
+    pub fn assess_external_flags(&self, token: Address) -> (U256, bool) {
         let verdict = self.assess(token);
         (verdict.flags, verdict.is_safe)
     }
@@ -82,7 +100,15 @@ impl TokenRiskAdapter {
         )
     }
 
-    pub fn assess_batch(&self, tokens: Vec<Address>) -> (Vec<U256>, Vec<bool>) {
+    pub fn assess_batch(&self, tokens: Vec<Address>) -> Vec<RiskVerdict> {
+        let mut verdicts = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            verdicts.push(to_abi_verdict(self.assess(token)));
+        }
+        verdicts
+    }
+
+    pub fn assess_batch_flags(&self, tokens: Vec<Address>) -> (Vec<U256>, Vec<bool>) {
         let mut flags = Vec::with_capacity(tokens.len());
         let mut safe = Vec::with_capacity(tokens.len());
         for token in tokens {
@@ -109,7 +135,15 @@ impl TokenRiskAdapter {
         (flags, safe, reasons)
     }
 
-    pub fn update_cache(&mut self, token: Address) -> (U256, bool) {
+    pub fn update_cache(&mut self, token: Address) -> RiskVerdict {
+        let verdict = self.assess(token);
+        self.cached_risk.insert(token, verdict.flags);
+        self.cache_timestamp
+            .insert(token, U256::from(self.vm().block_timestamp()));
+        to_abi_verdict(verdict)
+    }
+
+    pub fn update_cache_flags(&mut self, token: Address) -> (U256, bool) {
         let verdict = self.assess(token);
         self.cached_risk.insert(token, verdict.flags);
         self.cache_timestamp
@@ -197,6 +231,15 @@ impl TokenRiskAdapter {
                 .limit_return_data(0, 32)
                 .call(token, calldata)
         }
+    }
+}
+
+#[cfg(not(any(test, feature = "native-test")))]
+fn to_abi_verdict(verdict: token_risk_filter::RiskVerdict) -> RiskVerdict {
+    RiskVerdict {
+        flags: verdict.flags,
+        isSafe: verdict.is_safe,
+        reasons: reason_strings(&verdict.reasons),
     }
 }
 
