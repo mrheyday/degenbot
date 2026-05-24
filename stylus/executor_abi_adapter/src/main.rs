@@ -12,5 +12,5 @@ fn main() {}
 
 #[cfg(all(feature = "export-abi", not(feature = "native-test")))]
 fn main() {
-    degenbot_pool_adapter::print_from_args();
+    degenbot_executor_abi_adapter::print_from_args();
 }

@@ -7,10 +7,10 @@
 #[unsafe(no_mangle)]
 pub extern "C" fn main() {}
 
-#[cfg(all(feature = "native-test", not(feature = "export-abi")))]
+#[cfg(feature = "native-test")]
 fn main() {}
 
-#[cfg(feature = "export-abi")]
+#[cfg(all(feature = "export-abi", not(feature = "native-test")))]
 fn main() {
     degenbot_token_risk_adapter::print_from_args();
 }

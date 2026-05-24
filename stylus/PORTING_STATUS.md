@@ -12,7 +12,8 @@ This directory is degenbot's Stylus migration target. Ports here must compile wi
 their ABI and behavior are proven against the Solidity source they replace.
 The oversized `core` crate is the semantic parity harness; deployable surfaces
 are split into activation-sized contracts such as `runtime_adapter/`,
-`lp_transfer_adapter/`, `token_risk_adapter/`, and `pool_adapter/`.
+`executor_abi_adapter/`, `lp_transfer_adapter/`, `token_risk_adapter/`, and
+`pool_adapter/`.
 
 ## Ported Now
 
@@ -38,6 +39,11 @@ are split into activation-sized contracts such as `runtime_adapter/`,
   `executeOwnedSwaps`, `matchInternal`, `composeFourLeg`, `executeUniswapXFill`,
   `triggerCoWFlashLoanRouter`, and UniswapX `reactorCallback` callback data ->
   `core::executor_abi`
+- `interfaces/IExecutor.sol` deployable dynamic calldata codec adapter: flat
+  ABI inputs for native arb, owned swaps, CoW/UniswapX matching, four-leg
+  composition, UniswapX fill/callback data, and CoW flash-loan-router start
+  payloads, with length-mismatch custom errors -> deployable
+  `executor_abi_adapter/`
 - `executors/Executor.sol`, `executors/AtomicExecutor.sol`, and
   `executors/LiquidationExecutor.sol` selector invariants, enum ordinals,
   deadline gates, flash-source gates, callback shape checks, swap-step static
@@ -103,7 +109,9 @@ are split into activation-sized contracts such as `runtime_adapter/`,
 - `swappers/MultiHopCaller.sol` Universal Router execution, Permit2 approvals,
   V2/V3/V4 quote calls, native rescue, and token-flow runtime behavior beyond
   the pure `swapper_semantics` fragment
-- remaining executor/callback host calls and string-heavy dynamic codecs
+- remaining executor/callback host calls; dynamic executor calldata codecs now
+  have a split deployable adapter, while host-level protocol calls remain
+  contract-specific promotion work.
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
 - EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
   `TransientReentrancy`; slot constants and runtime proof semantics are covered,

@@ -14,6 +14,11 @@ the MEV-Arbitrum integration:
   adapter proof surface. It reuses `core::runtime_adapter` and stays below the
   single-contract activation limit instead of relying on fragmented deployment
   support for the monolithic semantic core.
+- `executor_abi_adapter/` is the deployable Stylus contract for dynamic executor
+  calldata codecs. It exposes the already-proven `core::executor_abi` encoders
+  for native arb, owned swaps, CoW/UniswapX matching, four-leg composition,
+  UniswapX fill/callback data, and CoW flash-loan-router start payloads without
+  requiring the oversized semantic core to activate.
 - `lp_transfer_adapter/` is the deployable Stylus contract for LP transfer
   runtime normalization. It reuses `core::lp_transfer_lib`, calls ERC-20,
   ERC-721, and ERC-6909 targets with bounded return data, rejects no-code
@@ -42,4 +47,4 @@ Contracts here are not production replacements until ABI parity, storage-layout
 review, and deployment/reactivation checks are complete. The monolithic `core`
 crate is a semantic parity harness; production deployment should use split
 Stylus contracts such as `runtime_adapter/`, `lp_transfer_adapter/`,
-`token_risk_adapter/`, and `pool_adapter/`.
+`executor_abi_adapter/`, `token_risk_adapter/`, and `pool_adapter/`.

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core",
+    "executor_abi_adapter",
     "lp_transfer_adapter",
     "pool_adapter",
     "runtime_adapter",
