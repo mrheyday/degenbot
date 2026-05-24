@@ -64,6 +64,11 @@ their ABI and behavior are proven against the Solidity source they replace.
 - `swappers/MultiHopCaller.sol` Arbitrum token/pool constants, selector
   invariants, depth-floor checks, slippage math, and pre-external-call
   entrypoint guards -> `core::swapper_semantics`
+- Runtime execution-adapter proof for the live capital path: flash callback
+  sender/initiator/transient-plan authentication, borrowed-token settlement,
+  premium/min-profit accounting, idle-balance rejection, typed approval/call
+  allowlist gates, and receipt digest binding for the accepted off-chain
+  dispatch payload -> `core::runtime_adapter`
 - Stylus upgrade invariants -> `core::upgrade_policy`
 
 ## Not Yet Semantically Ported
@@ -71,20 +76,23 @@ their ABI and behavior are proven against the Solidity source they replace.
 - `auth/*` storage mutation, signature recovery/validator calls, ERC-4337
   EntryPoint calls, token custody, and runtime external-call behavior not
   covered by the `auth_semantics` and `account_semantics` fragments
-- `executors/*` runtime token-flow, EIP-1153 transient writes/reads, live
-  flash-loan callbacks, external protocol calls, approvals/transfers, and
-  balance/profit accounting beyond the static `executor_semantics` fragment
+- `executors/*` host-level external protocol calls, actual Stylus
+  `storage`/transient writes, ERC-20 approvals/transfers, and callback
+  entrypoint bodies are not yet deployed as live replacements. Their runtime
+  adapter invariants are now covered by `core::runtime_adapter`.
 - `poc/CometLiquidatorPOC.sol` runtime Balancer/Comet/SwapRouter token-flow
   behavior beyond static plan validation
 - `reverse/*`
 - `swappers/MultiHopCaller.sol` Universal Router execution, Permit2 approvals,
   V2/V3/V4 quote calls, native rescue, and token-flow runtime behavior beyond
   the pure `swapper_semantics` fragment
-- remaining executor/callback runtime calls and string-heavy dynamic codecs
+- remaining executor/callback host calls and string-heavy dynamic codecs
 - `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
 - `libraries/LpTransferLib.sol` runtime ERC-20/ERC-721/ERC-6909 calls and return-value/revert normalization
 - `libraries/TokenRiskFilter.sol` live token `staticcall` probes, cache storage, cache timestamp freshness, and external batch/cache ABI
-- EIP-1153 `tload`/`tstore` runtime behavior behind `TransientStorage` and `TransientReentrancy`
+- EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
+  `TransientReentrancy`; slot constants and runtime proof semantics are covered,
+  but actual Stylus host writes are not yet a replacement deployment.
 
 Those contracts include authorization, callback, transient-storage, token-flow,
 flash-loan, and external-protocol semantics. A mechanical rewrite without

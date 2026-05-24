@@ -41,6 +41,7 @@ pub enum MigrationStatus {
     AbiParityPorted = 1,
     PureSemanticPorted = 2,
     RuntimePortRequired = 3,
+    RuntimeAdapterProofPorted = 4,
 }
 
 impl MigrationStatus {
@@ -50,6 +51,7 @@ impl MigrationStatus {
             1 => Some(Self::AbiParityPorted),
             2 => Some(Self::PureSemanticPorted),
             3 => Some(Self::RuntimePortRequired),
+            4 => Some(Self::RuntimeAdapterProofPorted),
             _ => None,
         }
     }
@@ -211,6 +213,7 @@ pub fn status_count(status: MigrationStatus) -> usize {
                 + SWAPPER_SOURCES.len()
                 + 1
         }
+        MigrationStatus::RuntimeAdapterProofPorted => EXECUTOR_SOURCES.len(),
     }
 }
 
@@ -266,5 +269,6 @@ mod tests {
         assert_eq!(16, status_count(MigrationStatus::AbiParityPorted));
         assert_eq!(38, status_count(MigrationStatus::PureSemanticPorted));
         assert_eq!(32, status_count(MigrationStatus::RuntimePortRequired));
+        assert_eq!(3, status_count(MigrationStatus::RuntimeAdapterProofPorted));
     }
 }

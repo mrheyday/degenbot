@@ -19,6 +19,7 @@ pub mod lp_transfer_lib;
 pub mod mega_mev_optimization;
 pub mod poc_fail_closed;
 pub mod router_registry;
+pub mod runtime_adapter;
 pub mod singleton_arrays;
 pub mod step_merging;
 pub mod swapper_semantics;
@@ -867,6 +868,191 @@ impl DegenbotStylusCore {
                 carry,
             },
         )
+    }
+
+    pub fn runtime_lane_executor_aave_v3(&self) -> u8 {
+        runtime_adapter::RuntimeLane::ExecutorAaveV3 as u8
+    }
+
+    pub fn runtime_lane_executor_morpho_blue(&self) -> u8 {
+        runtime_adapter::RuntimeLane::ExecutorMorphoBlue as u8
+    }
+
+    pub fn runtime_lane_executor_erc3156(&self) -> u8 {
+        runtime_adapter::RuntimeLane::ExecutorErc3156 as u8
+    }
+
+    pub fn runtime_lane_executor_uniswap_v3(&self) -> u8 {
+        runtime_adapter::RuntimeLane::ExecutorUniswapV3 as u8
+    }
+
+    pub fn runtime_lane_atomic_balancer_v3(&self) -> u8 {
+        runtime_adapter::RuntimeLane::AtomicBalancerV3 as u8
+    }
+
+    pub fn runtime_lane_atomic_balancer_v2(&self) -> u8 {
+        runtime_adapter::RuntimeLane::AtomicBalancerV2 as u8
+    }
+
+    pub fn runtime_lane_atomic_aave_v3_simple(&self) -> u8 {
+        runtime_adapter::RuntimeLane::AtomicAaveV3Simple as u8
+    }
+
+    pub fn runtime_lane_uniswapx_reactor(&self) -> u8 {
+        runtime_adapter::RuntimeLane::UniswapXReactor as u8
+    }
+
+    pub fn runtime_lane_cow_flash_loan_router(&self) -> u8 {
+        runtime_adapter::RuntimeLane::CowFlashLoanRouter as u8
+    }
+
+    pub fn runtime_adapter_domain_separator(&self) -> FixedBytes<32> {
+        runtime_adapter::domain_separator()
+    }
+
+    pub fn runtime_callback_auth_code(
+        &self,
+        lane: u8,
+        msg_sender: Address,
+        expected_lender: Address,
+        expected_v3_pool: Address,
+        expected_reactor: Address,
+        initiator: Address,
+        executor: Address,
+        canonical_sender: Address,
+        active_plan_hash: FixedBytes<32>,
+        expected_plan_hash: FixedBytes<32>,
+        require_plan_hash: bool,
+    ) -> u8 {
+        runtime_adapter::error_code(runtime_adapter::validate_callback_auth(
+            runtime_adapter::CallbackAuthProof {
+                lane,
+                msg_sender,
+                expected_lender,
+                expected_v3_pool,
+                expected_reactor,
+                initiator,
+                executor,
+                canonical_sender,
+                active_plan_hash,
+                expected_plan_hash,
+                require_plan_hash,
+            },
+        ))
+    }
+
+    pub fn runtime_flash_settlement_code(
+        &self,
+        flash_token: Address,
+        callback_token: Address,
+        flash_amount: U256,
+        callback_amount: U256,
+        premium: U256,
+        balance_on_callback: U256,
+        balance_before_repay: U256,
+        min_profit: U256,
+        reject_idle_balance: bool,
+    ) -> u8 {
+        match runtime_adapter::validate_flash_settlement(runtime_adapter::FlashSettlementProof {
+            flash_token,
+            callback_token,
+            flash_amount,
+            callback_amount,
+            premium,
+            balance_on_callback,
+            balance_before_repay,
+            min_profit,
+            reject_idle_balance,
+        }) {
+            Ok(_) => 0,
+            Err(error) => error as u8,
+        }
+    }
+
+    pub fn runtime_flash_settlement_profit_or_zero(
+        &self,
+        flash_token: Address,
+        callback_token: Address,
+        flash_amount: U256,
+        callback_amount: U256,
+        premium: U256,
+        balance_on_callback: U256,
+        balance_before_repay: U256,
+        min_profit: U256,
+        reject_idle_balance: bool,
+    ) -> U256 {
+        runtime_adapter::settlement_profit_or_zero(runtime_adapter::FlashSettlementProof {
+            flash_token,
+            callback_token,
+            flash_amount,
+            callback_amount,
+            premium,
+            balance_on_callback,
+            balance_before_repay,
+            min_profit,
+            reject_idle_balance,
+        })
+    }
+
+    pub fn runtime_approval_code(
+        &self,
+        token: Address,
+        spender: Address,
+        spender_allowed: bool,
+    ) -> u8 {
+        runtime_adapter::error_code(runtime_adapter::validate_runtime_approval(
+            runtime_adapter::RuntimeApprovalProof {
+                token,
+                spender,
+                spender_allowed,
+            },
+        ))
+    }
+
+    pub fn runtime_call_code(
+        &self,
+        target: Address,
+        selector: FixedBytes<4>,
+        target_allowed: bool,
+        selector_allowed: bool,
+        value: U256,
+        native_value_limit: U256,
+    ) -> u8 {
+        let mut selector_bytes = [0_u8; 4];
+        selector_bytes.copy_from_slice(selector.as_slice());
+        runtime_adapter::error_code(runtime_adapter::validate_runtime_call(
+            runtime_adapter::RuntimeCallProof {
+                target,
+                selector: selector_bytes,
+                target_allowed,
+                selector_allowed,
+                value,
+                native_value_limit,
+            },
+        ))
+    }
+
+    pub fn runtime_execution_receipt_digest(
+        &self,
+        lane: u8,
+        flow_id: FixedBytes<32>,
+        plan_hash: FixedBytes<32>,
+        flash_token: Address,
+        flash_amount: U256,
+        premium: U256,
+        min_profit: U256,
+        profit: U256,
+    ) -> FixedBytes<32> {
+        runtime_adapter::execution_receipt_digest(runtime_adapter::ExecutionReceiptProof {
+            lane,
+            flow_id,
+            plan_hash,
+            flash_token,
+            flash_amount,
+            premium,
+            min_profit,
+            profit,
+        })
     }
 
     pub fn atomic_execute_selector(&self) -> FixedBytes<4> {
