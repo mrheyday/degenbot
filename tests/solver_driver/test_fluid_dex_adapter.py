@@ -57,8 +57,8 @@ class TestFluidPool:
             lending_position_token1_str="0",
             rebalance_threshold_bps=0,
         )
-        assert p.lending_position_token0 == Decimal("0")
-        assert p.lending_position_token1 == Decimal("0")
+        assert p.lending_position_token0 == Decimal(0)
+        assert p.lending_position_token1 == Decimal(0)
 
 
 class TestFluidDexClientLifecycle:

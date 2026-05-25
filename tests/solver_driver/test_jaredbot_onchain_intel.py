@@ -6,6 +6,7 @@ These are pure tests: no network, no explorer calls, no transaction signing.
 from __future__ import annotations
 
 import pytest
+
 from degenbot.intel.jaredbot_onchain import (
     JAREDBOT_ADDRESS_CLAIMS,
     build_eth_get_code_payloads,

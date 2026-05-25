@@ -137,7 +137,7 @@ class _Env:
 
 
 def _parse_block(raw: str) -> int:
-    if raw.startswith("0x") or raw.startswith("0X"):
+    if raw.startswith(("0x", "0X")):
         return int(raw, 16)
     return int(raw)
 
@@ -190,7 +190,9 @@ def pool_contract(web3_client: Web3, env: _Env) -> Contract:
     )
 
 
-def test_constants_view_decodes_and_matches_address_bundle(pool_contract: Contract, env: _Env) -> None:
+def test_constants_view_decodes_and_matches_address_bundle(
+    pool_contract: Contract, env: _Env
+) -> None:
     """`constantsView` must decode and the embedded `liquidity` and
     `factory` fields must match the pinned bundle. token0 / token1
     must be non-zero ERC20 addresses.
@@ -219,7 +221,9 @@ def test_constants_view_decodes_and_matches_address_bundle(pool_contract: Contra
     token1_cs = Web3.to_checksum_address(token1)
     assert token0_cs != _ZERO_ADDRESS, "token0 must be a non-zero ERC20"
     assert token1_cs != _ZERO_ADDRESS, "token1 must be a non-zero ERC20"
-    assert token0_cs.lower() != token1_cs.lower(), f"token0 == token1 ({token0_cs}); pool would be degenerate"
+    assert token0_cs.lower() != token1_cs.lower(), (
+        f"token0 == token1 ({token0_cs}); pool would be degenerate"
+    )
 
 
 def test_oracle_price_returns_positive_current_price(pool_contract: Contract, env: _Env) -> None:
@@ -228,6 +232,8 @@ def test_oracle_price_returns_positive_current_price(pool_contract: Contract, en
     plus exactly one (zero-window) TWAP entry. A zero `currentPrice_`
     would indicate a misconfigured pool or wrong block.
     """
-    twaps, current_price = pool_contract.functions.oraclePrice([0]).call(block_identifier=env.pin_block)
+    twaps, current_price = pool_contract.functions.oraclePrice([0]).call(
+        block_identifier=env.pin_block
+    )
     assert int(current_price) > 0, "currentPrice_ must be positive"
     assert len(twaps) == 1, "expected exactly one TWAP entry for one secondsAgos input"

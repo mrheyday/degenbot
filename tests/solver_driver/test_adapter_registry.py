@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 import re
+from itertools import starmap
 from pathlib import Path
+
+from degenbot.execution.degenbot_ipc import (
+    ADDRESS_KEYED_DEGENBOT_DEX_KINDS as IPC_ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
+)
+from degenbot.execution.degenbot_ipc import (
+    POOL_ID_REQUIRED_DEX_KINDS as IPC_POOL_ID_REQUIRED_DEX_KINDS,
+)
+from degenbot.execution.degenbot_ipc import RECOGNIZED_DEX_KINDS as IPC_RECOGNIZED_DEX_KINDS
 
 from degenbot.adapters import (
     ALL_ADAPTERS,
@@ -27,13 +36,18 @@ from degenbot.adapters.ipc import (
     POOL_ID_REQUIRED_DEX_KINDS,
     RECOGNIZED_DEX_KINDS,
 )
-from degenbot.execution.degenbot_ipc import (
-    ADDRESS_KEYED_DEGENBOT_DEX_KINDS as IPC_ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
-)
-from degenbot.execution.degenbot_ipc import POOL_ID_REQUIRED_DEX_KINDS as IPC_POOL_ID_REQUIRED_DEX_KINDS
-from degenbot.execution.degenbot_ipc import RECOGNIZED_DEX_KINDS as IPC_RECOGNIZED_DEX_KINDS
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _find_root():
+    current = Path(__file__).resolve().parent
+    while current.parent != current:
+        if (current / "PROGRESS.md").exists():
+            return current
+        current = current.parent
+    return Path(__file__).resolve().parents[4]
+
+
+REPO_ROOT = _find_root()
 TS_REGISTRY = REPO_ROOT / "coordinator/src/router/registry.ts"
 
 
@@ -109,8 +123,12 @@ def test_enabled_adapters_have_contract_bindings_and_sourcify_urls() -> None:
     for adapter in adapters_by_status(AdapterStatus.ENABLED):
         assert adapter.contracts, adapter.venue
         for contract in adapter.contracts:
-            assert contract.source_ref == f"coordinator/src/router/registry.ts:{contract.export_name}"
-            assert contract.sourcify_url.startswith("https://sourcify.dev/server/v2/contract/42161/0x")
+            assert (
+                contract.source_ref == f"coordinator/src/router/registry.ts:{contract.export_name}"
+            )
+            assert contract.sourcify_url.startswith(
+                "https://sourcify.dev/server/v2/contract/42161/0x"
+            )
 
 
 def test_reference_only_adapters_do_not_become_execution_enabled() -> None:
@@ -225,7 +243,9 @@ def test_execution_lane_adapter_keys_resolve_to_registered_adapters() -> None:
 
     for lane in EXECUTION_LANES:
         for adapter_key in lane.adapter_keys:
-            assert adapter_key in adapter_keys, f"{lane.lane.value} references missing {adapter_key}"
+            assert adapter_key in adapter_keys, (
+                f"{lane.lane.value} references missing {adapter_key}"
+            )
 
 
 def test_enabled_lanes_have_policy_gates_and_modules() -> None:
@@ -238,7 +258,7 @@ def test_enabled_lanes_have_policy_gates_and_modules() -> None:
 
 def test_universal_flash_lane_keeps_read_only_sources_from_auto_execution() -> None:
     lane = lane_for("universal_flash_aggregator_router")
-    lane_adapters = [adapter_for(category, venue) for category, venue in lane.adapter_keys]
+    lane_adapters = list(starmap(adapter_for, lane.adapter_keys))
 
     assert adapter_for("flash", "AaveV3Flash").enabled_for_execution
     assert adapter_for("flash", "MorphoFlash").enabled_for_execution
@@ -280,9 +300,15 @@ def test_balancer_readiness_promotes_universal_flash_adapter_surfaces() -> None:
     assert "not selectable by the generic Executor flash router" not in v3_flash.notes
     assert "pre-encoded calldata" in balancer_swap.notes
 
-    assert readiness_evidence_for_id("balancer-v2-flash-callback") in evidence_for_adapter("flash", "BalancerV2Flash")
-    assert readiness_evidence_for_id("balancer-v3-transient-unlock") in evidence_for_adapter("flash", "BalancerV3Flash")
-    assert readiness_evidence_for_id("balancer-v3-swap-preencoded-routing") in evidence_for_adapter("swap", "Balancer")
+    assert readiness_evidence_for_id("balancer-v2-flash-callback") in evidence_for_adapter(
+        "flash", "BalancerV2Flash"
+    )
+    assert readiness_evidence_for_id("balancer-v3-transient-unlock") in evidence_for_adapter(
+        "flash", "BalancerV3Flash"
+    )
+    assert readiness_evidence_for_id("balancer-v3-swap-preencoded-routing") in evidence_for_adapter(
+        "swap", "Balancer"
+    )
 
 
 def test_intent_and_liquidity_lanes_are_enabled_with_replay_and_unwind_gates() -> None:
@@ -292,13 +318,17 @@ def test_intent_and_liquidity_lanes_are_enabled_with_replay_and_unwind_gates() -
     assert intent.status is AdapterStatus.ENABLED
     assert "CoW chained-hash replay root" in intent.policy_gates
     assert "UniswapX reactor transient sender gate" in intent.policy_gates
-    assert readiness_evidence_for_id("intent-settlement-receiver-replay") in evidence_for_lane(intent.lane)
+    assert readiness_evidence_for_id("intent-settlement-receiver-replay") in evidence_for_lane(
+        intent.lane
+    )
 
     assert liquidity.status is AdapterStatus.ENABLED
     assert "per-token and per-pool exposure cap" in liquidity.policy_gates
     assert "same-transaction unwind or explicit TTL close plan" in liquidity.policy_gates
     assert "post-unwind inventory neutrality" in liquidity.policy_gates
-    assert readiness_evidence_for_id("universal-liquidity-mutation-policy") in evidence_for_lane(liquidity.lane)
+    assert readiness_evidence_for_id("universal-liquidity-mutation-policy") in evidence_for_lane(
+        liquidity.lane
+    )
 
 
 def test_jit_and_sandwich_lanes_are_enabled_with_scoped_execution_gates() -> None:
@@ -308,16 +338,23 @@ def test_jit_and_sandwich_lanes_are_enabled_with_scoped_execution_gates() -> Non
     assert jit.status is AdapterStatus.ENABLED
     assert jit.enabled_for_execution
     assert "flash-funded mint/swap/burn/collect envelope" in jit.policy_gates
-    assert "external trigger ordering proof when trigger source is not solver-owned" in jit.policy_gates
+    assert (
+        "external trigger ordering proof when trigger source is not solver-owned"
+        in jit.policy_gates
+    )
     assert "post-unwind inventory neutrality" in jit.policy_gates
-    assert readiness_evidence_for_id("jit-self-controlled-liquidity-lane") in evidence_for_lane(jit.lane)
+    assert readiness_evidence_for_id("jit-self-controlled-liquidity-lane") in evidence_for_lane(
+        jit.lane
+    )
 
     assert sandwich.status is AdapterStatus.ENABLED
     assert sandwich.enabled_for_execution
     assert "offensive variant enable map defaults on" in sandwich.policy_gates
     assert "flash-funded executeNativeArb envelope" in sandwich.policy_gates
     assert "single-transaction round trip" in sandwich.policy_gates
-    assert readiness_evidence_for_id("oracle-sandwich-execution-lane") in evidence_for_lane(sandwich.lane)
+    assert readiness_evidence_for_id("oracle-sandwich-execution-lane") in evidence_for_lane(
+        sandwich.lane
+    )
 
 
 def test_adapter_lane_plan_no_longer_has_unresolved_read_only_blockers() -> None:
@@ -332,7 +369,10 @@ def test_adapter_lane_plan_no_longer_has_unresolved_read_only_blockers() -> None
     assert "generic Executor flash source router still selects only providers" not in plan
     assert "Balancer V2 and V3 flash remain dedicated callback lanes" not in plan
     assert "The Executor does not implement Balancer pool math or a Balancer callback" not in plan
-    assert "CoW solver competition onboarding and bond operations remain operational readiness tasks" not in plan
+    assert (
+        "CoW solver competition onboarding and bond operations remain operational readiness tasks"
+        not in plan
+    )
     assert "Universal liquidity routing is not an autonomous LP manager" not in plan
     assert "External victim-trigger JIT still needs ordering proof" not in plan
     assert "Direct router calls and owned-inventory legs remain out of scope" not in plan

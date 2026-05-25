@@ -14,32 +14,38 @@ from degenbot.strategies_solver.strategy_intelligence import (
     profile_for_workflow,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
-DECISION_KINDS = frozenset(
-    {
-        "internal_match",
-        "four_leg",
-        "morpho_liquidation",
-        "native_arb",
-        "launch_sniper",
-        "cow_user_submit",
-        "across_fill",
-    }
-)
+def _find_root() -> Path:
+    current = Path(__file__).resolve().parent
+    while current.parent != current:
+        if (current / "PROGRESS.md").exists():
+            return current
+        current = current.parent
+    return Path(__file__).resolve().parents[3]
 
-LIVE_WORKFLOW_IDS = frozenset(
-    {
-        "native_arb",
-        "internal_match",
-        "four_leg",
-        "uniswapx_filler",
-        "liquidation",
-        "morpho_liquidation_decision",
-        "oracle_sandwich",
-        "d3_cow_quote",
-    }
-)
+
+REPO_ROOT = _find_root()
+
+DECISION_KINDS = frozenset({
+    "internal_match",
+    "four_leg",
+    "morpho_liquidation",
+    "native_arb",
+    "launch_sniper",
+    "cow_user_submit",
+    "across_fill",
+})
+
+LIVE_WORKFLOW_IDS = frozenset({
+    "native_arb",
+    "internal_match",
+    "four_leg",
+    "uniswapx_filler",
+    "liquidation",
+    "morpho_liquidation_decision",
+    "oracle_sandwich",
+    "d3_cow_quote",
+})
 
 
 def _path_from_ref(ref: str) -> Path:
@@ -84,7 +90,9 @@ def test_workflow_ids_are_unique_and_lookupable() -> None:
 
 
 def test_live_workflow_set_is_explicit() -> None:
-    assert {workflow.workflow_id for workflow in EXECUTION_WORKFLOWS if workflow.is_live} == LIVE_WORKFLOW_IDS
+    assert {
+        workflow.workflow_id for workflow in EXECUTION_WORKFLOWS if workflow.is_live
+    } == LIVE_WORKFLOW_IDS
 
 
 def test_all_decision_kinds_are_documented_without_claiming_gated_dispatch_is_live() -> None:
@@ -92,7 +100,7 @@ def test_all_decision_kinds_are_documented_without_claiming_gated_dispatch_is_li
         workflows = workflows_for_decision_kind(decision_kind)
 
         assert workflows, decision_kind
-        if decision_kind in {"launch_sniper"}:
+        if decision_kind == "launch_sniper":
             assert all(workflow.status is WorkflowStatus.GATED_EXPLICIT for workflow in workflows)
 
 
@@ -134,7 +142,9 @@ def test_gated_workflows_are_fail_loud_not_silent_stops() -> None:
             continue
 
         policy = workflow.no_silent_stop_policy.lower()
-        assert any(marker in policy for marker in ("log", "revert", "no decisionkind", "dispatcher")), (
+        assert any(
+            marker in policy for marker in ("log", "revert", "no decisionkind", "dispatcher")
+        ), (
             workflow.workflow_id,
             workflow.no_silent_stop_policy,
         )
@@ -149,7 +159,10 @@ def test_flash_callback_discriminators_are_documented() -> None:
     assert "strategy id 0" in workflow_for_id("oracle_sandwich").flash_callback_encoding
     assert "round" in workflow_for_id("cow_flash_router").flash_callback_encoding
     assert "uint8(1|2)" in workflow_for_id("cow_flash_router").flash_callback_encoding
-    assert "abi.encode(collateral, debt, borrower" in workflow_for_id("liquidation").flash_callback_encoding
+    assert (
+        "abi.encode(collateral, debt, borrower"
+        in workflow_for_id("liquidation").flash_callback_encoding
+    )
 
 
 def test_ordered_steps_are_contiguous_per_workflow() -> None:
@@ -191,7 +204,10 @@ def test_production_ready_profiles_have_no_blockers_and_gated_profiles_do() -> N
 
     for profile in STRATEGY_INTELLIGENCE_PROFILES:
         workflow = workflow_by_id[profile.workflow_id]
-        if workflow.status is WorkflowStatus.EXECUTABLE or workflow.status is WorkflowStatus.EXTERNAL_FORWARD:
+        if (
+            workflow.status is WorkflowStatus.EXECUTABLE
+            or workflow.status is WorkflowStatus.EXTERNAL_FORWARD
+        ):
             assert profile.blocker_status is BlockerStatus.NONE, profile.workflow_id
             assert profile.production_ready, profile.workflow_id
             continue

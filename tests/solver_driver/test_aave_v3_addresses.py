@@ -6,8 +6,9 @@ network access — just validates the literal strings.
 
 from __future__ import annotations
 
-from degenbot.execution import aave_v3_addresses as a
 from web3 import Web3
+
+from degenbot.execution import aave_v3_addresses as a
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     ("POOL", a.POOL),

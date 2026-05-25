@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+import contextlib
+
 import pytest
-from degenbot.config import DegenbotSettings
 from degenbot.execution.degenbot_ipc import (
     BotBestOpportunityRequest,
     DegenbotIpcServer,
@@ -33,12 +34,16 @@ from degenbot.execution.degenbot_ipc import (
     TokenPair,
 )
 
+from degenbot.config import DegenbotSettings
+
 
 class _FixedSimulator:
     def __init__(self, amount_out: int) -> None:
         self._amount_out = amount_out
 
-    def simulate_exact_input_path(self, path: tuple[SwapStep, ...], amount_in: int) -> SimulationResult:
+    def simulate_exact_input_path(
+        self, path: tuple[SwapStep, ...], amount_in: int
+    ) -> SimulationResult:
         return SimulationResult(amount_in=amount_in, amount_out=self._amount_out, path=path)
 
 
@@ -116,7 +121,8 @@ async def _ipc_smoke(socket_path: Path) -> dict[str, object]:
                 break
             await asyncio.sleep(0.05)
         else:
-            raise AssertionError("server did not bind socket within 1s")
+            msg = "server did not bind socket within 1s"
+            raise AssertionError(msg)
 
         reader, writer = await asyncio.open_unix_connection(str(socket_path))
         try:
@@ -128,10 +134,8 @@ async def _ipc_smoke(socket_path: Path) -> dict[str, object]:
         return _loads_object(line)
     finally:
         server_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await server_task
-        except asyncio.CancelledError:
-            pass
         # Clean up socket file
         if socket_path.exists():
             socket_path.unlink()
@@ -182,10 +186,8 @@ def test_server_handles_ping_control_message() -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -244,10 +246,8 @@ def test_server_simulate_returns_opportunity_when_simulator_succeeds() -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -316,10 +316,8 @@ def test_server_subscribe_streams_subscription_source_messages() -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -405,10 +403,8 @@ def test_server_best_opportunity_returns_opportunity_from_source() -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -450,10 +446,8 @@ def test_server_simulate_returns_bad_request_error_for_malformed_payload() -> No
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -491,10 +485,8 @@ def test_server_returns_error_for_unknown_control_kind() -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 
@@ -541,10 +533,8 @@ def test_server_rejects_malformed_inbound(bad_payload: bytes) -> None:
                 await writer.wait_closed()
         finally:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             if socket_path.exists():
                 socket_path.unlink()
 

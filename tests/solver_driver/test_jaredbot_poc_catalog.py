@@ -12,39 +12,43 @@ from degenbot.strategies_solver.jaredbot_poc_catalog import (
     workflow_required_pocs,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
-REQUESTED_SKILLS = frozenset(
-    {
-        "jaredbot-crypto-bot-security",
-        "jaredbot-defi-adjacent-context",
-        "jaredbot-mev-amm-economics",
-        "jaredbot-mev-bot-engineering",
-        "jaredbot-mev-flash-arbitrage",
-        "jaredbot-mev-frontrun",
-        "jaredbot-mev-jit-v4",
-        "jaredbot-mev-launch-sniper",
-        "jaredbot-mev-liquidations",
-        "jaredbot-mev-mempool-relay",
-        "jaredbot-mev-ostium-oracle-gap",
-        "jaredbot-mev-protection",
-    }
-)
+def _find_root():
+    current = Path(__file__).resolve().parent
+    while current.parent != current:
+        if (current / "PROGRESS.md").exists():
+            return current
+        current = current.parent
+    return Path(__file__).resolve().parents[4]
 
-EXPECTED_EXECUTABLE = frozenset(
-    {
-        "jaredbot-mev-flash-arbitrage",
-        "jaredbot-mev-liquidations",
-    }
-)
 
-EXPECTED_NEEDS_WORKFLOW = frozenset(
-    {
-        "jaredbot-mev-jit-v4",
-        "jaredbot-mev-launch-sniper",
-        "jaredbot-mev-ostium-oracle-gap",
-    }
-)
+REPO_ROOT = _find_root()
+
+REQUESTED_SKILLS = frozenset({
+    "jaredbot-crypto-bot-security",
+    "jaredbot-defi-adjacent-context",
+    "jaredbot-mev-amm-economics",
+    "jaredbot-mev-bot-engineering",
+    "jaredbot-mev-flash-arbitrage",
+    "jaredbot-mev-frontrun",
+    "jaredbot-mev-jit-v4",
+    "jaredbot-mev-launch-sniper",
+    "jaredbot-mev-liquidations",
+    "jaredbot-mev-mempool-relay",
+    "jaredbot-mev-ostium-oracle-gap",
+    "jaredbot-mev-protection",
+})
+
+EXPECTED_EXECUTABLE = frozenset({
+    "jaredbot-mev-flash-arbitrage",
+    "jaredbot-mev-liquidations",
+})
+
+EXPECTED_NEEDS_WORKFLOW = frozenset({
+    "jaredbot-mev-jit-v4",
+    "jaredbot-mev-launch-sniper",
+    "jaredbot-mev-ostium-oracle-gap",
+})
 
 
 def _path(ref: str) -> Path:
@@ -96,20 +100,26 @@ def test_only_existing_capital_moving_paths_are_marked_executable() -> None:
     for poc in executable_pocs():
         assert poc.status is PocStatus.EXECUTABLE
         assert poc.capital_mode is CapitalMode.LIVE_TX
-        joined_refs = " ".join(
-            (*poc.code_refs, *poc.proof_refs, *(ref for stage in poc.stages for ref in stage.code_refs))
-        )
+        joined_refs = " ".join((
+            *poc.code_refs,
+            *poc.proof_refs,
+            *(ref for stage in poc.stages for ref in stage.code_refs),
+        ))
         assert "contracts/" in joined_refs, poc.skill_name
         assert any("test" in ref for ref in poc.proof_refs), poc.skill_name
 
 
 def test_strategy_pocs_with_missing_components_require_workflows() -> None:
-    assert {poc.skill_name for poc in pocs_for_status(PocStatus.NEEDS_WORKFLOW)} == EXPECTED_NEEDS_WORKFLOW
+    assert {
+        poc.skill_name for poc in pocs_for_status(PocStatus.NEEDS_WORKFLOW)
+    } == EXPECTED_NEEDS_WORKFLOW
 
     for poc in pocs_for_status(PocStatus.NEEDS_WORKFLOW):
         assert poc.capital_mode is CapitalMode.WORKFLOW_REQUIRED
         requirement = poc.workflow_requirement.lower()
-        assert any(marker in requirement for marker in ("builder", "executor", "simulation", "tests")), (
+        assert any(
+            marker in requirement for marker in ("builder", "executor", "simulation", "tests")
+        ), (
             poc.skill_name,
             poc.workflow_requirement,
         )

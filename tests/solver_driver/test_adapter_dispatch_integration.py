@@ -20,13 +20,14 @@ from __future__ import annotations
 from fractions import Fraction
 
 import pytest
-from degenbot.registry import pool_registry
 from degenbot.execution.curve_ng_adapter import CurveNGPool
 from degenbot.execution.degenbot_ipc import (
     ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
     RECOGNIZED_DEX_KINDS,
 )
 from degenbot.execution.solidly_adapter import SolidlyV1Pool
+
+from degenbot.registry import pool_registry
 
 ARBITRUM_CHAIN_ID = 42161
 _USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
@@ -66,9 +67,7 @@ class TestSolidlyV1PoolSelfRegistration:
             stable=False,
         )
         # No chain_id → not registered → registry lookup returns None.
-        assert (
-            pool_registry.get(chain_id=ARBITRUM_CHAIN_ID, pool_address=pool_address) is None
-        )
+        assert pool_registry.get(chain_id=ARBITRUM_CHAIN_ID, pool_address=pool_address) is None
 
     def test_constructs_with_chain_id_registers(self) -> None:
         pool_address = "0x0000000000000000000000000000000000001002"

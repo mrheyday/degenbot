@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from degenbot.protocol import Auction  # noqa: TC002 — used at runtime in stubs
+
 from degenbot.server import SolverEngineApp
 from degenbot.strategies_solver.solver_quality import Solution as StrategySolution
 
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from aiohttp.web import Application, Request
+
+    from degenbot.protocol import Auction
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -175,7 +177,9 @@ class TestSolveHappyPath:
 
 
 class TestSolveErrors:
-    async def test_malformed_json_returns_400(self, empty_client: TestClient[Request, Application]) -> None:
+    async def test_malformed_json_returns_400(
+        self, empty_client: TestClient[Request, Application]
+    ) -> None:
         resp = await empty_client.post(
             "/solve",
             data="not valid json",
@@ -260,7 +264,9 @@ class TestD3Classify:
 
 
 class TestSidecarEndpoints:
-    async def test_health_returns_build_id(self, empty_client: TestClient[Request, Application]) -> None:
+    async def test_health_returns_build_id(
+        self, empty_client: TestClient[Request, Application]
+    ) -> None:
         resp = await empty_client.get("/health")
         assert resp.status == 200
         body = await resp.json()

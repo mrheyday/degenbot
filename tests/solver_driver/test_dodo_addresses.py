@@ -10,8 +10,9 @@ These don't hit the network — they just validate the literal strings.
 
 from __future__ import annotations
 
-from degenbot.execution import dodo_addresses as d
 from web3 import Web3
+
+from degenbot.execution import dodo_addresses as d
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     # V1

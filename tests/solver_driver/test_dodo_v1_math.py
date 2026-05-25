@@ -81,7 +81,10 @@ class TestGeneralIntegrateV1:
         #                      = 1_011_111_111_111_111_111
         #   final              = mul(20*ONE, 1.011…*ONE)
         #                      = 20_222_222_222_222_222_220
-        assert general_integrate(100 * ONE, 100 * ONE, 90 * ONE, 2 * ONE, ONE // 10) == 20_222_222_222_222_222_220
+        assert (
+            general_integrate(100 * ONE, 100 * ONE, 90 * ONE, 2 * ONE, ONE // 10)
+            == 20_222_222_222_222_222_220
+        )
 
     def test_v1_lt_v2_reverts(self) -> None:
         # Source precondition: V1 >= V2 (otherwise SafeMath.sub reverts).
@@ -120,11 +123,17 @@ class TestSolveQuadraticFunctionForTradeV1:
         #   numerator         = 80*ONE + 100*ONE = 180*ONE
         #   divFloor(180*ONE,
         #            1.8e18)  = (180*ONE * ONE)/1.8e18 = 100*ONE
-        assert solve_quadratic_function_for_trade(100 * ONE, 100 * ONE, 0, True, ONE // 10) == 100 * ONE
+        assert (
+            solve_quadratic_function_for_trade(100 * ONE, 100 * ONE, 0, True, ONE // 10)
+            == 100 * ONE
+        )
 
     def test_zero_idelta_b_round_down_branch(self) -> None:
         # Same identity holds for deltaBSig=False (uses divCeil instead).
-        assert solve_quadratic_function_for_trade(100 * ONE, 100 * ONE, 0, False, ONE // 10) == 100 * ONE
+        assert (
+            solve_quadratic_function_for_trade(100 * ONE, 100 * ONE, 0, False, ONE // 10)
+            == 100 * ONE
+        )
 
     def test_positive_idelta_b_increases_result(self) -> None:
         # deltaBSig=True ⇒ Q2 should exceed Q1 = 100*ONE.

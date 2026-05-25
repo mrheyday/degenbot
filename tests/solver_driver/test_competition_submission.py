@@ -5,12 +5,13 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from degenbot.config import Settings
 from degenbot.execution.competition_submitter import CompetitionSubmitter
+from pydantic import SecretStr
+
+from degenbot.config import Settings
 from degenbot.orderbook.client import OrderbookClient
 from degenbot.protocol.models import Auction, Interaction, Trade
 from degenbot.protocol.models import Solution as ProtocolSolution
-from pydantic import SecretStr
 
 
 @pytest.fixture
@@ -81,30 +82,26 @@ def test_build_typed_data_uses_full_settlement_shape(
         id=1,
         prices={"0xaf88d065e77c8cC2239327C5EDb3A432268e5831": 10**6},
         trades=[
-            Trade.model_validate(
-                {
-                    "sellTokenIndex": 0,
-                    "buyTokenIndex": 1,
-                    "receiver": "0x" + "33" * 20,
-                    "sellAmount": "1000000",
-                    "buyAmount": "999000",
-                    "validTo": 1_776_886_400,
-                    "appData": "0x" + "44" * 32,
-                    "feeAmount": "1000",
-                    "flags": 0,
-                    "executedAmount": "1000000",
-                    "signature": "0x1234",
-                }
-            )
+            Trade.model_validate({
+                "sellTokenIndex": 0,
+                "buyTokenIndex": 1,
+                "receiver": "0x" + "33" * 20,
+                "sellAmount": "1000000",
+                "buyAmount": "999000",
+                "validTo": 1_776_886_400,
+                "appData": "0x" + "44" * 32,
+                "feeAmount": "1000",
+                "flags": 0,
+                "executedAmount": "1000000",
+                "signature": "0x1234",
+            })
         ],
         interactions=[
-            Interaction.model_validate(
-                {
-                    "target": "0x" + "55" * 20,
-                    "value": 0,
-                    "callData": "0xabcdef",
-                }
-            )
+            Interaction.model_validate({
+                "target": "0x" + "55" * 20,
+                "value": 0,
+                "callData": "0xabcdef",
+            })
         ],
         preInteractions=[{"target": "0x" + "66" * 20, "value": 0, "callData": "0x"}],
         postInteractions=[{"target": "0x" + "77" * 20, "value": 0, "callData": "0x"}],

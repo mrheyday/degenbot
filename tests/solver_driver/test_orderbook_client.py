@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+
 from degenbot.orderbook import (
     Auction,
     NativePriceResponse,

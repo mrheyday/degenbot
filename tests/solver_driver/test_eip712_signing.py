@@ -4,8 +4,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from degenbot.signing.eip712 import Eip712SigningError, sign_solution
 from pydantic import BaseModel, SecretStr
+
+from degenbot.signing.eip712 import Eip712SigningError, sign_solution
 
 
 def _typed_data() -> dict[str, Any]:

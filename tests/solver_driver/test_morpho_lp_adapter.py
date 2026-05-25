@@ -221,7 +221,7 @@ class TestMorphoLiquidationRanking:
         ranked = rank_liquidation_candidates_for_screening(
             [high_lltv, low_lltv],
             config=MorphoLiquidationRankingConfig(
-                estimated_gas_cost_usd=Decimal("25"),
+                estimated_gas_cost_usd=Decimal(25),
                 flash_fee_bps_by_loan_token={_USDC.lower(): 5},
                 swap_cost_bps_by_collateral_token={_WETH.lower(): 20},
                 oracle_risk_bps_by_market_id={low_lltv.market.id.lower(): 10},
@@ -230,11 +230,11 @@ class TestMorphoLiquidationRanking:
 
         assert [item.market_id for item in ranked] == [low_lltv.market.id, high_lltv.market.id]
         assert ranked[0].liquidation_bonus_bps == 1500
-        assert ranked[0].gross_bonus_usd == Decimal("7500")
-        assert ranked[0].estimated_flash_fee_usd == Decimal("25")
-        assert ranked[0].estimated_swap_cost_usd == Decimal("100")
-        assert ranked[0].oracle_risk_penalty_usd == Decimal("50")
-        assert ranked[0].net_edge_usd == Decimal("7300")
+        assert ranked[0].gross_bonus_usd == Decimal(7500)
+        assert ranked[0].estimated_flash_fee_usd == Decimal(25)
+        assert ranked[0].estimated_swap_cost_usd == Decimal(100)
+        assert ranked[0].oracle_risk_penalty_usd == Decimal(50)
+        assert ranked[0].net_edge_usd == Decimal(7300)
 
     def test_bad_debt_risk_is_excluded_unless_policy_allows_it(self) -> None:
         bad_debt = _ranking_candidate(
@@ -280,15 +280,15 @@ class TestMorphoLiquidationRanking:
             [insufficient, sufficient],
             config=MorphoLiquidationRankingConfig(
                 swap_back_liquidity_usd_by_collateral_token={
-                    _WETH.lower(): Decimal("50000"),
-                    _USDC.lower(): Decimal("100000"),
+                    _WETH.lower(): Decimal(50000),
+                    _USDC.lower(): Decimal(100000),
                 },
             ),
         )
 
         assert [item.market_id for item in ranked] == [sufficient.market.id]
-        assert ranked[0].swap_back_liquidity_usd == Decimal("100000")
-        assert ranked[0].swap_back_liquidity_shortfall_usd == Decimal("0")
+        assert ranked[0].swap_back_liquidity_usd == Decimal(100000)
+        assert ranked[0].swap_back_liquidity_shortfall_usd == Decimal(0)
 
     def test_tie_breaks_by_lower_health_factor_after_economic_score(self) -> None:
         safer = _ranking_candidate(
@@ -317,12 +317,12 @@ class TestMorphoLiquidationRanking:
             MorphoLiquidationLiveRiskFeeds(
                 estimated_gas_units=250_000,
                 gas_price_wei=2_000_000_000,
-                eth_price_usd=Decimal("3000"),
+                eth_price_usd=Decimal(3000),
                 flash_fee_bps_by_loan_token={_USDC.lower(): 5},
                 swap_cost_bps_by_collateral_token={_WETH.lower(): 20},
                 oracle_risk_bps_by_market_id={"0x" + "11" * 32: 10},
-                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal("100000")},
-                min_net_edge_usd=Decimal("25"),
+                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal(100000)},
+                min_net_edge_usd=Decimal(25),
             )
         )
 
@@ -330,8 +330,10 @@ class TestMorphoLiquidationRanking:
         assert config.flash_fee_bps_by_loan_token == {_USDC.lower(): 5}
         assert config.swap_cost_bps_by_collateral_token == {_WETH.lower(): 20}
         assert config.oracle_risk_bps_by_market_id == {"0x" + "11" * 32: 10}
-        assert config.swap_back_liquidity_usd_by_collateral_token == {_WETH.lower(): Decimal("100000")}
-        assert config.min_net_edge_usd == Decimal("25")
+        assert config.swap_back_liquidity_usd_by_collateral_token == {
+            _WETH.lower(): Decimal(100000)
+        }
+        assert config.min_net_edge_usd == Decimal(25)
 
     def test_ranking_config_from_live_risk_feeds_rejects_negative_inputs(self) -> None:
         with pytest.raises(ValueError, match="estimated_gas_units"):
@@ -339,7 +341,7 @@ class TestMorphoLiquidationRanking:
                 MorphoLiquidationLiveRiskFeeds(
                     estimated_gas_units=-1,
                     gas_price_wei=1,
-                    eth_price_usd=Decimal("1"),
+                    eth_price_usd=Decimal(1),
                 )
             )
 
@@ -367,12 +369,10 @@ class TestMorphoLpClientLifecycle:
 
 class TestMorphoLpClientQueries:
     async def test_list_markets_paginates_and_maps_exact_strings(self) -> None:
-        client = _FakeMorphoLpClient(
-            [
-                {"markets": {"items": [_market_payload("0x" + "11" * 32)]}},
-                {"markets": {"items": []}},
-            ]
-        )
+        client = _FakeMorphoLpClient([
+            {"markets": {"items": [_market_payload("0x" + "11" * 32)]}},
+            {"markets": {"items": []}},
+        ])
 
         markets = await client.list_markets()
 
@@ -407,7 +407,9 @@ class TestMorphoLpClientQueries:
             await client.get_market("0x" + "22" * 32)
 
     async def test_get_position_maps_single_position(self) -> None:
-        client = _FakeMorphoLpClient([{"marketPosition": _position_payload("0x" + "33" * 32, _USER)}])
+        client = _FakeMorphoLpClient([
+            {"marketPosition": _position_payload("0x" + "33" * 32, _USER)}
+        ])
 
         position = await client.get_position("0x" + "33" * 32, _USER)
 
@@ -429,9 +431,13 @@ class TestMorphoLpClientQueries:
         assert client.queries == []
 
     async def test_get_priority_markets_maps_batched_response(self) -> None:
-        client = _FakeMorphoLpClient(
-            [{"markets": {"items": [_market_payload("0x" + "44" * 32), _market_payload("0x" + "55" * 32)]}}]
-        )
+        client = _FakeMorphoLpClient([
+            {
+                "markets": {
+                    "items": [_market_payload("0x" + "44" * 32), _market_payload("0x" + "55" * 32)]
+                }
+            }
+        ])
 
         markets = await client.get_priority_markets(["0x" + "44" * 32, "0x" + "55" * 32])
 
@@ -441,14 +447,18 @@ class TestMorphoLpClientQueries:
 
     async def test_list_liquidation_candidates_pages_positions_by_health_factor(self) -> None:
         market = _market_dataclass("0x" + "66" * 32, loan_token=_USDC, collateral_token=_USDC)
-        client = _FakeMorphoLpClient(
-            [
-                {"marketPositions": {"items": [_position_payload(market.id, _USER, health_factor="0.99")]}},
-                {"marketPositions": {"items": []}},
-            ]
-        )
+        client = _FakeMorphoLpClient([
+            {
+                "marketPositions": {
+                    "items": [_position_payload(market.id, _USER, health_factor="0.99")]
+                }
+            },
+            {"marketPositions": {"items": []}},
+        ])
 
-        candidates = await client.list_liquidation_candidates([market], max_health_factor=Decimal("1.02"), page_size=1)
+        candidates = await client.list_liquidation_candidates(
+            [market], max_health_factor=Decimal("1.02"), page_size=1
+        )
 
         assert candidates == [
             MorphoLiquidationCandidate(
@@ -473,7 +483,9 @@ class TestMorphoLpClientQueries:
         assert "healthFactor_lte" in client.queries[0][0]
         assert client.queries[0][1]["maxHealthFactor"] == 1.02
 
-    async def test_list_liquidation_candidates_returns_empty_without_query_for_no_markets(self) -> None:
+    async def test_list_liquidation_candidates_returns_empty_without_query_for_no_markets(
+        self,
+    ) -> None:
         client = _FakeMorphoLpClient([])
 
         assert await client.list_liquidation_candidates([]) == []
@@ -563,7 +575,9 @@ class TestMorphoLpClientQueries:
         with pytest.raises(ValueError, match="rpc_url is required"):
             client.revalidate_liquidation_candidate_onchain(candidate)
 
-    def test_plan_standard_liquidation_recomputes_health_and_encodes_repaid_shares_path(self) -> None:
+    def test_plan_standard_liquidation_recomputes_health_and_encodes_repaid_shares_path(
+        self,
+    ) -> None:
         market = _consistent_market(loan_token=_USDC, collateral_token=_WETH)
         candidate = MorphoLiquidationCandidate(
             market=market,
@@ -650,7 +664,9 @@ class TestMorphoLpClientQueries:
         assert swap_back_step.amount_in == 0
         assert swap_back_step.amount_out_min == quote.buy_amount
 
-    def test_compose_standard_liquidation_executor_path_rejects_wrong_swap_back_tokens(self) -> None:
+    def test_compose_standard_liquidation_executor_path_rejects_wrong_swap_back_tokens(
+        self,
+    ) -> None:
         plan = _liquidation_plan()
 
         with pytest.raises(ValueError, match="sell_token"):
@@ -731,8 +747,8 @@ class TestMorphoLpClientQueries:
                 flash_fee_bps_by_loan_token={_USDC.lower(): 5},
                 swap_cost_bps_by_collateral_token={_WETH.lower(): 20},
                 oracle_risk_bps_by_market_id={plan.market_id.lower(): 10},
-                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal("5000")},
-                min_net_edge_usd=Decimal("0"),
+                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal(5000)},
+                min_net_edge_usd=Decimal(0),
             ),
         )[0]
 
@@ -753,7 +769,9 @@ class TestMorphoLpClientQueries:
         assert wire["loanToken"] == _USDC
         assert wire["collateralToken"] == _WETH
         assert wire["repayAssets"] == str(plan.repay_assets)
-        assert wire["expectedCollateralSeized"] == str(estimate_standard_liquidation_collateral_seized(plan))
+        assert wire["expectedCollateralSeized"] == str(
+            estimate_standard_liquidation_collateral_seized(plan)
+        )
         assert wire["rankingScoreUsd"] == priority.net_edge_usd.to_eng_string()
         assert wire["badDebtClassification"] == "collateralized"
         assert wire["riskCosts"] == {
@@ -802,7 +820,7 @@ class TestMorphoLpClientQueries:
                 flash_fee_bps_by_loan_token={_USDC.lower(): 5},
                 swap_cost_bps_by_collateral_token={_WETH.lower(): 20},
                 oracle_risk_bps_by_market_id={plan.market_id.lower(): 10},
-                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal("5000")},
+                swap_back_liquidity_usd_by_collateral_token={_WETH.lower(): Decimal(5000)},
             ),
         )[0]
         payload = build_standard_liquidation_candidate_payload(priority, plan)
@@ -839,7 +857,9 @@ class TestMorphoLpClientQueries:
         }
         assert kind["borrower"] == _USER
         assert kind["repaid_shares"] == str(plan.repay_shares)
-        assert kind["expected_seized_assets"] == str(estimate_standard_liquidation_collateral_seized(plan))
+        assert kind["expected_seized_assets"] == str(
+            estimate_standard_liquidation_collateral_seized(plan)
+        )
         assert kind["risk_cost_wei"] == "1000"
         assert kind["bad_debt_mode"] == "none"
 
@@ -852,8 +872,12 @@ class TestMorphoApiMetadata:
 
         assert metadata.is_token_listed(_USDC)
         assert not metadata.is_token_listed(_WETH)
-        assert metadata.vault_v2_addresses == frozenset({"0xbeeff1d5de8f79ff37a151681100b039661da518"})
-        assert metadata.legacy_vault_addresses == frozenset({"0xa60643c90a542a95026c0f1dbdb0615ff42019cf"})
+        assert metadata.vault_v2_addresses == frozenset({
+            "0xbeeff1d5de8f79ff37a151681100b039661da518"
+        })
+        assert metadata.legacy_vault_addresses == frozenset({
+            "0xa60643c90a542a95026c0f1dbdb0615ff42019cf"
+        })
         assert metadata.should_skip_market("0x" + "33" * 32)
         assert metadata.should_skip_market("0x" + "44" * 32)
         assert metadata.should_skip_vault("0xa60643c90A542A95026C0F1dbdB0615fF42019Cf")
@@ -862,7 +886,9 @@ class TestMorphoApiMetadata:
         with pytest.raises(ValueError, match="missing Morpho metadata file"):
             MorphoApiMetadata.load(tmp_path)
 
-    def test_filter_markets_for_metadata_skips_blacklists_warnings_and_unlisted_tokens(self, tmp_path: Path) -> None:
+    def test_filter_markets_for_metadata_skips_blacklists_warnings_and_unlisted_tokens(
+        self, tmp_path: Path
+    ) -> None:
         _write_metadata_fixture(tmp_path)
         metadata = MorphoApiMetadata.load(tmp_path)
         good = _market_dataclass("0x" + "11" * 32, loan_token=_USDC, collateral_token=_USDC)
@@ -874,28 +900,26 @@ class TestMorphoApiMetadata:
 
 def _write_metadata_fixture(root: Path) -> None:
     (root / "tokens.json").write_text(
-        json.dumps(
-            [
-                {
-                    "chainId": 42161,
-                    "address": _USDC,
-                    "name": "USD Coin",
-                    "symbol": _USDC_SYMBOL,
-                    "decimals": 6,
-                    "metadata": {"tags": ["stablecoin", "simple-permit"]},
-                    "isListed": True,
-                },
-                {
-                    "chainId": 42161,
-                    "address": _WETH,
-                    "name": "Wrapped Ether",
-                    "symbol": _WETH_SYMBOL,
-                    "decimals": 18,
-                    "metadata": {"tags": ["eth"]},
-                    "isListed": False,
-                },
-            ]
-        )
+        json.dumps([
+            {
+                "chainId": 42161,
+                "address": _USDC,
+                "name": "USD Coin",
+                "symbol": _USDC_SYMBOL,
+                "decimals": 6,
+                "metadata": {"tags": ["stablecoin", "simple-permit"]},
+                "isListed": True,
+            },
+            {
+                "chainId": 42161,
+                "address": _WETH,
+                "name": "Wrapped Ether",
+                "symbol": _WETH_SYMBOL,
+                "decimals": 18,
+                "metadata": {"tags": ["eth"]},
+                "isListed": False,
+            },
+        ])
     )
     (root / "vaults-v2-listing.json").write_text(
         json.dumps([{"chainId": 42161, "address": "0xbeeff1D5dE8F79ff37a151681100B039661da518"}])
@@ -907,22 +931,20 @@ def _write_metadata_fixture(root: Path) -> None:
         json.dumps([{"chainId": 42161, "id": "0x" + "33" * 32, "countryCodes": ["*"]}])
     )
     (root / "custom-warnings.json").write_text(
-        json.dumps(
-            [
-                {
-                    "chainId": 42161,
-                    "marketId": "0x" + "44" * 32,
-                    "level": "red",
-                    "metadata": {"content": "market risk"},
-                },
-                {
-                    "chainId": 42161,
-                    "vaultAddress": "0xa60643c90A542A95026C0F1dbdB0615fF42019Cf",
-                    "level": "red",
-                    "metadata": {"content": "vault risk"},
-                },
-            ]
-        )
+        json.dumps([
+            {
+                "chainId": 42161,
+                "marketId": "0x" + "44" * 32,
+                "level": "red",
+                "metadata": {"content": "market risk"},
+            },
+            {
+                "chainId": 42161,
+                "vaultAddress": "0xa60643c90A542A95026C0F1dbdB0615fF42019Cf",
+                "level": "red",
+                "metadata": {"content": "vault risk"},
+            },
+        ])
     )
 
 
@@ -937,12 +959,14 @@ class _FakeMorphoLpClient(MorphoLpClient):
     async def _query(self, query: str, variables: dict[str, object]) -> dict[str, object]:
         self.queries.append((query, variables))
         if not self.responses:
-            raise AssertionError("unexpected GraphQL query")
+            msg = "unexpected GraphQL query"
+            raise AssertionError(msg)
         return self.responses.pop(0)
 
     def _morpho_contract(self) -> _FakeMorphoContract:
         if self.contract is None:
-            raise AssertionError("missing fake Morpho contract")
+            msg = "missing fake Morpho contract"
+            raise AssertionError(msg)
         return self.contract
 
     def _oracle_price(self, _oracle_address: str) -> int:
@@ -1014,7 +1038,9 @@ def _market_payload(market_id: str) -> dict[str, object]:
     }
 
 
-def _position_payload(market_id: str, user: str, *, health_factor: str = "0.99") -> dict[str, object]:
+def _position_payload(
+    market_id: str, user: str, *, health_factor: str = "0.99"
+) -> dict[str, object]:
     return {
         "healthFactor": health_factor,
         "market": {"marketId": market_id},
@@ -1097,10 +1123,14 @@ def _consistent_market(*, loan_token: str, collateral_token: str) -> MorphoMarke
         irm=_IRM,
         lltv=860_000_000_000_000_000,
     )
-    return _market_dataclass(market_params.id(), loan_token=loan_token, collateral_token=collateral_token)
+    return _market_dataclass(
+        market_params.id(), loan_token=loan_token, collateral_token=collateral_token
+    )
 
 
-def _candidate_for_market(market: MorphoMarket, *, borrow_shares: int) -> MorphoLiquidationCandidate:
+def _candidate_for_market(
+    market: MorphoMarket, *, borrow_shares: int
+) -> MorphoLiquidationCandidate:
     return MorphoLiquidationCandidate(
         market=market,
         position=MorphoPosition(

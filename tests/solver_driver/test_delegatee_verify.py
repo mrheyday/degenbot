@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+
 from degenbot.ops_solver import delegatee_verify as verifier
 
 if TYPE_CHECKING:

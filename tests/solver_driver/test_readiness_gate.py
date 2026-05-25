@@ -115,15 +115,13 @@ def test_deployment_report_validation_rejects_weak_evidence(tmp_path: Path) -> N
     )
 
     report_path.write_text(
-        json.dumps(
-            {
-                "schema": "executor-deployment-verification/v1",
-                "chain_id": 42161,
-                "executor": "0x0000000000000000000000000000000000001111",
-                "checks": [{"name": "paused", "ok": True}],
-                "all_passed": True,
-            }
-        )
+        json.dumps({
+            "schema": "executor-deployment-verification/v1",
+            "chain_id": 42161,
+            "executor": "0x0000000000000000000000000000000000001111",
+            "checks": [{"name": "paused", "ok": True}],
+            "all_passed": True,
+        })
     )
 
     assert readiness_gate._deployment_report_passes(
@@ -156,14 +154,12 @@ def test_delegatee_report_validation_requires_both_contracts(tmp_path: Path) -> 
 
     assert readiness_gate._delegatee_report_passes(report_path) is False
 
-    base_report["checks"].append(
-        {
-            "contract": "LiquidationExecutor",
-            "contract_address": "0x0000000000000000000000000000000000002222",
-            "delegatee": delegatee,
-            "ok": True,
-        }
-    )
+    base_report["checks"].append({
+        "contract": "LiquidationExecutor",
+        "contract_address": "0x0000000000000000000000000000000000002222",
+        "delegatee": delegatee,
+        "ok": True,
+    })
     report_path.write_text(json.dumps(base_report))
 
     assert readiness_gate._delegatee_report_passes(report_path)

@@ -9,8 +9,9 @@ future Solidity-fixture cross-check can target the same values.
 from __future__ import annotations
 
 import pytest
-from degenbot.execution import balancer_fixed_point as fp
 from degenbot.execution.balancer_fixed_point import FOUR, ONE, TWO
+
+from degenbot.execution import balancer_fixed_point as fp
 
 # ---------------------------------------------------------------------------
 # Constants

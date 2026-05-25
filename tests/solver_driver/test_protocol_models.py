@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
 from degenbot.protocol import (
     Auction,
     Order,
@@ -23,7 +25,6 @@ from degenbot.protocol import (
     SolveResponse,
     TokenInfo,
 )
-from pydantic import ValidationError
 
 DATA_DIR = Path(__file__).parent / "data"
 

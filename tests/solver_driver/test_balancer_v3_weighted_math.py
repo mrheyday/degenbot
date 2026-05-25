@@ -13,8 +13,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from degenbot.execution import balancer_v3_weighted_math as wm
 from degenbot.execution.balancer_fixed_point import ONE
+
+from degenbot.execution import balancer_v3_weighted_math as wm
 
 _REL_TOL = 1e-12
 

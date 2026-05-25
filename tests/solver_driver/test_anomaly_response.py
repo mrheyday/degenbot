@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+
 from degenbot.ops_solver import anomaly_response as ar
 
 if TYPE_CHECKING:
@@ -26,7 +27,9 @@ def test_build_pause_transaction_uses_locked_selector() -> None:
 
 
 def test_build_pause_payload_requires_safe_signature_when_owner_matches_and_unpaused() -> None:
-    readiness = ar.PauseReadiness(executor_owner=SAFE.lower(), expected_safe=SAFE, executor_paused=False)
+    readiness = ar.PauseReadiness(
+        executor_owner=SAFE.lower(), expected_safe=SAFE, executor_paused=False
+    )
 
     payload = ar.build_pause_payload(
         ar.PausePayloadRequest(
@@ -112,7 +115,9 @@ def test_require_address_rejects_invalid_and_zero_values() -> None:
         ar.require_address(ar.ZERO_ADDRESS, "EXECUTOR_ADDRESS")
 
 
-def test_write_payload_writes_sorted_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_write_payload_writes_sorted_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     output_path = tmp_path / "pause-plan.json"
     payload = {"schema": "test", "status": "already_paused", "action_required": False}
 

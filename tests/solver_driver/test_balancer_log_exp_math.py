@@ -15,8 +15,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from degenbot.execution import balancer_log_exp_math as lem
 from degenbot.execution.balancer_log_exp_math import ONE_18
+
+from degenbot.execution import balancer_log_exp_math as lem
 
 # Relative tolerance for cross-check against `math.exp/log`. The on-chain
 # Taylor series targets ~18-decimal precision so 1e-12 is comfortable.

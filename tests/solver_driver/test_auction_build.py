@@ -6,13 +6,14 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
+
 from degenbot.auction_build import (
     AuctionBuildRequest,
     build_auction_response,
     handle_auction_build_payload,
 )
 from degenbot.strategies_solver import D3Filter, SolutionBuilder
-from pydantic import ValidationError
 
 UID_1 = f"0x{'11' * 56}"
 UID_2 = f"0x{'22' * 56}"

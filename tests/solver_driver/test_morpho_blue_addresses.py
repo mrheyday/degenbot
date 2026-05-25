@@ -6,8 +6,9 @@ No network access.
 
 from __future__ import annotations
 
-from degenbot.execution import morpho_blue_addresses as m
 from web3 import Web3
+
+from degenbot.execution import morpho_blue_addresses as m
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     # Core Morpho Blue
@@ -81,7 +82,9 @@ class TestGroupings:
         assert m.COMPOUND_V3_MIGRATION_ADAPTER in m.BUNDLER3_FAMILY
 
     def test_all_contracts_is_executor_plus_bundler_plus_external(self) -> None:
-        assert (m.EXECUTOR_RELEVANT | m.BUNDLER3_FAMILY | {m.PARASWAP_AUGUSTUS_REGISTRY}) == m.ALL_CONTRACTS
+        assert (
+            m.EXECUTOR_RELEVANT | m.BUNDLER3_FAMILY | {m.PARASWAP_AUGUSTUS_REGISTRY}
+        ) == m.ALL_CONTRACTS
         # 2 executor-relevant + 5 bundler3-family + 1 external = 8.
         assert len(m.ALL_CONTRACTS) == 8
 

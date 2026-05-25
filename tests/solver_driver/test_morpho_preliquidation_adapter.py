@@ -37,7 +37,10 @@ _ZERO = "0x0000000000000000000000000000000000000000"
 
 class TestMorphoPreLiquidationIds:
     def test_hyperindex_market_id_uses_official_chain_prefix(self) -> None:
-        assert hyperindex_market_id(ARBITRUM_CHAIN_ID, _MARKET_ID) == f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}"
+        assert (
+            hyperindex_market_id(ARBITRUM_CHAIN_ID, _MARKET_ID)
+            == f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}"
+        )
 
     def test_ensure_hyperindex_market_id_accepts_raw_or_indexed_id(self) -> None:
         indexed = f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}"
@@ -72,7 +75,10 @@ class TestMorphoPreLiquidationContract:
             pre_liquidation_oracle=_ORACLE,
         )
         assert contract.hyperindex_market_id == f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}"
-        assert contract.hyperindex_contract_id == f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}-{_PRE_LIQUIDATION}"
+        assert (
+            contract.hyperindex_contract_id
+            == f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}-{_PRE_LIQUIDATION}"
+        )
         assert contract.params_tuple == (
             810_000_000_000_000_000,
             100_000_000_000_000_000,
@@ -168,7 +174,9 @@ class TestMorphoPreLiquidationAuthorizations:
             ),
         ]
 
-        assert authorized_contracts_for_borrower([first, second], authorizations, _BORROWER) == [first]
+        assert authorized_contracts_for_borrower([first, second], authorizations, _BORROWER) == [
+            first
+        ]
 
 
 class TestMorphoPreLiquidationPositions:
@@ -364,7 +372,10 @@ class TestMorphoPreLiquidationClient:
         contracts = await client.list_contracts([_MARKET_ID])
 
         assert [c.address for c in contracts] == [_PRE_LIQUIDATION]
-        assert "PreLiquidationContract(where: { market_id: { _in: $marketIds } })" in client.queries[0][0]
+        assert (
+            "PreLiquidationContract(where: { market_id: { _in: $marketIds } })"
+            in client.queries[0][0]
+        )
         assert client.queries[0][1] == {"marketIds": [f"{ARBITRUM_CHAIN_ID}-{_MARKET_ID}"]}
 
     async def test_list_contracts_accepts_already_indexed_market_ids(self) -> None:
@@ -380,7 +391,9 @@ class TestMorphoPreLiquidationClient:
         with pytest.raises(ValueError, match="must be a list"):
             await client.list_contracts([_MARKET_ID])
 
-    async def test_list_authorizations_returns_empty_without_query_for_empty_authorizees(self) -> None:
+    async def test_list_authorizations_returns_empty_without_query_for_empty_authorizees(
+        self,
+    ) -> None:
         client = _FakeMorphoPreLiquidationClient([])
 
         assert await client.list_authorizations([]) == []
@@ -501,7 +514,8 @@ class _FakeMorphoPreLiquidationClient(MorphoPreLiquidationClient):
     async def _query(self, query: str, variables: dict[str, object]) -> dict[str, object]:
         self.queries.append((query, variables))
         if not self.responses:
-            raise AssertionError("unexpected GraphQL query")
+            msg = "unexpected GraphQL query"
+            raise AssertionError(msg)
         return self.responses.pop(0)
 
     def read_onchain_position_snapshot(
@@ -511,7 +525,8 @@ class _FakeMorphoPreLiquidationClient(MorphoPreLiquidationClient):
     ) -> tuple[int, MorphoPreLiquidationPositionSnapshot]:
         key = (contract.address, borrower)
         if key not in self.snapshots:
-            raise AssertionError(f"unexpected on-chain read for {key}")
+            msg = f"unexpected on-chain read for {key}"
+            raise AssertionError(msg)
         return self.snapshots[key]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from degenbot.adapters import registry
 from degenbot.adapters.laneadapters import EXECUTION_LANES
 

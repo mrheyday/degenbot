@@ -17,6 +17,7 @@ class BlockerStatus(StrEnum):
 
     NONE = "none"
     EXPLICIT_GATE = "explicit_gate"
+    MAINNET_BLOCKER = "mainnet_blocker"
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,7 +351,7 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
             "coordinator/src/strategies/d3-filter.ts",
             "coordinator/src/strategies/cow-quoter.ts",
             "vendor/degenbot/src/degenbot/auction_build.py",
-            "solver/driver/tests/test_auction_build.py",
+            "vendor/degenbot/tests/solver_driver/test_auction_build.py",
         ),
         blocker_status=BlockerStatus.NONE,
     ),
@@ -405,7 +406,10 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
                     "keep CoW feed handling quote-only and use UniswapX/native-arb atomic execution for capital "
                     "movement."
                 ),
-                owner_refs=("coordinator/src/strategies/cow-quoter.ts", "contracts/src/interfaces/IExecutor.sol"),
+                owner_refs=(
+                    "coordinator/src/strategies/cow-quoter.ts",
+                    "contracts/src/interfaces/IExecutor.sol",
+                ),
                 proof_refs=("contracts/test/unit/ExecutorCoWFlashRouterStart.t.sol",),
             ),
         ),
@@ -477,7 +481,10 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
             "Tick exposure must be bounded.",
             "Unwind and emergency exit must be explicit.",
         ),
-        proof_refs=("coordinator/src/strategies/v4-hooks.ts", "docs/architecture/jit-lp-strategy-design.md"),
+        proof_refs=(
+            "coordinator/src/strategies/v4-hooks.ts",
+            "docs/architecture/jit-lp-strategy-design.md",
+        ),
         blocker_status=BlockerStatus.EXPLICIT_GATE,
         blockers=(
             StrategyBlocker(
@@ -486,7 +493,10 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
                     "Implement a JIT-specific builder, exposure caps, unwind invariant tests, and a fork test "
                     "covering fee capture and emergency exit."
                 ),
-                owner_refs=("coordinator/src/strategies/v4-hooks.ts", "docs/architecture/jit-lp-strategy-design.md"),
+                owner_refs=(
+                    "coordinator/src/strategies/v4-hooks.ts",
+                    "docs/architecture/jit-lp-strategy-design.md",
+                ),
                 proof_refs=("coordinator/src/strategies/v4-hooks.test.ts",),
             ),
         ),
@@ -518,8 +528,8 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
             "Exposure caps and unwind invariants required before mutation.",
         ),
         proof_refs=(
-            "solver/driver/adapters/liquidityadapters/venues.py",
-            "solver/driver/adapters/laneadapters/lanes.py",
+            "vendor/degenbot/src/degenbot/adapters/liquidityadapters/venues.py",
+            "vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",
         ),
         blocker_status=BlockerStatus.EXPLICIT_GATE,
         blockers=(
@@ -528,8 +538,8 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
                 remediation=(
                     "Bind LP mutation to a named strategy lane with exposure caps, unwind tests, and exit path."
                 ),
-                owner_refs=("solver/driver/adapters/laneadapters/lanes.py",),
-                proof_refs=("solver/driver/tests/test_adapter_registry.py",),
+                owner_refs=("vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",),
+                proof_refs=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
             ),
         ),
     ),
@@ -573,7 +583,9 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
         ),
         latency_posture="Standalone branch gated; four-leg latency target applies when included in Pick B.",
         resource_utilization=("Across intent feed inputs and FourLegStrategy preflight.",),
-        profitability_controls=("Standalone branch emits no tx; composeFourLeg enforces premium plus minProfit.",),
+        profitability_controls=(
+            "Standalone branch emits no tx; composeFourLeg enforces premium plus minProfit.",
+        ),
         proof_refs=("coordinator/src/strategies/four-leg.ts", "coordinator/src/decision/engine.ts"),
         blocker_status=BlockerStatus.EXPLICIT_GATE,
         blockers=(
@@ -608,14 +620,16 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
                 ),
                 remediation="Add a dedicated ADR, builder, private submission policy, and fork tests before enabling.",
                 owner_refs=("docs/architecture/jaredbot-mev-playbook.md",),
-                proof_refs=("solver/driver/tests/test_adapter_registry.py",),
+                proof_refs=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
             ),
         ),
     ),
 )
 
 
-_PROFILES_BY_WORKFLOW_ID = {profile.workflow_id: profile for profile in STRATEGY_INTELLIGENCE_PROFILES}
+_PROFILES_BY_WORKFLOW_ID = {
+    profile.workflow_id: profile for profile in STRATEGY_INTELLIGENCE_PROFILES
+}
 
 
 def profile_for_workflow(workflow_id: str) -> StrategyIntelligenceProfile:
@@ -623,4 +637,5 @@ def profile_for_workflow(workflow_id: str) -> StrategyIntelligenceProfile:
     try:
         return _PROFILES_BY_WORKFLOW_ID[workflow_id]
     except KeyError as exc:
-        raise KeyError(f"unknown strategy intelligence profile {workflow_id!r}") from exc
+        msg = f"unknown strategy intelligence profile {workflow_id!r}"
+        raise KeyError(msg) from exc

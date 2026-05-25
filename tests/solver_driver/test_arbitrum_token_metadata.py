@@ -12,6 +12,7 @@ Validates that:
 from __future__ import annotations
 
 import pytest
+
 from degenbot.execution import arbitrum_token_addresses as t
 from degenbot.execution import arbitrum_token_metadata as m
 from degenbot.execution import uniswap_addresses as u
@@ -24,7 +25,9 @@ class TestCoverage:
 
     def test_every_token_in_addresses_has_metadata(self) -> None:
         for addr in t.ALL_TOKENS:
-            assert m.get_metadata(addr) is not None, f"{addr} in arbitrum_token_addresses but missing metadata"
+            assert m.get_metadata(addr) is not None, (
+                f"{addr} in arbitrum_token_addresses but missing metadata"
+            )
 
     def test_weth9_has_metadata(self) -> None:
         meta = m.get_metadata(u.WETH9)
@@ -43,7 +46,9 @@ class TestCoverage:
         unverifiable."""
         addresses_module_set = {addr.lower() for addr in t.ALL_TOKENS} | {u.WETH9.lower()}
         for known in m.known_addresses():
-            assert known in addresses_module_set, f"metadata exists for {known} but no addresses module pins it"
+            assert known in addresses_module_set, (
+                f"metadata exists for {known} but no addresses module pins it"
+            )
 
 
 class TestUnusualDecimalTraps:

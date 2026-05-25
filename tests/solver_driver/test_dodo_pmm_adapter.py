@@ -8,13 +8,14 @@ AbstractLiquidityPool to drop into degenbot's pool taxonomy.
 from __future__ import annotations
 
 import pytest
-from degenbot.registry import pool_registry
 from degenbot.execution.dodo_pmm_adapter import (
     DodoPmmPool,
     DodoPmmPoolState,
     PmmState,
     RState,
 )
+
+from degenbot.registry import pool_registry
 
 ARBITRUM_CHAIN_ID = 42161
 ONE = 10**18

@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from degenbot.d3_bridge import D3OrderRef, handle_d3_classify_payload
 from pydantic import ValidationError
+
+from degenbot.d3_bridge import D3OrderRef, handle_d3_classify_payload
 
 _ADDR = "0x" + "11" * 20
 
 
-def _order(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+def _order(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "uid": "0xabcd",
         "owner": _ADDR,
@@ -31,7 +32,7 @@ def _order(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
     return base
 
 
-def _payload(classification: str, **order_overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+def _payload(classification: str, **order_overrides: Any) -> dict[str, Any]:
     return {
         "classification": classification,
         "reason": "test classification",

@@ -153,7 +153,7 @@ class _Env:
 
 
 def _parse_block(raw: str) -> int:
-    if raw.startswith("0x") or raw.startswith("0X"):
+    if raw.startswith(("0x", "0X")):
         return int(raw, 16)
     return int(raw)
 
@@ -222,7 +222,9 @@ def _read_pmm_state(pool: Contract, block: int) -> PmmState:
     # Web3 v6 returns the tuple as a list when the ABI marks the output
     # as a struct. The component order is fixed: (i, K, B, Q, B0, Q0, R).
     i, k, b, q, b0, q0, r = raw
-    return PmmState(i=int(i), K=int(k), B=int(b), Q=int(q), B0=int(b0), Q0=int(q0), R=RState(int(r)))
+    return PmmState(
+        i=int(i), K=int(k), B=int(b), Q=int(q), B0=int(b0), Q0=int(q0), R=RState(int(r))
+    )
 
 
 def _try_call(call: Callable[[], object]) -> object | None:
@@ -245,14 +247,26 @@ def _read_dpp_fee_rates(
     here keeps the test useful for the DPP/DSP variant without forcing
     it on every pool.
     """
-    lp_model_addr = _try_call(lambda: pool.functions._LP_FEE_RATE_MODEL_().call(block_identifier=block))
-    mt_model_addr = _try_call(lambda: pool.functions._MT_FEE_RATE_MODEL_().call(block_identifier=block))
+    lp_model_addr = _try_call(
+        lambda: pool.functions._LP_FEE_RATE_MODEL_().call(block_identifier=block)
+    )
+    mt_model_addr = _try_call(
+        lambda: pool.functions._MT_FEE_RATE_MODEL_().call(block_identifier=block)
+    )
     if not isinstance(lp_model_addr, str) or not isinstance(mt_model_addr, str):
         return None
-    lp_model = web3_client.eth.contract(address=Web3.to_checksum_address(lp_model_addr), abi=_FEE_RATE_MODEL_ABI)
-    mt_model = web3_client.eth.contract(address=Web3.to_checksum_address(mt_model_addr), abi=_FEE_RATE_MODEL_ABI)
-    lp_rate = _try_call(lambda: lp_model.functions.getFeeRate(_ZERO_ADDRESS).call(block_identifier=block))
-    mt_rate = _try_call(lambda: mt_model.functions.getFeeRate(_ZERO_ADDRESS).call(block_identifier=block))
+    lp_model = web3_client.eth.contract(
+        address=Web3.to_checksum_address(lp_model_addr), abi=_FEE_RATE_MODEL_ABI
+    )
+    mt_model = web3_client.eth.contract(
+        address=Web3.to_checksum_address(mt_model_addr), abi=_FEE_RATE_MODEL_ABI
+    )
+    lp_rate = _try_call(
+        lambda: lp_model.functions.getFeeRate(_ZERO_ADDRESS).call(block_identifier=block)
+    )
+    mt_rate = _try_call(
+        lambda: mt_model.functions.getFeeRate(_ZERO_ADDRESS).call(block_identifier=block)
+    )
     if not isinstance(lp_rate, int) or not isinstance(mt_rate, int):
         return None
     return int(lp_rate), int(mt_rate)
@@ -277,7 +291,9 @@ def test_get_mid_price_matches_python(pool_contract: Contract, env: _Env) -> Non
     )
 
 
-def test_quote_matches_python_after_dpp_fees(web3_client: Web3, pool_contract: Contract, env: _Env) -> None:
+def test_quote_matches_python_after_dpp_fees(
+    web3_client: Web3, pool_contract: Contract, env: _Env
+) -> None:
     """Python `sell_base_token`/`sell_quote_token` after applying the
     contract's LP+MT fee math must equal `querySellBase`/`querySellQuote`.
 
@@ -296,14 +312,18 @@ def test_quote_matches_python_after_dpp_fees(web3_client: Web3, pool_contract: C
     state = _read_pmm_state(pool_contract, env.pin_block)
 
     if env.direction == _DIRECTION_SELL_BASE:
-        chain_receive, chain_mt_fee, chain_new_r_state, _chain_new_target = pool_contract.functions.querySellBase(
-            _ZERO_ADDRESS, env.trade_amount
-        ).call(block_identifier=env.pin_block)
+        chain_receive, chain_mt_fee, chain_new_r_state, _chain_new_target = (
+            pool_contract.functions.querySellBase(_ZERO_ADDRESS, env.trade_amount).call(
+                block_identifier=env.pin_block
+            )
+        )
         gross_python, py_new_r = sell_base_token(state, env.trade_amount)
     else:
-        chain_receive, chain_mt_fee, chain_new_r_state, _chain_new_target = pool_contract.functions.querySellQuote(
-            _ZERO_ADDRESS, env.trade_amount
-        ).call(block_identifier=env.pin_block)
+        chain_receive, chain_mt_fee, chain_new_r_state, _chain_new_target = (
+            pool_contract.functions.querySellQuote(_ZERO_ADDRESS, env.trade_amount).call(
+                block_identifier=env.pin_block
+            )
+        )
         gross_python, py_new_r = sell_quote_token(state, env.trade_amount)
 
     py_mt_fee = mul_floor(gross_python, mt_rate)

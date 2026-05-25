@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+
 from degenbot.ops_solver import deploy_verify as verifier
 
 if TYPE_CHECKING:
@@ -109,7 +110,9 @@ def test_collect_contract_findings_reports_address_and_pause_mismatches() -> Non
         ),
         expected_calls,
     )
-    report = verifier.build_report("0x000000000000000000000000000000000000bEEF", verifier.DEFAULT_CONFIG_PATH, findings)
+    report = verifier.build_report(
+        "0x000000000000000000000000000000000000bEEF", verifier.DEFAULT_CONFIG_PATH, findings
+    )
 
     assert [finding.ok for finding in findings] == [False, False]
     assert report["all_passed"] is False

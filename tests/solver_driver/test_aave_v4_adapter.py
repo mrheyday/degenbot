@@ -50,7 +50,7 @@ class TestAaveV4UserHealth:
             total_debt_usd_str="980",
             available_borrows_usd_str="0",
         )
-        assert h.health_factor < Decimal("1")
+        assert h.health_factor < Decimal(1)
 
 
 class TestAaveV4SwapQuote:

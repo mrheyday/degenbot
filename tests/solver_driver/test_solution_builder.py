@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
+
 from degenbot.protocol.models import Auction, Order, OrderClass, OrderKind, SigningScheme
 from degenbot.quote_engine import AggregatorQuote, QuoteEngineClient, QuoteRequest
 from degenbot.strategies_solver.d3_filter import D3Filter
@@ -117,5 +118,7 @@ async def test_quote_engine_client_retries_on_transport_error(respx_mock: respx.
     ]
 
     async with QuoteEngineClient(coordinator_url) as client:
-        quote = await client.quote(QuoteRequest(sell_token="0x1", buy_token="0x2", sell_amount="100"))
+        quote = await client.quote(
+            QuoteRequest(sell_token="0x1", buy_token="0x2", sell_amount="100")
+        )
         assert quote.buy_amount == "200"

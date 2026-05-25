@@ -13,7 +13,17 @@ from degenbot.strategies_solver.arbitrum_mev_market_map import (
     top_fee_density_protocols,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _find_root():
+    current = Path(__file__).resolve().parent
+    while current.parent != current:
+        if (current / "PROGRESS.md").exists():
+            return current
+        current = current.parent
+    return Path(__file__).resolve().parents[4]
+
+
+REPO_ROOT = _find_root()
 
 
 def _path(ref: str) -> Path:
@@ -66,7 +76,16 @@ def test_open_interest_leader_is_variational_even_without_fee_row() -> None:
 def test_ranked_strategy_sequence_matches_corrected_research_slate() -> None:
     priorities = ranked_strategy_priorities()
 
-    assert [priority.strategy_id for priority in priorities] == ["L-2", "U-1", "A-1", "V-1", "L-1", "J-1", "B-1", "T-1"]
+    assert [priority.strategy_id for priority in priorities] == [
+        "L-2",
+        "U-1",
+        "A-1",
+        "V-1",
+        "L-1",
+        "J-1",
+        "B-1",
+        "T-1",
+    ]
     assert priorities[0].label == "Morpho Blue atomic liquidation"
     assert priorities[1].source_protocols == ("Uniswap",)
     assert priorities[2].source_protocols == ("Uniswap", "Camelot", "fluid")
@@ -112,7 +131,9 @@ def test_boros_effective_fee_rate_is_near_zero() -> None:
 
 def test_deprioritized_gmx_uniswap_is_excluded_from_default_rankings() -> None:
     default_ids = {priority.strategy_id for priority in ranked_strategy_priorities()}
-    all_ids = {priority.strategy_id for priority in ranked_strategy_priorities(include_deprioritized=True)}
+    all_ids = {
+        priority.strategy_id for priority in ranked_strategy_priorities(include_deprioritized=True)
+    }
 
     assert "K-1" not in default_ids
     assert "K-1" in all_ids

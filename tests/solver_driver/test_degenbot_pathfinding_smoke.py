@@ -104,50 +104,48 @@ def test_degenbot_find_paths_generates_arbitrum_two_pool_cycles(
         session.add_all((exchange, weth, usdc, usdt))
         session.flush()
 
-        session.add_all(
-            (
-                uniswap_v2_pool_table(
-                    address=POOL_WETH_USDC,
-                    chain=ARBITRUM_CHAIN_ID,
-                    token0_id=weth.id,
-                    token1_id=usdc.id,
-                    exchange_id=exchange.id,
-                    fee_token0=30,
-                    fee_token1=30,
-                    fee_denominator=10_000,
-                ),
-                uniswap_v2_pool_table(
-                    address=POOL_USDC_WETH,
-                    chain=ARBITRUM_CHAIN_ID,
-                    token0_id=usdc.id,
-                    token1_id=weth.id,
-                    exchange_id=exchange.id,
-                    fee_token0=30,
-                    fee_token1=30,
-                    fee_denominator=10_000,
-                ),
-                uniswap_v2_pool_table(
-                    address=POOL_WETH_USDT,
-                    chain=ARBITRUM_CHAIN_ID,
-                    token0_id=weth.id,
-                    token1_id=usdt.id,
-                    exchange_id=exchange.id,
-                    fee_token0=30,
-                    fee_token1=30,
-                    fee_denominator=10_000,
-                ),
-                uniswap_v2_pool_table(
-                    address=POOL_USDT_WETH,
-                    chain=ARBITRUM_CHAIN_ID,
-                    token0_id=usdt.id,
-                    token1_id=weth.id,
-                    exchange_id=exchange.id,
-                    fee_token0=30,
-                    fee_token1=30,
-                    fee_denominator=10_000,
-                ),
-            )
-        )
+        session.add_all((
+            uniswap_v2_pool_table(
+                address=POOL_WETH_USDC,
+                chain=ARBITRUM_CHAIN_ID,
+                token0_id=weth.id,
+                token1_id=usdc.id,
+                exchange_id=exchange.id,
+                fee_token0=30,
+                fee_token1=30,
+                fee_denominator=10_000,
+            ),
+            uniswap_v2_pool_table(
+                address=POOL_USDC_WETH,
+                chain=ARBITRUM_CHAIN_ID,
+                token0_id=usdc.id,
+                token1_id=weth.id,
+                exchange_id=exchange.id,
+                fee_token0=30,
+                fee_token1=30,
+                fee_denominator=10_000,
+            ),
+            uniswap_v2_pool_table(
+                address=POOL_WETH_USDT,
+                chain=ARBITRUM_CHAIN_ID,
+                token0_id=weth.id,
+                token1_id=usdt.id,
+                exchange_id=exchange.id,
+                fee_token0=30,
+                fee_token1=30,
+                fee_denominator=10_000,
+            ),
+            uniswap_v2_pool_table(
+                address=POOL_USDT_WETH,
+                chain=ARBITRUM_CHAIN_ID,
+                token0_id=usdt.id,
+                token1_id=weth.id,
+                exchange_id=exchange.id,
+                fee_token0=30,
+                fee_token1=30,
+                fee_denominator=10_000,
+            ),
+        ))
         session.commit()
 
     paths = list(
@@ -163,4 +161,6 @@ def test_degenbot_find_paths_generates_arbitrum_two_pool_cycles(
 
     assert paths
     assert all(len(path) == 2 for path in paths)
-    assert any({step.address for step in path} == {POOL_WETH_USDC, POOL_USDC_WETH} for path in paths)
+    assert any(
+        {step.address for step in path} == {POOL_WETH_USDC, POOL_USDC_WETH} for path in paths
+    )

@@ -7,8 +7,9 @@ sync with the underlying constants. No network access.
 
 from __future__ import annotations
 
-from degenbot.execution import uniswap_addresses as u
 from web3 import Web3
+
+from degenbot.execution import uniswap_addresses as u
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     # Cross-protocol shared

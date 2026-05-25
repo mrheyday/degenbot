@@ -6,8 +6,9 @@ Mirror of `test_aave_v3_addresses.py` / `test_dodo_addresses.py` /
 
 from __future__ import annotations
 
-from degenbot.execution import compound_v3_addresses as c
 from web3 import Web3
+
+from degenbot.execution import compound_v3_addresses as c
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     ("COMET_USDC", c.COMET_USDC),

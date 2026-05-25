@@ -6,9 +6,10 @@ Mirror of `test_dodo_addresses.py` / `test_uniswap_addresses.py` /
 
 from __future__ import annotations
 
+from web3 import Web3
+
 from degenbot.execution import arbitrum_token_addresses as t
 from degenbot.execution import uniswap_addresses as u
-from web3 import Web3
 
 _ALL_ADDRESSES: list[tuple[str, str]] = [
     # USD-pegged stables

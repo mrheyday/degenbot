@@ -47,11 +47,16 @@ def test_decode_control_message_accepts_external_tags() -> None:
 def test_resolve_degenbot_source_path_from_repo_relative_path() -> None:
     repo_root = Path(__file__).resolve().parents[3]
 
-    assert resolve_degenbot_source_path(Path("vendor/degenbot")) == (repo_root / "vendor/degenbot").resolve()
+    assert (
+        resolve_degenbot_source_path(Path("vendor/degenbot"))
+        == (repo_root / "vendor/degenbot").resolve()
+    )
 
 
 def test_encode_heartbeat_matches_coordinator_wire_shape() -> None:
-    encoded = encode_heartbeat(DegenbotRuntime(version="0.6.0a2", source_path=Path("vendor/degenbot")))
+    encoded = encode_heartbeat(
+        DegenbotRuntime(version="0.6.0a2", source_path=Path("vendor/degenbot"))
+    )
     decoded = json.loads(encoded)
 
     assert decoded["Heartbeat"]["degenbot_version"] == "0.6.0a2"
@@ -72,26 +77,24 @@ def test_encode_error_matches_coordinator_wire_shape() -> None:
 
 
 def test_parse_simulation_request_accepts_coordinator_wire_shape() -> None:
-    path, amount_in = parse_simulation_request(
-        {
-            "kind": "Simulate",
-            "amount_in": "1000",
-            "path": [
-                {
-                    "pool": "0x1111111111111111111111111111111111111111",
-                    "router": "0x4444444444444444444444444444444444444444",
-                    "call_data": "0x12345678",
-                    "token_in": "0x2222222222222222222222222222222222222222",
-                    "token_out": "0x3333333333333333333333333333333333333333",
-                    "amount_in": "1000",
-                    "amount_out_min": "990",
-                    "zero_for_one": True,
-                    "dex": "UniswapV3",
-                    "fee": 500,
-                },
-            ],
-        }
-    )
+    path, amount_in = parse_simulation_request({
+        "kind": "Simulate",
+        "amount_in": "1000",
+        "path": [
+            {
+                "pool": "0x1111111111111111111111111111111111111111",
+                "router": "0x4444444444444444444444444444444444444444",
+                "call_data": "0x12345678",
+                "token_in": "0x2222222222222222222222222222222222222222",
+                "token_out": "0x3333333333333333333333333333333333333333",
+                "amount_in": "1000",
+                "amount_out_min": "990",
+                "zero_for_one": True,
+                "dex": "UniswapV3",
+                "fee": 500,
+            },
+        ],
+    })
 
     assert amount_in == 1000
     assert path == (
@@ -111,62 +114,58 @@ def test_parse_simulation_request_accepts_coordinator_wire_shape() -> None:
 
 
 def test_parse_simulation_request_recognizes_forward_and_action_dex_names() -> None:
-    path, _ = parse_simulation_request(
-        {
-            "kind": "Simulate",
-            "amount_in": "1000",
-            "path": [
-                {
-                    "pool": "0x1111111111111111111111111111111111111111",
-                    "token_in": "0x2222222222222222222222222222222222222222",
-                    "token_out": "0x3333333333333333333333333333333333333333",
-                    "amount_in": "1000",
-                    "amount_out_min": "990",
-                    "zero_for_one": True,
-                    "dex": "MorphoBlue",
-                },
-                {
-                    "pool": "0x1111111111111111111111111111111111111111",
-                    "token_in": "0x2222222222222222222222222222222222222222",
-                    "token_out": "0x3333333333333333333333333333333333333333",
-                    "amount_in": "1000",
-                    "amount_out_min": "990",
-                    "zero_for_one": True,
-                    "dex": "CamelotV3",
-                },
-            ],
-        }
-    )
+    path, _ = parse_simulation_request({
+        "kind": "Simulate",
+        "amount_in": "1000",
+        "path": [
+            {
+                "pool": "0x1111111111111111111111111111111111111111",
+                "token_in": "0x2222222222222222222222222222222222222222",
+                "token_out": "0x3333333333333333333333333333333333333333",
+                "amount_in": "1000",
+                "amount_out_min": "990",
+                "zero_for_one": True,
+                "dex": "MorphoBlue",
+            },
+            {
+                "pool": "0x1111111111111111111111111111111111111111",
+                "token_in": "0x2222222222222222222222222222222222222222",
+                "token_out": "0x3333333333333333333333333333333333333333",
+                "amount_in": "1000",
+                "amount_out_min": "990",
+                "zero_for_one": True,
+                "dex": "CamelotV3",
+            },
+        ],
+    })
 
     assert [step.dex for step in path] == ["MorphoBlue", "CamelotV3"]
 
 
 def test_parse_simulation_request_recognizes_address_keyed_degenbot_adapter_names() -> None:
-    path, _ = parse_simulation_request(
-        {
-            "kind": "Simulate",
-            "amount_in": "1000",
-            "path": [
-                {
-                    "pool": "0x1111111111111111111111111111111111111111",
-                    "token_in": "0x2222222222222222222222222222222222222222",
-                    "token_out": "0x3333333333333333333333333333333333333333",
-                    "amount_in": "1000",
-                    "amount_out_min": "990",
-                    "zero_for_one": True,
-                    "dex": dex,
-                }
-                for dex in (
-                    "PancakeSwapV2",
-                    "PancakeSwapV3",
-                    "SushiSwapV2",
-                    "SushiSwapV3",
-                    "CamelotV2",
-                    "BalancerV2",
-                )
-            ],
-        }
-    )
+    path, _ = parse_simulation_request({
+        "kind": "Simulate",
+        "amount_in": "1000",
+        "path": [
+            {
+                "pool": "0x1111111111111111111111111111111111111111",
+                "token_in": "0x2222222222222222222222222222222222222222",
+                "token_out": "0x3333333333333333333333333333333333333333",
+                "amount_in": "1000",
+                "amount_out_min": "990",
+                "zero_for_one": True,
+                "dex": dex,
+            }
+            for dex in (
+                "PancakeSwapV2",
+                "PancakeSwapV3",
+                "SushiSwapV2",
+                "SushiSwapV3",
+                "CamelotV2",
+                "BalancerV2",
+            )
+        ],
+    })
 
     assert [step.dex for step in path] == [
         "PancakeSwapV2",
@@ -179,50 +178,44 @@ def test_parse_simulation_request_recognizes_address_keyed_degenbot_adapter_name
 
 
 def test_parse_subscribe_request_accepts_pairs() -> None:
-    pairs = parse_subscribe_request(
-        {
-            "kind": "Subscribe",
-            "pairs": [
-                {
-                    "token0": _USDC,
-                    "token1": _WETH,
-                },
-            ],
-        }
-    )
+    pairs = parse_subscribe_request({
+        "kind": "Subscribe",
+        "pairs": [
+            {
+                "token0": _USDC,
+                "token1": _WETH,
+            },
+        ],
+    })
 
     assert pairs == (TokenPair(token0=_USDC, token1=_WETH),)
 
 
 def test_parse_subscribe_request_rejects_same_token_pair() -> None:
     with pytest.raises(SimulationInputError, match="token0 and token1 must differ"):
-        parse_subscribe_request(
-            {
-                "kind": "Subscribe",
-                "pairs": [
-                    {
-                        "token0": _USDC,
-                        "token1": _USDC.lower(),
-                    },
-                ],
-            }
-        )
+        parse_subscribe_request({
+            "kind": "Subscribe",
+            "pairs": [
+                {
+                    "token0": _USDC,
+                    "token1": _USDC.lower(),
+                },
+            ],
+        })
 
 
 def test_parse_best_opportunity_request_accepts_policy_fields() -> None:
-    request = parse_best_opportunity_request(
-        {
-            "kind": "BestOpportunity",
-            "chain_id": "42161",
-            "input_token": _WETH,
-            "from_address": "0x000000000000000000000000000000000000dEaD",
-            "min_profit": "100",
-            "min_depth": 2,
-            "max_depth": 4,
-            "max_input": "1000000",
-            "min_rate_of_exchange": "9/10",
-        }
-    )
+    request = parse_best_opportunity_request({
+        "kind": "BestOpportunity",
+        "chain_id": "42161",
+        "input_token": _WETH,
+        "from_address": "0x000000000000000000000000000000000000dEaD",
+        "min_profit": "100",
+        "min_depth": 2,
+        "max_depth": 4,
+        "max_input": "1000000",
+        "min_rate_of_exchange": "9/10",
+    })
 
     assert request == BotBestOpportunityRequest(
         chain_id=42161,
@@ -318,7 +311,9 @@ def test_encode_opportunity_from_bot_builds_executable_v3_native_arb_path() -> N
     ]
 
 
-def test_registry_subscription_source_matches_multitoken_pool_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_registry_subscription_source_matches_multitoken_pool_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Token:
         def __init__(self, address: str) -> None:
             self.address = address
@@ -331,7 +326,9 @@ def test_registry_subscription_source_matches_multitoken_pool_pairs(monkeypatch:
         )
 
     pool = Pool()
-    registry = SimpleNamespace(_all_pools={(42161, "0x1111111111111111111111111111111111111111"): pool})
+    registry = SimpleNamespace(
+        _all_pools={(42161, "0x1111111111111111111111111111111111111111"): pool}
+    )
     monkeypatch.setattr(
         "driver.execution.degenbot_ipc.importlib.import_module",
         lambda _name: SimpleNamespace(pool_registry=registry),

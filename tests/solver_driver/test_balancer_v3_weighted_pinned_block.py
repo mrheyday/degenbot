@@ -54,11 +54,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from degenbot.execution import balancer_v3_weighted_math as wm
 from degenbot.execution.balancer_fixed_point import mul_up
 from degenbot.execution.balancer_v3_addresses import ROUTER as V3_ROUTER_ADDRESS
 from degenbot.execution.balancer_v3_addresses import VAULT as V3_VAULT_ADDRESS
 from web3 import Web3
+
+from degenbot.execution import balancer_v3_weighted_math as wm
 
 if TYPE_CHECKING:
     from web3.contract import Contract
@@ -134,7 +135,7 @@ class _Env:
 
 
 def _parse_block(raw: str) -> int:
-    if raw.startswith("0x") or raw.startswith("0X"):
+    if raw.startswith(("0x", "0X")):
         return int(raw, 16)
     return int(raw)
 
@@ -215,21 +216,31 @@ def router_contract(web3_client: Web3) -> Contract:
     )
 
 
-def _read_pool_state(vault: Contract, pool: Contract, env: _Env) -> tuple[list[str], list[int], list[int], int]:
+def _read_pool_state(
+    vault: Contract, pool: Contract, env: _Env
+) -> tuple[list[str], list[int], list[int], int]:
     """Return (tokens, weights, live-scaled-balances-18, swap-fee-pct)."""
     tokens_raw = vault.functions.getPoolTokens(env.pool).call(block_identifier=env.pin_block)
     weights_raw = pool.functions.getNormalizedWeights().call(block_identifier=env.pin_block)
-    balances_raw = vault.functions.getCurrentLiveBalances(env.pool).call(block_identifier=env.pin_block)
-    fee_raw = vault.functions.getStaticSwapFeePercentage(env.pool).call(block_identifier=env.pin_block)
+    balances_raw = vault.functions.getCurrentLiveBalances(env.pool).call(
+        block_identifier=env.pin_block
+    )
+    fee_raw = vault.functions.getStaticSwapFeePercentage(env.pool).call(
+        block_identifier=env.pin_block
+    )
     tokens = [str(Web3.to_checksum_address(t)) for t in tokens_raw]
     weights = [int(w) for w in weights_raw]
     balances = [int(b) for b in balances_raw]
     return tokens, weights, balances, int(fee_raw)
 
 
-def test_pool_state_round_trips(vault_contract: Contract, pool_contract: Contract, env: _Env) -> None:
+def test_pool_state_round_trips(
+    vault_contract: Contract, pool_contract: Contract, env: _Env
+) -> None:
     tokens, weights, balances, fee = _read_pool_state(vault_contract, pool_contract, env)
-    assert len(tokens) == 2, f"this iteration handles single-pair Weighted pools only; pool has {len(tokens)} tokens"
+    assert len(tokens) == 2, (
+        f"this iteration handles single-pair Weighted pools only; pool has {len(tokens)} tokens"
+    )
     assert len(weights) == len(tokens) == len(balances)
     assert sum(weights) == 10**18, f"normalized weights must sum to 1e18; got {sum(weights)}"
     assert all(b > 0 for b in balances)

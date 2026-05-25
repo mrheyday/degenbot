@@ -16,7 +16,17 @@ from degenbot.strategies_solver.arbitrum_mev_e2e import (
 )
 from degenbot.strategies_solver.execution_workflows import WorkflowStatus
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _find_root():
+    current = Path(__file__).resolve().parent
+    while current.parent != current:
+        if (current / "PROGRESS.md").exists():
+            return current
+        current = current.parent
+    return Path(__file__).resolve().parents[4]
+
+
+REPO_ROOT = _find_root()
 
 
 def _assert_no_float(value: object) -> None:

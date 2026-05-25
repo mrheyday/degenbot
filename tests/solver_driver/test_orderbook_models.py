@@ -9,6 +9,7 @@ the test.
 from __future__ import annotations
 
 import pytest
+
 from degenbot.orderbook.models import (
     Auction,
     AuctionOrder,
@@ -193,9 +194,7 @@ def test_auction_with_one_order() -> None:
     only = auction.orders[0]
     assert isinstance(only, AuctionOrder)
     assert only.kind is OrderKind.SELL
-    assert auction.prices[
-        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-    ] == 1_000_000_000_000_000_000
+    assert auction.prices["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"] == 1_000_000_000_000_000_000
 
 
 def test_solver_competition_response() -> None:

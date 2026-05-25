@@ -49,19 +49,26 @@ class TestDecimalMath:
 class TestDodoMath:
     def test_general_integrate_k_zero_and_k_nonzero(self) -> None:
         assert general_integrate(100 * ONE, 100 * ONE, 90 * ONE, 2 * ONE, 0) == 20 * ONE
-        assert general_integrate(100 * ONE, 100 * ONE, 90 * ONE, 2 * ONE, ONE // 10) == 20_222_222_222_222_222_220
+        assert (
+            general_integrate(100 * ONE, 100 * ONE, 90 * ONE, 2 * ONE, ONE // 10)
+            == 20_222_222_222_222_222_220
+        )
 
     def test_quadratic_target_branches(self) -> None:
         assert solve_quadratic_function_for_target(100 * ONE, 10 * ONE, 2 * ONE, 0) == 120 * ONE
         assert (
-            solve_quadratic_function_for_target(100 * ONE, 10 * ONE, 2 * ONE, ONE // 10) == 119_615_242_270_663_188_000
+            solve_quadratic_function_for_target(100 * ONE, 10 * ONE, 2 * ONE, ONE // 10)
+            == 119_615_242_270_663_188_000
         )
 
     def test_quadratic_trade_branches(self) -> None:
         assert solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 0, 2 * ONE, ONE // 10) == 0
-        assert solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 1 * ONE, 2 * ONE, 0) == 2 * ONE
         assert (
-            solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 1 * ONE, 2 * ONE, ONE) == 1_591_355_599_214_145_383
+            solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 1 * ONE, 2 * ONE, 0) == 2 * ONE
+        )
+        assert (
+            solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 1 * ONE, 2 * ONE, ONE)
+            == 1_591_355_599_214_145_383
         )
         assert (
             solve_quadratic_function_for_trade(100 * ONE, 90 * ONE, 1 * ONE, 2 * ONE, ONE // 10)
@@ -90,7 +97,10 @@ class TestPmmPricing:
 
         assert sell_base_token(state, ONE) == (2_044_200_244_200_244_200_000, RState.ABOVE_ONE)
         assert sell_base_token(state, 10 * ONE) == (20_000 * ONE, RState.ONE)
-        assert sell_base_token(state, 11 * ONE) == (21_997_983_889_406_409_944_695, RState.BELOW_ONE)
+        assert sell_base_token(state, 11 * ONE) == (
+            21_997_983_889_406_409_944_695,
+            RState.BELOW_ONE,
+        )
         assert sell_quote_token(state, 2_000 * ONE) == (975_790_639_272_924_290, RState.ABOVE_ONE)
         assert get_mid_price(state) == 2_046_913_580_246_913_580_000
 
@@ -110,7 +120,10 @@ class TestPmmPricing:
 
         assert sell_quote_token(state, 2_000 * ONE) == (1_022_100_122_100_122_100, RState.BELOW_ONE)
         assert sell_quote_token(state, 20_000 * ONE) == (10 * ONE, RState.ONE)
-        assert sell_quote_token(state, 22_000 * ONE) == (10_998_991_944_703_204_972, RState.ABOVE_ONE)
+        assert sell_quote_token(state, 22_000 * ONE) == (
+            10_998_991_944_703_204_972,
+            RState.ABOVE_ONE,
+        )
         assert sell_base_token(state, ONE) == (1_951_581_278_545_848_580_849, RState.BELOW_ONE)
         assert get_mid_price(state) == 1_954_161_640_530_759_951_984
 

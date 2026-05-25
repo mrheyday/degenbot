@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from degenbot.protocol import Auction  # noqa: TC002 — runtime stub use
+
 from degenbot.quote_engine import AggregatorQuote, QuoteRequest
 from degenbot.server import SolverEngineApp
 
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from aiohttp.web import Application, Request
+
+    from degenbot.protocol import Auction
     from degenbot.strategies_solver.solver_quality import Solution as StrategySolution
 
 

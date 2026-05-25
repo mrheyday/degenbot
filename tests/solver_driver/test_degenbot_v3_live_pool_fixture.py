@@ -222,9 +222,13 @@ def _quote_with_quoter(
         abi=cast("Any", _QUOTER_V2_ABI),
     )
     try:
-        v2_result = quoter_v2.functions.quoteExactInputSingle((token_in, token_out, amount_in, fee, 0)).call(
-            block_identifier=block
-        )
+        v2_result = quoter_v2.functions.quoteExactInputSingle((
+            token_in,
+            token_out,
+            amount_in,
+            fee,
+            0,
+        )).call(block_identifier=block)
     except Exception:
         quoter_v1 = web3_client.eth.contract(
             address=Web3.to_checksum_address(quoter_address),

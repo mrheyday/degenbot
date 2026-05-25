@@ -41,7 +41,10 @@ SNAPSHOT_LOG_INDEX = 77
 def _purge_degenbot_modules_if_not_loaded() -> None:
     """Let first import read the test HOME without reinitializing pyo3 modules."""
 
-    if any(module_name == "degenbot" or module_name.startswith("degenbot.") for module_name in sys.modules):
+    if any(
+        module_name == "degenbot" or module_name.startswith("degenbot.")
+        for module_name in sys.modules
+    ):
         return
 
     for module_name in tuple(sys.modules):
@@ -100,23 +103,21 @@ def _seed_v3_snapshot_database(
         session.add(pool)
         session.flush()
 
-        session.add_all(
-            (
-                initialization_map_table(pool_id=pool.id, word=0, bitmap=1 << 10),
-                liquidity_position_table(
-                    pool_id=pool.id,
-                    tick=0,
-                    liquidity_gross=1_000_000,
-                    liquidity_net=1_000_000,
-                ),
-                liquidity_position_table(
-                    pool_id=pool.id,
-                    tick=10,
-                    liquidity_gross=1_000_000,
-                    liquidity_net=-1_000_000,
-                ),
-            )
-        )
+        session.add_all((
+            initialization_map_table(pool_id=pool.id, word=0, bitmap=1 << 10),
+            liquidity_position_table(
+                pool_id=pool.id,
+                tick=0,
+                liquidity_gross=1_000_000,
+                liquidity_net=1_000_000,
+            ),
+            liquidity_position_table(
+                pool_id=pool.id,
+                tick=10,
+                liquidity_gross=1_000_000,
+                liquidity_net=-1_000_000,
+            ),
+        ))
         session.commit()
 
 
