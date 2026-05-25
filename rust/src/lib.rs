@@ -62,6 +62,7 @@ pub mod signed_order_admission_py;
 pub mod simulation;
 pub mod tick_math;
 pub mod tick_math_py;
+pub mod utils;
 
 // Re-export commonly used items at the crate root
 pub use address_utils::{
