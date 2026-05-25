@@ -26,6 +26,7 @@ from .degenbot_rs import (
     get_function_selector,
     get_sqrt_ratio_at_tick,
     get_tick_at_sqrt_ratio,
+    optimal_input_2pool,
     to_checksum_address,
 )
 from .dispatch import (
@@ -244,6 +245,7 @@ __all__ = (
     "is_recognized_dex_kind",
     "load_degenbot_settings",
     "logger",
+    "optimal_input_2pool",
     "pool_registry",
     "resolve_executor_flash_route",
     "set_async_web3",

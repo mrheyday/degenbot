@@ -257,11 +257,37 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
     Ok(PyBytes::new(py, calldata.as_ref()))
 }
 
+use crate::simulation::v2_optimize::optimal_input_2pool;
+
+/// Calculate the optimal input amount for a 2-pool Uniswap V2 arbitrage cycle.
+#[pyfunction]
+#[pyo3(name = "optimal_input_2pool")]
+pub fn optimal_input_2pool_py(
+    r_a1: &Bound<'_, PyAny>,
+    r_b1: &Bound<'_, PyAny>,
+    fee_bps1: u32,
+    r_b2: &Bound<'_, PyAny>,
+    r_a2: &Bound<'_, PyAny>,
+    fee_bps2: u32,
+) -> PyResult<String> {
+    let result = optimal_input_2pool(
+        extract_python_u256(r_a1)?,
+        extract_python_u256(r_b1)?,
+        fee_bps1,
+        extract_python_u256(r_b2)?,
+        extract_python_u256(r_a2)?,
+        fee_bps2,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
+
 /// Add executor module to Python module.
 pub fn add_execution_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_native_arb_calldata_py, m)?)?;
     m.add_function(wrap_pyfunction!(encode_match_internal_calldata_py, m)?)?;
     m.add_function(wrap_pyfunction!(encode_compose_four_leg_calldata_py, m)?)?;
+    m.add_function(wrap_pyfunction!(optimal_input_2pool_py, m)?)?;
     Ok(())
 }
 

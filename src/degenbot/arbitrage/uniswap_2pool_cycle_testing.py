@@ -18,14 +18,15 @@ from cvxpy.settings import SOLUTION_PRESENT
 from eth_typing import ChecksumAddress, HexStr
 from scipy.optimize import OptimizeResult, minimize_scalar
 
-from degenbot.aerodrome.pools import AerodromeV2Pool, AerodromeV3Pool
-from degenbot.aerodrome.types import AerodromeV2PoolState
-from degenbot.arbitrage.types import (
+from degenbot import (
     ArbitrageCalculationResult,
     UniswapV2PoolSwapAmounts,
     UniswapV3PoolSwapAmounts,
     UniswapV4PoolSwapAmounts,
+    optimal_input_2pool,
 )
+from degenbot.aerodrome.pools import AerodromeV2Pool, AerodromeV3Pool
+from degenbot.aerodrome.types import AerodromeV2PoolState
 from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import MAX_INT256, WRAPPED_NATIVE_TOKENS
@@ -329,7 +330,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
             calc_in_time = time.perf_counter() - calc_start
 
             logger.debug(
-                f"V4: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"  # noqa: E501
+                f"V4: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"
             )
             logger.debug(
                 f"V2: {weth_in} {self.input_token} in, {forward_token_quantity} {forward_token} out"
@@ -440,7 +441,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
             calc_in_time = time.perf_counter() - calc_start
 
             logger.debug(
-                f"V3: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"  # noqa: E501
+                f"V3: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"
             )
             logger.debug(
                 f"V2: {weth_in} {self.input_token} in, {forward_token_quantity} {forward_token} out"
@@ -502,7 +503,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
                 calc_in_time = time.perf_counter() - calc_start
 
             logger.debug(
-                f"V2: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"  # noqa: E501
+                f"V2: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"
             )
             logger.debug(
                 f"V4: {weth_in} {self.input_token} in, {forward_token_quantity} {forward_token} out"
@@ -564,7 +565,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
                 calc_in_time = time.perf_counter() - calc_start
 
             logger.debug(
-                f"V2: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"  # noqa: E501
+                f"V2: {forward_token_quantity} {forward_token} in, {weth_out} {self.input_token} out"
             )
             logger.debug(
                 f"V3: {weth_in} {self.input_token} in, {forward_token_quantity} {forward_token} out"
@@ -778,7 +779,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                 logger.debug(
-                    f"V4/V4 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                    f"V4/V4 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                 )
 
             forward_token_amount = int(opt.x)
@@ -838,7 +839,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             logger.debug(f"{best_profit=}, {weth_out=}, {weth_in=}")
             logger.debug(
-                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"  # noqa: E501
+                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"
             )
             logger.debug(f"{amounts=}")
             logger.debug(f"{self.swap_pools=}")
@@ -940,7 +941,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                     logger.debug(
-                        f"V4/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                        f"V4/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                     )
 
             assert forward_token_amount >= 1
@@ -1010,7 +1011,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             logger.debug(f"{best_profit=}, {weth_out=}, {weth_in=}")
             logger.debug(
-                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"  # noqa: E501
+                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"
             )
             logger.debug(f"{amounts=}")
 
@@ -1103,7 +1104,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                     logger.debug(
-                        f"V4/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                        f"V4/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                     )
 
             assert forward_token_amount >= 1
@@ -1278,7 +1279,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                     logger.debug(
-                        f"V4/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                        f"V4/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                     )
 
             assert forward_token_amount >= 1
@@ -1438,7 +1439,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                 logger.debug(
-                    f"V3/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                    f"V3/V3 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                 )
 
             forward_token_amount = int(opt.x)
@@ -1489,7 +1490,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             logger.debug(f"{best_profit=}, {weth_out=}, {weth_in=}")
             logger.debug(
-                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"  # noqa: E501
+                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"
             )
             logger.debug(f"{amounts=}")
             logger.debug(f"{self.swap_pools=}")
@@ -1583,7 +1584,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                     logger.debug(
-                        f"V3/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                        f"V3/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                     )
 
             v2_pool_zero_for_one = v3_pool.token1 == forward_token
@@ -1652,7 +1653,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             logger.debug(f"{best_profit=}, {weth_out=}, {weth_in=}")
             logger.debug(
-                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"  # noqa: E501
+                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit} {self.input_token} profit"
             )
             logger.debug(f"{amounts=}")
             logger.debug(f"{self.swap_pools=}")
@@ -1746,7 +1747,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                     logger.debug(
-                        f"V4/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                        f"V4/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                     )
 
             assert forward_token_amount >= 1
@@ -1902,7 +1903,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             if time.perf_counter() - start > SLOW_ARB_CALC_THRESHOLD:
                 logger.debug(
-                    f"V3/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"  # noqa: E501
+                    f"V3/V2 optimization (id={self.id}) took {time.perf_counter() - start:.2f}s with {opt.nit} iterations"
                 )
 
             forward_token_amount = int(opt.x)
@@ -1975,7 +1976,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
             logger.debug(f"{best_profit=}, {weth_out=}, {weth_in=}")
             logger.debug(
-                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit:.4f} {self.input_token} profit"  # noqa: E501
+                f"Profit result: cycle {forward_token_amount} {forward_token}, {best_profit:.4f} {self.input_token} profit"
             )
             logger.debug(f"{amounts=}")
             logger.debug(f"{self.swap_pools=}")
@@ -2005,13 +2006,6 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
             v2_pool_hi_state_override: UniswapV2PoolState | AerodromeV2PoolState | None = None,
             v2_pool_lo_state_override: UniswapV2PoolState | AerodromeV2PoolState | None = None,
         ) -> ArbitrageCalculationResult[UniswapV2PoolSwapAmounts]:
-            # Reuse the pre-compiled problem
-            problem = self.__class__.convex_problem
-
-            # Indices are arbitrary but must be consistent so token position matches across
-            # reserve arrays
-            pool_hi_index, pool_lo_index = 0, 1
-
             token0_decimals = v2_pool_hi.token0.decimals
             token1_decimals = v2_pool_hi.token1.decimals
 
@@ -2027,198 +2021,228 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
                 forward_token_index = 0
             assert forward_token_index != profit_token_index
 
-            # Identify the largest value to use as a common divisor for each token.
-            compression_factor_token0 = max(
-                Fraction(v2_pool_hi.state.reserves_token0, 10**token0_decimals),
-                Fraction(v2_pool_lo.state.reserves_token0, 10**token0_decimals),
-            )
-            compression_factor_token1 = max(
-                Fraction(v2_pool_hi.state.reserves_token1, 10**token1_decimals),
-                Fraction(v2_pool_lo.state.reserves_token1, 10**token1_decimals),
-            )
-            compression_factor_forward_token = (
-                compression_factor_token0 if forward_token_index == 0 else compression_factor_token1
-            )
+            # Fast-path: use analytical optimum from Rust if available
+            uncompressed_forward_token_amount: int | None = None
+            if (
+                optimal_input_2pool is not None
+                and isinstance(v2_pool_hi, UniswapV2Pool)
+                and isinstance(v2_pool_lo, UniswapV2Pool)
+            ):
+                state_hi = v2_pool_hi_state_override or v2_pool_hi.state
+                state_lo = v2_pool_lo_state_override or v2_pool_lo.state
 
-            # Compress all pool reserves into a 0.0 - 1.0 value range
-            compressed_starting_reserves_pool_hi = (
-                Fraction(v2_pool_hi.state.reserves_token0, 10**token0_decimals)
-                / compression_factor_token0,
-                Fraction(v2_pool_hi.state.reserves_token1, 10**token1_decimals)
-                / compression_factor_token1,
-            )
-            compressed_starting_reserves_pool_lo = (
-                Fraction(v2_pool_lo.state.reserves_token0, 10**token0_decimals)
-                / compression_factor_token0,
-                Fraction(v2_pool_lo.state.reserves_token1, 10**token1_decimals)
-                / compression_factor_token1,
-            )
+                # Pool lo: input_token -> forward_token
+                # Pool hi: forward_token -> input_token
 
-            # SET NEW PARAMETER VALUES
-            fee_multiplier = problem.param_dict["fee_multiplier"]
-            compressed_reserves_pre_swap = problem.param_dict["compressed_reserves_pre_swap"]
-            pool_hi_k_pre_swap = problem.param_dict["pool_hi_pre_swap_k"]
-            pool_lo_k_pre_swap = problem.param_dict["pool_lo_pre_swap_k"]
-
-            if TYPE_CHECKING:
-                assert isinstance(fee_multiplier, Parameter)
-                assert isinstance(pool_hi_k_pre_swap, Parameter)
-                assert isinstance(pool_lo_k_pre_swap, Parameter)
-                assert isinstance(compressed_reserves_pre_swap, Parameter)
-
-            fee_multiplier.save_value(
-                np.array(
-                    (
-                        (v2_pool_hi.fee_token0, v2_pool_hi.fee_token1),
-                        (v2_pool_lo.fee_token0, v2_pool_lo.fee_token1),
-                    ),
-                    dtype=np.float64,
-                ),
-            )
-            compressed_reserves_pre_swap.save_value(
-                np.array(
-                    (
-                        compressed_starting_reserves_pool_hi,
-                        compressed_starting_reserves_pool_lo,
-                    ),
-                    dtype=np.float64,
+                r_in_lo = (
+                    state_lo.reserves_token0
+                    if v2_pool_lo.token0 == self.input_token
+                    else state_lo.reserves_token1
                 )
-            )
-            pool_hi_k_pre_swap.save_value(
-                geo_mean(compressed_reserves_pre_swap[pool_hi_index]).value
-            )
-            pool_lo_k_pre_swap.save_value(
-                geo_mean(compressed_reserves_pre_swap[pool_lo_index]).value
-            )
+                r_out_lo = (
+                    state_lo.reserves_token1
+                    if v2_pool_lo.token0 == self.input_token
+                    else state_lo.reserves_token0
+                )
 
-            # SET UP VARIABLES
-            forward_token_amount = problem.var_dict["forward_token_amount"]
-            pool_lo_profit_token_in = problem.var_dict["pool_lo_profit_token_in"]
-            pool_hi_profit_token_out = problem.var_dict["pool_hi_profit_token_out"]
+                r_in_hi = (
+                    state_hi.reserves_token0
+                    if v2_pool_hi.token0 == forward_token
+                    else state_hi.reserves_token1
+                )
+                r_out_hi = (
+                    state_hi.reserves_token1
+                    if v2_pool_hi.token0 == forward_token
+                    else state_hi.reserves_token0
+                )
 
-            # SOLVE PROBLEM
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    problem.solve(solver="CLARABEL")
-            except SolverError as exc:
-                logger.exception("Cvxpy solver error")
-                raise ArbitrageError(message="Solver error") from exc
-
-            if problem.status not in SOLUTION_PRESENT:
-                raise NoSolverSolution
-
-            if problem.value <= 0:
-                raise Unprofitable
-
-            if DEBUG_VERIFY_CACHED_PROBLEM:
                 try:
-                    new_problem = Problem(
-                        objective=problem.objective,
-                        constraints=problem.constraints,
+                    x_star_str = optimal_input_2pool(
+                        r_in_lo, r_out_lo, v2_pool_lo.fee_bps, r_in_hi, r_out_hi, v2_pool_hi.fee_bps
                     )
+                    uncompressed_forward_token_amount = int(x_star_str)
+                except Exception:
+                    pass
+
+            if uncompressed_forward_token_amount is None:
+                # Reuse the pre-compiled problem
+                problem = self.__class__.convex_problem
+
+                # Indices are arbitrary but must be consistent so token position matches across
+                # reserve arrays
+                pool_hi_index, pool_lo_index = 0, 1
+
+                # Identify the largest value to use as a common divisor for each token.
+                compression_factor_token0 = max(
+                    Fraction(v2_pool_hi.state.reserves_token0, 10**token0_decimals),
+                    Fraction(v2_pool_lo.state.reserves_token0, 10**token0_decimals),
+                )
+                compression_factor_token1 = max(
+                    Fraction(v2_pool_hi.state.reserves_token1, 10**token1_decimals),
+                    Fraction(v2_pool_lo.state.reserves_token1, 10**token1_decimals),
+                )
+                compression_factor_forward_token = (
+                    compression_factor_token0
+                    if forward_token_index == 0
+                    else compression_factor_token1
+                )
+
+                # Compress all pool reserves into a 0.0 - 1.0 value range
+                compressed_starting_reserves_pool_hi = (
+                    Fraction(v2_pool_hi.state.reserves_token0, 10**token0_decimals)
+                    / compression_factor_token0,
+                    Fraction(v2_pool_hi.state.reserves_token1, 10**token1_decimals)
+                    / compression_factor_token1,
+                )
+                compressed_starting_reserves_pool_lo = (
+                    Fraction(v2_pool_lo.state.reserves_token0, 10**token0_decimals)
+                    / compression_factor_token0,
+                    Fraction(v2_pool_lo.state.reserves_token1, 10**token1_decimals)
+                    / compression_factor_token1,
+                )
+
+                # SET NEW PARAMETER VALUES
+                fee_multiplier = problem.param_dict["fee_multiplier"]
+                compressed_reserves_pre_swap = problem.param_dict["compressed_reserves_pre_swap"]
+                pool_hi_k_pre_swap = problem.param_dict["pool_hi_pre_swap_k"]
+                pool_lo_k_pre_swap = problem.param_dict["pool_lo_pre_swap_k"]
+
+                if TYPE_CHECKING:
+                    assert isinstance(fee_multiplier, Parameter)
+                    assert isinstance(pool_hi_k_pre_swap, Parameter)
+                    assert isinstance(pool_lo_k_pre_swap, Parameter)
+                    assert isinstance(compressed_reserves_pre_swap, Parameter)
+
+                fee_multiplier.save_value(
+                    np.array(
+                        (
+                            (v2_pool_hi.fee_token0, v2_pool_hi.fee_token1),
+                            (v2_pool_lo.fee_token0, v2_pool_lo.fee_token1),
+                        ),
+                        dtype=np.float64,
+                    ),
+                )
+                compressed_reserves_pre_swap.save_value(
+                    np.array(
+                        (
+                            compressed_starting_reserves_pool_hi,
+                            compressed_starting_reserves_pool_lo,
+                        ),
+                        dtype=np.float64,
+                    )
+                )
+                pool_hi_k_pre_swap.save_value(
+                    geo_mean(compressed_reserves_pre_swap[pool_hi_index]).value
+                )
+                pool_lo_k_pre_swap.save_value(
+                    geo_mean(compressed_reserves_pre_swap[pool_lo_index]).value
+                )
+
+                # SET UP VARIABLES
+                forward_token_amount = problem.var_dict["forward_token_amount"]
+                pool_lo_profit_token_in = problem.var_dict["pool_lo_profit_token_in"]
+                pool_hi_profit_token_out = problem.var_dict["pool_hi_profit_token_out"]
+
+                # SOLVE PROBLEM
+                try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        new_problem.solve(solver="CLARABEL")
+                        problem.solve(solver="CLARABEL")
                 except SolverError as exc:
+                    logger.exception("Cvxpy solver error")
                     raise ArbitrageError(message="Solver error") from exc
-                else:
-                    if new_problem.value != problem.value:
-                        result_percent_difference = (
-                            100
-                            * abs(new_problem.value - problem.value)
-                            / ((new_problem.value + problem.value) / 2)
-                        )
-                        logger.error(
-                            f"Cached problem result ({problem.value}) within {result_percent_difference:.2f}% of fresh result ({new_problem.value})"  # noqa: E501
-                        )
-                        raise DegenbotValueError(message="CVXPY calculation result mismatch")
 
-            uncompressed_forward_token_amount = min(
-                int(
-                    forward_token_amount.value
-                    * 10**forward_token.decimals
-                    * compression_factor_forward_token
-                )
-                + 1,
-                (
-                    v2_pool_lo.state.reserves_token0
-                    if forward_token_index == 0
-                    else v2_pool_lo.state.reserves_token1
-                )
-                - 1,
-            )
+                if problem.status not in SOLUTION_PRESENT:
+                    raise NoSolverSolution
 
-            if VERBOSE_CVXPY_SOLVE:
-                pool_hi_withdrawals = (
-                    (0, pool_hi_profit_token_out)
-                    if forward_token_index == 0
-                    else (pool_hi_profit_token_out, 0)
+                if problem.value <= 0:
+                    raise Unprofitable
+
+                uncompressed_forward_token_amount = min(
+                    int(
+                        forward_token_amount.value
+                        * 10**forward_token.decimals
+                        * compression_factor_forward_token
+                    )
+                    + 1,
+                    (
+                        v2_pool_lo.state.reserves_token0
+                        if forward_token_index == 0
+                        else v2_pool_lo.state.reserves_token1
+                    )
+                    - 1,
                 )
-                pool_lo_withdrawals = (
-                    (forward_token_amount, 0)
-                    if forward_token_index == 0
-                    else (0, forward_token_amount)
-                )
-                withdrawals = bmat((
-                    pool_hi_withdrawals,
-                    pool_lo_withdrawals,
-                ))
-                pool_hi_deposits = (
-                    (forward_token_amount, 0)
-                    if forward_token_index == 0
-                    else (0, forward_token_amount)
-                )
-                pool_lo_deposits = (
-                    (0, pool_lo_profit_token_in)
-                    if forward_token_index == 0
-                    else (pool_lo_profit_token_in, 0)
-                )
-                deposits = bmat((
-                    pool_hi_deposits,
-                    pool_lo_deposits,
-                ))
-                swap_fees = multiply(fee_multiplier, deposits)
-                compressed_reserves_post_swap = (
-                    compressed_reserves_pre_swap + deposits - withdrawals - swap_fees
-                )
-                logger.info("Solved")
-                logger.info(
-                    f"fee_multiplier                        = {[(float(fee[0]), float(fee[1])) for fee in (fee_multiplier.value or [])]}"  # noqa: E501
-                )
-                logger.info(
-                    f"forward_token_amount                  = {uncompressed_forward_token_amount}"
-                )
-                logger.info(
-                    f"withdrawals (pool_hi)                 = {withdrawals[pool_hi_index].value}"
-                )
-                logger.info(
-                    f"withdrawals (pool_lo)                 = {withdrawals[pool_lo_index].value}"
-                )
-                logger.info(
-                    f"deposits (pool_hi)                    = {deposits[pool_hi_index].value}"
-                )
-                logger.info(
-                    f"deposits (pool_lo)                    = {deposits[pool_lo_index].value}"
-                )
-                logger.info(
-                    f"reserves_starting (pool_hi)           = {list(compressed_reserves_pre_swap[pool_hi_index].value or [])}"  # noqa: E501
-                )
-                logger.info(
-                    f"reserves_ending   (pool_hi)           = {list(compressed_reserves_post_swap[pool_hi_index].value)}"  # noqa: E501
-                )
-                logger.info(
-                    f"reserves_starting (pool_lo)           = {list(compressed_reserves_pre_swap[pool_lo_index].value or [])}"  # noqa: E501
-                )
-                logger.info(
-                    f"reserves_ending   (pool_lo)           = {list(compressed_reserves_post_swap[pool_lo_index].value)}"  # noqa: E501
-                )
-                logger.info(
-                    f"reserves_final    (pool_hi)           = {list(compressed_reserves_post_swap[pool_hi_index].value)}"  # noqa: E501
-                )
-                logger.info(
-                    f"reserves_final    (pool_lo)           = {list(compressed_reserves_post_swap[pool_lo_index].value)}"  # noqa: E501
-                )
+
+                if VERBOSE_CVXPY_SOLVE:
+                    pool_hi_withdrawals = (
+                        (0, pool_hi_profit_token_out)
+                        if forward_token_index == 0
+                        else (pool_hi_profit_token_out, 0)
+                    )
+                    pool_lo_withdrawals = (
+                        (forward_token_amount, 0)
+                        if forward_token_index == 0
+                        else (0, forward_token_amount)
+                    )
+                    withdrawals = bmat((
+                        pool_hi_withdrawals,
+                        pool_lo_withdrawals,
+                    ))
+                    pool_hi_deposits = (
+                        (forward_token_amount, 0)
+                        if forward_token_index == 0
+                        else (0, forward_token_amount)
+                    )
+                    pool_lo_deposits = (
+                        (0, pool_lo_profit_token_in)
+                        if forward_token_index == 0
+                        else (pool_lo_profit_token_in, 0)
+                    )
+                    deposits = bmat((
+                        pool_hi_deposits,
+                        pool_lo_deposits,
+                    ))
+                    swap_fees = multiply(fee_multiplier, deposits)
+                    compressed_reserves_post_swap = (
+                        compressed_reserves_pre_swap + deposits - withdrawals - swap_fees
+                    )
+                    logger.info("Solved")
+                    logger.info(
+                        f"fee_multiplier                        = {[(float(fee[0]), float(fee[1])) for fee in (fee_multiplier.value or [])]}"
+                    )
+                    logger.info(
+                        f"forward_token_amount                  = {uncompressed_forward_token_amount}"
+                    )
+                    logger.info(
+                        f"withdrawals (pool_hi)                 = {withdrawals[pool_hi_index].value}"
+                    )
+                    logger.info(
+                        f"withdrawals (pool_lo)                 = {withdrawals[pool_lo_index].value}"
+                    )
+                    logger.info(
+                        f"deposits (pool_hi)                    = {deposits[pool_hi_index].value}"
+                    )
+                    logger.info(
+                        f"deposits (pool_lo)                    = {deposits[pool_lo_index].value}"
+                    )
+                    logger.info(
+                        f"reserves_starting (pool_hi)           = {list(compressed_reserves_pre_swap[pool_hi_index].value or [])}"
+                    )
+                    logger.info(
+                        f"reserves_ending   (pool_hi)           = {list(compressed_reserves_post_swap[pool_hi_index].value)}"
+                    )
+                    logger.info(
+                        f"reserves_starting (pool_lo)           = {list(compressed_reserves_pre_swap[pool_lo_index].value or [])}"
+                    )
+                    logger.info(
+                        f"reserves_ending   (pool_lo)           = {list(compressed_reserves_post_swap[pool_lo_index].value)}"
+                    )
+                    logger.info(
+                        f"reserves_final    (pool_hi)           = {list(compressed_reserves_post_swap[pool_hi_index].value)}"
+                    )
+                    logger.info(
+                        f"reserves_final    (pool_lo)           = {list(compressed_reserves_post_swap[pool_lo_index].value)}"
+                    )
 
             if uncompressed_forward_token_amount <= 0:
                 raise InvalidForwardAmount
@@ -2731,7 +2755,7 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
         logger.debug(f"Generating payloads for {forward_token_amount} forward token amount")
         from_address = get_checksum_address(from_address)
 
-        assert len(self.swap_pools) == 2  # noqa: PLR2004
+        assert len(self.swap_pools) == 2
 
         """
         PAYLOAD DEFINITION FROM CONTRACT
