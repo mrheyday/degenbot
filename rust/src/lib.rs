@@ -49,6 +49,7 @@ pub mod execution;
 pub mod execution_engine;
 pub mod execution_engine_py;
 pub mod execution_py;
+pub mod executor;
 pub mod fixed_abi;
 pub mod hex_utils;
 pub mod matching;
@@ -73,6 +74,7 @@ pub use address_utils::{
 pub use hex_utils::{decode_hex, encode_hex};
 
 pub use errors::{AbiDecodeError, AddressError, ProviderError, TickMathError};
+pub use monitor::{GasEnvelope, Lane, Message, Plan, Settlement, SettlementStatus, Timestamps};
 pub use tick_math::{get_sqrt_ratio_at_tick_internal, get_tick_at_sqrt_ratio_internal};
 pub use tick_math_py::{get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio};
 
