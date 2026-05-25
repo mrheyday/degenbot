@@ -286,6 +286,76 @@ pub struct Plan {
     pub eip7702: Option<Eip7702Delegation>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatorQuote {
+    pub source: String,
+    pub amount_out: U256,
+    pub router: Address,
+    pub calldata: Bytes,
+    pub estimated_gas: u64,
+    pub fee_bps: u32,
+    pub timestamp_ms: u64,
+    pub expires_at: u64,
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchCandidate {
+    pub id: String,
+    pub side: String,
+    pub pair_sell: Address,
+    pub pair_buy: Address,
+    pub amount_sell: U256,
+    pub amount_buy_min: U256,
+    pub source_id: String,
+    pub source_venue: String,
+    pub source_expires_at: u64,
+    pub received_at_ms: u64,
+    pub cow_order: Option<CowOrderSummary>,
+    pub uniswapx_order: Option<UniswapXOrderSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CowOrderSummary {
+    pub uid: B256,
+    pub owner: Address,
+    pub sell_token: Address,
+    pub buy_token: Address,
+    pub sell_amount: U256,
+    pub buy_amount: U256,
+    pub fee_amount: U256,
+    pub valid_to: u32,
+    pub kind: String,
+    pub partially_fillable: bool,
+    pub signing_scheme: String,
+    pub signature: Bytes,
+    pub app_data: B256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniswapXOrderSummary {
+    pub order_hash: B256,
+    pub reactor: Address,
+    pub swapper: Address,
+    pub input_token: Address,
+    pub output_token: Address,
+    pub input_amount: U256,
+    pub output_amount_min: U256,
+    pub deadline: u32,
+    pub encoded_order: Bytes,
+    pub signature: Bytes,
+    pub chain_id: Option<u64>,
+    pub order_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchPair {
+    pub o: MatchCandidate,
+    pub c: MatchCandidate,
+    pub fill_amount: U256,
+    pub clearing_price: U256,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SettlementStatus {
     PreflightFailed,

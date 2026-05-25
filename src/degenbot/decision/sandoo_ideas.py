@@ -5,8 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+import json
 from degenbot.decision.types import AggregatorQuote
 from degenbot.types_solver.wire import Opportunity
+
+try:
+    from degenbot.degenbot_rs.execution_engine import evaluate_sandoo_idea_json
+    HAS_RUST_ACCEL = True
+except ImportError:
+    HAS_RUST_ACCEL = False
 
 SANDOOSCORE_SCALE = 1_000_000
 GWEI_IN_WEI = 1_000_000_000
@@ -43,6 +50,42 @@ def evaluate_sandoo_idea(
     flash_loan_fee_wei: int,
 ) -> SandooIdeaSignal:
     """Deterministic Sandoo-style candidate idea scoring for opportunities."""
+    if HAS_RUST_ACCEL:
+        try:
+            # Opportunity supports model_dump_json
+            opp_json = opp.model_dump_json()
+            quote_json = json.dumps(best_quote.__dict__) if best_quote else None
+            
+            res_json = evaluate_sandoo_idea_json(
+                opp_json,
+                quote_json,
+                max_gas_price_gwei,
+                str(flash_loan_fee_wei)
+            )
+            data = json.loads(res_json)
+            # Reconstruct the SandooIdeaSignal dataclass
+            return SandooIdeaSignal(
+                eligible=data["eligible"],
+                score=int(data["score"]),
+                reasons=data["reasons"],
+                components=SandooIdeaComponents(
+                    estimated_profit_wei=int(data["components"]["estimated_profit_wei"]),
+                    safe_size_wei=int(data["components"]["safe_size_wei"]),
+                    quote_amount_out=int(data["components"]["quote_amount_out"]),
+                    quote_amount_net_out=int(data["components"]["quote_amount_net_out"]),
+                    route_gas_wei=int(data["components"]["route_gas_wei"]),
+                    quote_fee_wei=int(data["components"]["quote_fee_wei"]),
+                    flash_loan_fee_wei=int(data["components"]["flash_loan_fee_wei"]),
+                    net_profit_after_cost_wei=int(data["components"]["net_profit_after_cost_wei"]),
+                    size_vs_flash_ratio_bps=int(data["components"]["size_vs_flash_ratio_bps"]),
+                    quote_profit_gap_wei=int(data["components"]["quote_profit_gap_wei"]),
+                    score_scale=int(data["components"]["score_scale"]),
+                )
+            )
+        except Exception:
+            # Fallback to Python on any error
+            pass
+
     reason: list[str] = []
 
     if opp.flash_amount <= 0:

@@ -43,6 +43,7 @@ pub mod async_provider;
 
 pub mod contract;
 pub mod contract_py;
+pub mod decision;
 pub mod errors;
 pub mod execution;
 pub mod execution_engine;
@@ -50,6 +51,7 @@ pub mod execution_engine_py;
 pub mod execution_py;
 pub mod fixed_abi;
 pub mod hex_utils;
+pub mod matching;
 pub mod monitor;
 pub mod provider;
 pub mod provider_py;
