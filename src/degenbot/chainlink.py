@@ -3,7 +3,7 @@ from web3.contract.contract import Contract
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
-from degenbot.types_solver.aliases import ChainId
+from degenbot.types.aliases import ChainId
 
 CHAINLINK_PRICE_FEED_ABI = pydantic_core.from_json(
     """

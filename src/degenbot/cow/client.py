@@ -22,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .models import (
+from degenbot.orderbook.models import (
     Auction,
     CompetitionSolution,
     NativePriceResponse,

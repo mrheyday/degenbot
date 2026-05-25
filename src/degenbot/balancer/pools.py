@@ -18,9 +18,9 @@ from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.functions import encode_function_calldata
-from degenbot.types_solver.abstract import AbstractLiquidityPool
-from degenbot.types_solver.aliases import BlockNumber, ChainId
-from degenbot.types_solver.concrete import PublisherMixin
+from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.aliases import BlockNumber, ChainId
+from degenbot.types.concrete import PublisherMixin
 
 
 class BalancerV2Pool(PublisherMixin, AbstractLiquidityPool):

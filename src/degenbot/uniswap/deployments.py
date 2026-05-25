@@ -5,7 +5,7 @@ from eth_typing import ChecksumAddress
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.exceptions import DegenbotValueError
-from degenbot.types_solver.abstract import AbstractExchangeDeployment
+from degenbot.types.abstract import AbstractExchangeDeployment
 
 
 @dataclass(slots=True, frozen=True)

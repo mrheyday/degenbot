@@ -62,6 +62,25 @@ from .connection.ipc import DegenbotIpcServer
 from .cow.models import Auction as CowAuction
 from .cow.submitter import CompetitionSubmitter
 
+from .decision.engine import DecisionEngine, RoutedDecision
+from .decision.precedence import DecisionKind, compare_priority
+from .decision.types import (
+    AggregatorQuote,
+    DecisionContext,
+    DecisionRoute,
+    MatchCandidate,
+    MatchPair,
+)
+from .flash.source_router import ExecutorFlashRoute, resolve_executor_flash_route
+from .matching.internal_matcher import find_best_match, find_matches
+from .strategies_coordinator.native_arb import NativeArbStrategy
+from .strategies_coordinator.types import (
+    DEX_KIND,
+    FLASH_PROTOCOL,
+    NativeArbParams,
+    SwapStep as ContractSwapStep,
+)
+
 from .aerodrome import (
     AerodromeV2Pool,
     AerodromeV2PoolManager,
@@ -215,4 +234,15 @@ __all__ = (
     "CowAuction",
     "DegenbotIpcServer",
     "DegenbotSettings",
+    "DecisionEngine",
+    "RoutedDecision",
+    "DecisionKind",
+    "DecisionContext",
+    "DecisionRoute",
+    "MatchCandidate",
+    "MatchPair",
+    "ExecutorFlashRoute",
+    "NativeArbStrategy",
+    "NativeArbParams",
+    "ContractSwapStep",
 )

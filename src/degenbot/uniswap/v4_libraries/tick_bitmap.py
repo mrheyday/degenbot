@@ -4,7 +4,7 @@ from itertools import count
 
 from degenbot.exceptions.liquidity_pool import LiquidityMapWordMissing
 from degenbot.functions import evm_divide
-from degenbot.types_solver.aliases import BlockNumber
+from degenbot.types.aliases import BlockNumber
 from degenbot.uniswap.v3_types import Tick
 from degenbot.uniswap.v4_types import InitializedTickMap, LiquidityMap, UniswapV4BitmapAtWord
 

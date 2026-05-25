@@ -3,7 +3,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, Self
 from weakref import WeakSet
 
-from degenbot.types_solver.abstract import AbstractPoolState
+from degenbot.types.abstract import AbstractPoolState
 
 
 class KeyedDefaultDict[KT, VT](defaultdict[KT, VT]):

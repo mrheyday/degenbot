@@ -5,8 +5,8 @@ from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
 from degenbot.erc20 import Erc20Token, EtherPlaceholder
 from degenbot.registry import token_registry
-from degenbot.types_solver.abstract import AbstractManager
-from degenbot.types_solver.aliases import ChainId
+from degenbot.types.abstract import AbstractManager
+from degenbot.types.aliases import ChainId
 
 if TYPE_CHECKING:
     from eth_typing import ChecksumAddress

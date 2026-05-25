@@ -26,9 +26,9 @@ from degenbot.functions import (
 )
 from degenbot.logging import logger
 from degenbot.registry import token_registry
-from degenbot.types_solver.abstract import AbstractErc20Token
-from degenbot.types_solver.aliases import BlockNumber, ChainId
-from degenbot.types_solver.concrete import BoundedCache
+from degenbot.types.abstract import AbstractErc20Token
+from degenbot.types.aliases import BlockNumber, ChainId
+from degenbot.types.concrete import BoundedCache
 
 if TYPE_CHECKING:
     from hexbytes import HexBytes

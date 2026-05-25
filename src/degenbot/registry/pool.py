@@ -5,8 +5,8 @@ from hexbytes import HexBytes
 import degenbot.exceptions
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.exceptions.registry import RegistryAlreadyInitialized
-from degenbot.types_solver.abstract import AbstractLiquidityPool, AbstractRegistry
-from degenbot.types_solver.aliases import ChainId
+from degenbot.types.abstract import AbstractLiquidityPool, AbstractRegistry
+from degenbot.types.aliases import ChainId
 
 if TYPE_CHECKING:
     from eth_typing import ChecksumAddress

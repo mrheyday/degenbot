@@ -70,15 +70,15 @@ from degenbot.solidly.solidly_functions import (
     general_calc_exact_in_volatile,
     general_calc_k,
 )
-from degenbot.types_solver.abstract import AbstractLiquidityPool
-from degenbot.types_solver.concrete import PublisherMixin
+from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.concrete import PublisherMixin
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from degenbot.execution_adapters.adapter_base import configure_execution_logging
 
 if TYPE_CHECKING:
-    from degenbot.types_solver.concrete import Subscriber
+    from degenbot.types.concrete import Subscriber
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

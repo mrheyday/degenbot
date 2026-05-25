@@ -17,8 +17,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from degenbot.protocol.models import Auction, Trade
-from degenbot.protocol.models import Solution as ProtocolSolution
+from degenbot.cow.models import Auction, Trade
+from degenbot.cow.models import Solution as ProtocolSolution
 from degenbot.quote_engine import QuoteRequest
 
 if TYPE_CHECKING:

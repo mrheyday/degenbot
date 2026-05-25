@@ -66,8 +66,8 @@ from weakref import WeakSet
 
 import structlog
 from degenbot.registry import pool_registry
-from degenbot.types_solver.abstract import AbstractLiquidityPool
-from degenbot.types_solver.concrete import PublisherMixin
+from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.concrete import PublisherMixin
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
@@ -80,7 +80,7 @@ from degenbot.execution_adapters.dodo_pmm_math import (
 )
 
 if TYPE_CHECKING:
-    from degenbot.types_solver.concrete import Subscriber
+    from degenbot.types.concrete import Subscriber
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

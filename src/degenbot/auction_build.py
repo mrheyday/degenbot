@@ -13,11 +13,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from degenbot.protocol.models import Auction, SolveResponse
+from degenbot.cow.models import Auction, SolveResponse
 from degenbot.strategies_solver import D3Filter
 
 if TYPE_CHECKING:
-    from degenbot.execution.competition_submitter import CompetitionSubmitter
+    from degenbot.cow.submitter import CompetitionSubmitter
     from degenbot.strategies_solver import SolutionBuilder
 
 ADDRESS_PATTERN = r"^0x[a-fA-F0-9]{40}$"

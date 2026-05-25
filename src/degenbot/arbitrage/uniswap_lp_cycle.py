@@ -29,9 +29,9 @@ from degenbot.exceptions.arbitrage import ArbitrageError, RateOfExchangeBelowMin
 from degenbot.exceptions.evm import EVMRevertError
 from degenbot.exceptions.liquidity_pool import LiquidityPoolError
 from degenbot.logging import logger
-from degenbot.types_solver.abstract import AbstractArbitrage
-from degenbot.types_solver.aliases import BlockNumber
-from degenbot.types_solver.concrete import (
+from degenbot.types.abstract import AbstractArbitrage
+from degenbot.types.aliases import BlockNumber
+from degenbot.types.concrete import (
     AbstractPublisherMessage,
     PoolStateMessage,
     Publisher,

@@ -9,8 +9,8 @@ from degenbot.connection import connection_manager
 from degenbot.constants import ZERO_ADDRESS
 from degenbot.erc20 import Erc20Token
 from degenbot.functions import get_number_for_block_identifier
-from degenbot.types_solver.aliases import BlockNumber, ChainId
-from degenbot.types_solver.concrete import BoundedCache
+from degenbot.types.aliases import BlockNumber, ChainId
+from degenbot.types.concrete import BoundedCache
 
 if TYPE_CHECKING:
     from eth_typing import ChecksumAddress

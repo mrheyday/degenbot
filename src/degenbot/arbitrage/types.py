@@ -4,7 +4,7 @@ from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 
 from degenbot.erc20 import Erc20Token
-from degenbot.types_solver.aliases import BlockNumber
+from degenbot.types.aliases import BlockNumber
 
 
 class AbstractSwapAmounts: ...

@@ -2,8 +2,8 @@ import dataclasses
 
 from eth_typing import HexAddress
 
-from degenbot.types_solver.abstract import AbstractPoolState
-from degenbot.types_solver.concrete import PoolStateMessage
+from degenbot.types.abstract import AbstractPoolState
+from degenbot.types.concrete import PoolStateMessage
 
 
 @dataclasses.dataclass(slots=True, frozen=True, kw_only=True)

@@ -7,7 +7,7 @@ from web3 import AsyncBaseProvider, AsyncWeb3, JSONBaseProvider
 from web3.types import RPCResponse
 
 from degenbot.exceptions import DegenbotValueError
-from degenbot.types_solver.aliases import ChainId
+from degenbot.types.aliases import ChainId
 
 
 def _fast_decode_rpc_response(raw_response: bytes) -> RPCResponse:

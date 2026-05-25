@@ -19,8 +19,8 @@ from degenbot.exceptions.manager import (
 )
 from degenbot.logging import logger
 from degenbot.registry import pool_registry
-from degenbot.types_solver.abstract.pool_manager import AbstractPoolManager
-from degenbot.types_solver.aliases import ChainId
+from degenbot.types.abstract.pool_manager import AbstractPoolManager
+from degenbot.types.aliases import ChainId
 from degenbot.uniswap.deployments import FACTORY_DEPLOYMENTS, UniswapV2ExchangeDeployment
 from degenbot.uniswap.managers import AbstractUniswapV3PoolManager
 from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool

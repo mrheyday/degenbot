@@ -5,7 +5,7 @@ from itertools import count
 from degenbot.constants import MAX_UINT8
 from degenbot.exceptions.liquidity_pool import LiquidityMapWordMissing
 from degenbot.functions import evm_divide
-from degenbot.types_solver.aliases import BlockNumber
+from degenbot.types.aliases import BlockNumber
 from degenbot.uniswap.v3_libraries.bit_math import least_significant_bit, most_significant_bit
 from degenbot.uniswap.v3_types import InitializedTickMap, LiquidityMap, Tick, UniswapV3BitmapAtWord
 
