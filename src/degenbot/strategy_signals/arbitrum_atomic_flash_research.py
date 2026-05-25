@@ -60,7 +60,7 @@ ATOMIC_FLASH_TARGETS: tuple[AtomicFlashTarget, ...] = (
             "liquidation, withdrawal, swap-back, and repayment."
         ),
         flash_source="Balancer V3 Vault.unlock external flash source",
-        execution_surface="EVC.batch liquidation through controller vaults",
+        execution_surface="EVC.batch liquidate through controller vaults",
         status=AtomicFlashStatus.REQUIRES_DECODE,
         tvl_usd=0,
         fees_30d_usd=0,

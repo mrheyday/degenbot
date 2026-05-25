@@ -47,7 +47,9 @@ class AuctionOrderRef(BaseModel):
     valid_to: int = Field(alias="validTo", gt=0)
     kind: Literal["buy", "sell"]
     partially_fillable: bool = Field(alias="partiallyFillable")
-    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(alias="signingScheme")
+    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(
+        alias="signingScheme",
+    )
     signature: str = Field(pattern=HEX_PATTERN)
 
     @field_validator("sell_amount", "buy_amount", "fee_amount", mode="before")

@@ -287,9 +287,9 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             "shadow/replay modes stay typed",
         ),
         code_refs=(
-            "engine/src/lib.rs",
+            "vendor/degenbot/rust/src/lib.rs",
             "coordinator/src/index.ts",
-            "solver/driver/execution/degenbot_ipc.py",
+            "vendor/degenbot/src/degenbot/connection/ipc.py",
             "coordinator/src/decision/engine.ts",
         ),
         proof_refs=(
@@ -300,7 +300,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 1,
                 "Emit opportunity",
-                ("engine/src/lib.rs", "solver/driver/execution/degenbot_ipc.py"),
+                ("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
                 "Engine/Python adapter emits typed opportunities.",
             ),
             _stage(
@@ -352,7 +352,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 1,
                 "Detect price gap",
-                ("engine/src/lib.rs",),
+                ("vendor/degenbot/rust/src/lib.rs",),
                 "Opportunity carries flash amount and route.",
             ),
             _stage(
@@ -638,7 +638,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             "coordinator/src/submission/lane-router.ts",
             "coordinator/src/signals/detectors/timeboost-round.ts",
             "coordinator/src/signals/actions/bid-timeboost-round.ts",
-            "engine/src/lib.rs",
+            "vendor/degenbot/rust/src/lib.rs",
         ),
         proof_refs=(
             "coordinator/src/submission/lane-router.test.ts",
@@ -648,7 +648,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 1,
                 "Consume feed/timing",
-                ("engine/src/lib.rs", "coordinator/src/signals/detectors/timeboost-round.ts"),
+                ("vendor/degenbot/rust/src/lib.rs", "coordinator/src/signals/detectors/timeboost-round.ts"),
                 "Feed and round state are typed inputs.",
             ),
             _stage(

@@ -3,7 +3,7 @@
 # TC002: `ChecksumAddress` is used at runtime as the `to_checksum_address`
 # annotation target — cannot move into TYPE_CHECKING.
 # PLR0913: matches degenbot's existing pool constructor pattern.
-# ruff: noqa: TC002, PLR0913
+# ruff: noqa: TC002
 """DODO PMM (Proactive Market Maker) v2 pool adapter.
 
 Wraps the audited `dodo_pmm_math` primitives into a degenbot-pattern
@@ -65,9 +65,6 @@ from typing import TYPE_CHECKING
 from weakref import WeakSet
 
 import structlog
-from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractLiquidityPool
-from degenbot.types.concrete import PublisherMixin
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
@@ -78,6 +75,9 @@ from degenbot.execution_adapters.dodo_pmm_math import (
     sell_base_token,
     sell_quote_token,
 )
+from degenbot.registry import pool_registry
+from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.concrete import PublisherMixin
 
 if TYPE_CHECKING:
     from degenbot.types.concrete import Subscriber

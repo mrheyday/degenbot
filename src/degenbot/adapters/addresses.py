@@ -7,6 +7,7 @@ parsing TypeScript at runtime.
 
 from __future__ import annotations
 
+from itertools import starmap
 from types import MappingProxyType
 from typing import Final
 
@@ -114,7 +115,8 @@ def address(export_name: str) -> str:
     try:
         return REGISTRY_ADDRESSES[export_name]
     except KeyError as exc:
-        raise KeyError(f"unknown TS registry address export {export_name!r}") from exc
+        msg = f"unknown TS registry address export {export_name!r}"
+        raise KeyError(msg) from exc
 
 
 def binding(export_name: str, role: str) -> ContractBinding:
@@ -124,4 +126,4 @@ def binding(export_name: str, role: str) -> ContractBinding:
 
 def bindings(*items: tuple[str, str]) -> tuple[ContractBinding, ...]:
     """Create multiple contract bindings from `(export_name, role)` pairs."""
-    return tuple(binding(export_name, role) for export_name, role in items)
+    return tuple(starmap(binding, items))

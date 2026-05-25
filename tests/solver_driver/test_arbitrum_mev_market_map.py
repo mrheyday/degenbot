@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from degenbot.strategies.arbitrum_mev_market_map import (
+from degenbot.strategies_solver.arbitrum_mev_market_map import (
     FEE_DENSITY_SNAPSHOT,
     StrategyPocStatus,
     highest_open_interest_protocol,

@@ -33,6 +33,8 @@
 //!
 //! See individual module documentation for usage examples.
 
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 pub mod abi_decoder;
 pub mod abi_encoder;
 pub mod abi_types;
@@ -74,7 +76,10 @@ pub use address_utils::{
 pub use hex_utils::{decode_hex, encode_hex};
 
 pub use errors::{AbiDecodeError, AddressError, ProviderError, TickMathError};
-pub use monitor::{GasEnvelope, Lane, Message, Plan, Settlement, SettlementStatus, Timestamps};
+pub use monitor::{
+    Eip7702Delegation, GasEnvelope, Lane, Message, Plan, PlanKind, Reserves, Settlement,
+    SettlementStatus, Timestamps,
+};
 pub use tick_math::{get_sqrt_ratio_at_tick_internal, get_tick_at_sqrt_ratio_internal};
 pub use tick_math_py::{get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio};
 

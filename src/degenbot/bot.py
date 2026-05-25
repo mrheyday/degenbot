@@ -9,10 +9,10 @@ from degenbot.arbitrage.uniswap_curve_cycle import UniswapCurveCycle
 from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
+from degenbot.exceptions.base import DegenbotError
 from degenbot.logging import logger
 from degenbot.pathfinding import find_paths
 from degenbot.registry import pool_registry
-from degenbot.exceptions.base import DegenbotError
 from degenbot.types.aliases import BlockNumber, ChainId
 
 
@@ -95,7 +95,7 @@ class DegenbotBot:
         max_input: int | None = None,
         pool_types: Sequence[type] | None = None,
         block_number: BlockNumber | None = None,
-    ) -> "DegenbotBot":
+    ) -> DegenbotBot:
         """
         Build a bot from the currently registered pools and the pathfinder.
 
@@ -109,7 +109,7 @@ class DegenbotBot:
             token = input_token
         elif hasattr(input_token, "address"):
             token = token_manager.get_erc20token(
-                get_checksum_address(getattr(input_token, "address"))
+                get_checksum_address(input_token.address)
             )
         else:
             token = token_manager.get_erc20token(get_checksum_address(input_token))

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from degenbot.strategies.execution_workflows import (
+from degenbot.strategies_solver.execution_workflows import (
     EXECUTION_WORKFLOWS,
     WorkflowStatus,
     workflow_for_id,
     workflows_for_decision_kind,
 )
-from degenbot.strategies.strategy_intelligence import (
+from degenbot.strategies_solver.strategy_intelligence import (
     STRATEGY_INTELLIGENCE_PROFILES,
     BlockerStatus,
     profile_for_workflow,

@@ -28,7 +28,6 @@ from degenbot.aave.events import (
 )
 from degenbot.cli.aave.constants import LIQUIDATION_OPERATION_TYPES
 from degenbot.cli.aave.db_assets import get_contract
-from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.aave.db_users import is_discount_supported
 from degenbot.cli.aave.event_handlers import (
     _process_address_set_event,
@@ -56,6 +55,7 @@ from degenbot.cli.aave.token_processor import (
 )
 from degenbot.cli.aave.transfers import _process_collateral_transfer
 from degenbot.cli.aave.types import TransactionContext
+from degenbot.cli.aave_debug_logger import aave_debug_logger
 from degenbot.cli.aave_transaction_operations import (
     Operation,
     OperationType,

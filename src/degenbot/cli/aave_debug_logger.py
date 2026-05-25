@@ -266,22 +266,7 @@ class AaveDebugLogger:
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][1])
                 assert user_addr == "0x" + topics[1].hex()[-40:]
                 user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.BORROW.value:
-                assert len(topics) == 4
-                (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][2])
-                assert user_addr == "0x" + topics[2].hex()[-40:]
-                user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.REPAY.value:
-                assert len(topics) == 4
-                (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][2])
-                assert user_addr == "0x" + topics[2].hex()[-40:]
-                user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.SUPPLY.value:
-                assert len(topics) == 4
-                (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][2])
-                assert user_addr == "0x" + topics[2].hex()[-40:]
-                user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.WITHDRAW.value:
+            elif topic == AaveV3PoolEvent.BORROW.value or topic == AaveV3PoolEvent.REPAY.value or topic == AaveV3PoolEvent.SUPPLY.value or topic == AaveV3PoolEvent.WITHDRAW.value:
                 assert len(topics) == 4
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][2])
                 assert user_addr == "0x" + topics[2].hex()[-40:]
@@ -291,12 +276,7 @@ class AaveDebugLogger:
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][3])
                 assert user_addr == "0x" + topics[3].hex()[-40:]
                 user_addresses.add(user_addr)
-            elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value:
-                assert len(topics) == 2
-                (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][1])
-                assert user_addr == "0x" + topics[1].hex()[-40:]
-                user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
+            elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value or topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
                 assert len(topics) == 2
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][1])
                 assert user_addr == "0x" + topics[1].hex()[-40:]

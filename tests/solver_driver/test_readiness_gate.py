@@ -4,9 +4,9 @@ import json
 import subprocess
 from typing import TYPE_CHECKING
 
-from degenbot.ops import readiness_gate
-from degenbot.strategies.execution_workflows import EXECUTION_WORKFLOWS
-from degenbot.strategies.strategy_intelligence import STRATEGY_INTELLIGENCE_PROFILES
+from degenbot.ops_solver import readiness_gate
+from degenbot.strategies_solver.execution_workflows import EXECUTION_WORKFLOWS
+from degenbot.strategies_solver.strategy_intelligence import STRATEGY_INTELLIGENCE_PROFILES
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -5,12 +5,15 @@ inputs before delegating to the Rust-backed `degenbot.degenbot_rs` bindings.
 The Rust layer remains the source of truth for validation and encoding.
 """
 
+import sys as _sys
 from collections.abc import Mapping, Sequence
 from typing import Any, TypedDict
 
+from hexbytes import HexBytes
+
+from degenbot.cow import submitter as _competition_submitter
 from degenbot.degenbot_rs import to_checksum_address
 from degenbot.utils.bytes import HexBytesLike, to_bytes
-from hexbytes import HexBytes
 
 try:  # Prefer canonical exports from a rebuilt extension.
     from degenbot.degenbot_rs import (
@@ -162,3 +165,10 @@ __all__ = [
     "encode_match_internal_calldata",
     "encode_native_arb_calldata",
 ]
+
+# Compatibility for the migrated solver-driver import path. `execution.py`
+# remains the calldata-encoding module, but legacy code imported
+# `degenbot.execution.competition_submitter` before the CoW submitter moved to
+# `degenbot.cow.submitter`.
+__path__ = []  # type: ignore[var-annotated]
+_sys.modules[__name__ + ".competition_submitter"] = _competition_submitter

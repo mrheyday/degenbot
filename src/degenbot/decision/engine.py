@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from degenbot.decision.precedence import PRECEDENCE, compare_priority, DecisionKind
-from degenbot.decision.sandoo_ideas import evaluate_sandoo_idea, SandooIdeaSignal
+from degenbot.decision.precedence import DecisionKind, compare_priority
+from degenbot.decision.sandoo_ideas import SandooIdeaSignal, evaluate_sandoo_idea
 from degenbot.decision.types import AggregatorQuote, DecisionContext, DecisionRoute
 from degenbot.types_solver.wire import Opportunity
 
@@ -67,7 +68,7 @@ class DecisionEngine:
 
         # 1. Pick A — internal match (Stubbed)
         if self._settings.strategy_internal_match_enabled:
-            pass # find_best_match logic goes here
+            pass  # find_best_match logic goes here
 
         # 2. Pick B — four-leg composition (Stubbed)
         if self._settings.strategy_four_leg_enabled:
@@ -89,7 +90,7 @@ class DecisionEngine:
             self._settings.strategy_native_arb_enabled and opp.kind == "NativeArb"
         )
         sandoo_idea: SandooIdeaSignal | None = None
-        
+
         if should_enrich_quote:
             # TODO: best_quote implementation (DeFiLlamaSwap)
             pass
@@ -110,13 +111,13 @@ class DecisionEngine:
                 if best_q: enrichment["best_quote"] = best_q
                 if timeboost_decision: enrichment["timeboost"] = timeboost_decision
                 if sandoo_idea: enrichment["sandoo_idea"] = sandoo_idea
-                
+
                 candidates.append(RouteCandidate(
                     kind="native_arb",
                     route=DecisionRoute(kind="native_arb", opportunity_id=opp.id),
                     ctx=ctx,
                     score_wei=self._derive_native_arb_score(opp, best_q, sandoo_idea),
-                    enrichment=enrichment if enrichment else None
+                    enrichment=enrichment or None
                 ))
 
         # 8. Pass.
@@ -163,7 +164,7 @@ class DecisionEngine:
 
         if best_q is None:
             return True
-        
+
         return self._is_native_arb_profit_superior(opp, best_q)
 
     def _is_native_arb_profit_superior(self, opp: Opportunity, best_q: AggregatorQuote) -> bool:
@@ -181,23 +182,23 @@ class DecisionEngine:
     ) -> int:
         if sandoo_idea and sandoo_idea.eligible:
             return sandoo_idea.components.net_profit_after_cost_wei
-        
+
         if best_q and opp.token_in.lower() == opp.token_out.lower():
             best_quote_net_out = best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
             return opp.estimated_profit_wei - best_quote_net_out
-        
+
         return opp.estimated_profit_wei
 
     def _select_best_route(self, candidates: Sequence[RouteCandidate]) -> RouteCandidate:
         best: RouteCandidate | None = None
         for candidate in candidates:
             if (
-                best is None 
+                best is None
                 or compare_priority(candidate.kind, best.kind) < 0
                 or (candidate.kind == best.kind and candidate.score_wei > best.score_wei)
             ):
                 best = candidate
-        
+
         if best is None:
              return RouteCandidate(
                 kind="pass",

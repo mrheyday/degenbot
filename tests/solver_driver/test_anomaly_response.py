@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from degenbot.ops import anomaly_response as ar
+from degenbot.ops_solver import anomaly_response as ar
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from aiohttp.web import Application, Request
-    from degenbot.strategies.solver_quality import Solution as StrategySolution
+    from degenbot.strategies_solver.solver_quality import Solution as StrategySolution
 
 
 SOLVER_ADDRESS = "0x" + "ab" * 20

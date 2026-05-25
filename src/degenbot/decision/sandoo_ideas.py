@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Sequence
-
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 from degenbot.decision.types import AggregatorQuote
 from degenbot.types_solver.wire import Opportunity
 
@@ -55,7 +55,7 @@ def evaluate_sandoo_idea(
             # Opportunity is a Pydantic model
             opp_json = opp.model_dump_json(by_alias=True)
             quote_json = best_quote.model_dump_json(by_alias=True) if best_quote else None
-            
+
             res_json = evaluate_sandoo_idea_json(
                 opp_json,
                 quote_json,

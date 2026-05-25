@@ -3,7 +3,15 @@ from pathlib import Path
 from typing import Annotated
 
 import tomlkit
-from pydantic import BaseModel, HttpUrl, PlainSerializer, WebsocketUrl, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    PlainSerializer,
+    SecretStr,
+    WebsocketUrl,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from degenbot.logging import logger
@@ -25,11 +33,16 @@ class DatabaseSettings(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict()
 
-    database: DatabaseSettings
+    database: DatabaseSettings = Field(default_factory=lambda: DatabaseSettings(path=DB_PATH))
     rpc: dict[
         ChainId,
         HttpUrl | WebsocketUrl | Path,
-    ]
+    ] = Field(default_factory=dict)
+    cow_api_base: HttpUrl = Field(default=HttpUrl("https://api.cow.fi/arbitrum_one"))
+    cow_api_key: SecretStr | None = None
+    cow_solver_address: str | None = None
+    cow_solver_private_key: SecretStr | None = None
+    chain_id: int = 42161
 
     @field_validator("rpc", mode="after")
     def validate_paths(

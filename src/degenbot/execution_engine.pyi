@@ -3,7 +3,6 @@ from typing import Any, NotRequired, TypedDict
 
 from degenbot.utils.bytes import HexBytesLike
 
-
 class ExecutionPlanDict(TypedDict):
     trace_id: str
     strategy: str
@@ -21,7 +20,6 @@ class ExecutionPlanDict(TypedDict):
     dry_run: bool
     broadcast_lane: str
 
-
 class EnginePolicyDict(TypedDict):
     expected_chain_id: int
     min_profit_wei: int | bytes | str
@@ -33,18 +31,15 @@ class EnginePolicyDict(TypedDict):
     allowed_targets: NotRequired[Sequence[str | bytes]]
     allowed_lanes: NotRequired[Sequence[str]]
 
-
 class SourceArtifactDict(TypedDict):
     name: str
     block_number: int
     observed_at_ns: int
 
-
 class GateArtifactDict(TypedDict):
     name: str
     admitted: bool
     reason: NotRequired[str | None]
-
 
 class SimulationArtifactDict(TypedDict):
     success: bool
@@ -52,7 +47,6 @@ class SimulationArtifactDict(TypedDict):
     gas_used: int
     state_read_count: int
     revert_reason: NotRequired[str | None]
-
 
 def compose_engine_job(
     plan: Mapping[str, Any],
@@ -62,7 +56,6 @@ def compose_engine_job(
     simulation: Mapping[str, Any],
     now_ms: int,
 ) -> dict[str, Any]: ...
-
 
 __all__ = [
     "EnginePolicyDict",

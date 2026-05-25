@@ -125,7 +125,7 @@ pub fn evaluate_sandoo_idea(
         reasons.push("flash_amount_caps_execution_size".to_string());
     }
 
-    let quote_profit_gap_wei = if let Some(_) = best_quote {
+    let quote_profit_gap_wei = if best_quote.is_some() {
         if opp.token_in == opp.token_out {
             if quote_amount_net_out > opp.estimated_profit_wei {
                 quote_amount_net_out - opp.estimated_profit_wei

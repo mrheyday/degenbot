@@ -53,6 +53,7 @@ from degenbot.types_solver.executor import (
     SwapStep,
 )
 from degenbot.types_solver.wire import (
+    Opportunity,
     compose_params_from_wire,
     from_wire_json,
     match_params_from_wire,
@@ -69,6 +70,7 @@ __all__ = [
     "FlashProtocol",
     "MatchParams",
     "NativeArbParams",
+    "Opportunity",
     "SwapStep",
     "compose_params_from_wire",
     "encode_compose_four_leg",

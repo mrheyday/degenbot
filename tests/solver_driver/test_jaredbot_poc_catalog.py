@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from degenbot.strategies.jaredbot_poc_catalog import (
+from degenbot.strategies_solver.jaredbot_poc_catalog import (
     JAREDBOT_POCS,
     CapitalMode,
     PocStatus,

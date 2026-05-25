@@ -55,6 +55,7 @@ dependencies = [
  "alloy-core",
  "alloy-eips",
  "alloy-network",
+ "alloy-node-bindings",
  "alloy-provider",
  "alloy-pubsub",
  "alloy-rpc-client",
@@ -273,7 +274,7 @@ checksum = "c1ceeea6dcbbcd4e546b27700763a6f6c3b3fee30054209884f521078b6fda4f"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
- "alloy-hardforks",
+ "alloy-hardforks 0.4.7",
  "alloy-primitives",
  "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
@@ -283,6 +284,31 @@ dependencies = [
  "revm 38.0.0",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "alloy-genesis"
+version = "2.0.5"
+source = "git+https://github.com/alloy-rs/alloy.git?tag=v2.0.5#653989f37c34ebdd65814cd9449fb7bf97e3bf4e"
+dependencies = [
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-serde",
+ "alloy-trie",
+ "serde",
+]
+
+[[package]]
+name = "alloy-hardforks"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3165210652f71dfc094b051602bafd691f506c54050a174b1cba18fb5ef706a3"
+dependencies = [
+ "alloy-chains",
+ "alloy-eip2124",
+ "alloy-primitives",
+ "auto_impl",
+ "dyn-clone",
 ]
 
 [[package]]
@@ -362,6 +388,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-node-bindings"
+version = "2.0.5"
+source = "git+https://github.com/alloy-rs/alloy.git?tag=v2.0.5#653989f37c34ebdd65814cd9449fb7bf97e3bf4e"
+dependencies = [
+ "alloy-genesis",
+ "alloy-hardforks 0.2.13",
+ "alloy-network",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "k256",
+ "libc",
+ "rand 0.8.6",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "alloy-primitives"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -401,6 +448,7 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-network",
  "alloy-network-primitives",
+ "alloy-node-bindings",
  "alloy-primitives",
  "alloy-pubsub",
  "alloy-rpc-client",
@@ -2272,6 +2320,7 @@ dependencies = [
  "alloy-provider",
  "alloy-rpc-types-eth",
  "alloy-transport-ws",
+ "async-trait",
  "base64",
  "cowprotocol-solvers-dto-alloy",
  "dashmap",

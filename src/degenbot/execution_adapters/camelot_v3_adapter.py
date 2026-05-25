@@ -4,7 +4,7 @@
 # TC002: `ChecksumAddress` is used at runtime as the `to_checksum_address`
 # annotation target — cannot move into TYPE_CHECKING.
 # PLR0913: matches degenbot's existing pool constructor pattern.
-# ruff: noqa: RUF002, RUF003, TC002, PLR0913
+# ruff: noqa: RUF002, RUF003, TC002
 """Camelot V3 (Algebra Integral) pool adapter — single-tick simulation.
 
 Camelot V3 on Arbitrum is built on the **Algebra Integral v1.2.2**
@@ -84,15 +84,15 @@ from typing import TYPE_CHECKING
 from weakref import WeakSet
 
 import structlog
+from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
+
+from degenbot.execution_adapters.adapter_base import configure_execution_logging
 from degenbot.registry import pool_registry
 from degenbot.types.abstract import AbstractLiquidityPool
 from degenbot.types.concrete import PublisherMixin
 from degenbot.uniswap.v3_libraries.swap_math import compute_swap_step
 from degenbot.uniswap.v3_libraries.tick_math import get_sqrt_ratio_at_tick
-from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
-
-from degenbot.execution_adapters.adapter_base import configure_execution_logging
 
 if TYPE_CHECKING:
     from degenbot.types.concrete import Subscriber

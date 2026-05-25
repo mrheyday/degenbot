@@ -64,7 +64,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         strategy_name="Native arbitrage / Pick D3",
         status=WorkflowStatus.EXECUTABLE,
         decision_kinds=("native_arb",),
-        signal_sources=("engine/src/lib.rs", "solver/driver/execution/degenbot_ipc.py"),
+        signal_sources=("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/decision/engine.ts"),
         planner_modules=("coordinator/src/strategies/native-arb.ts", "coordinator/src/router/encode.ts"),
         calldata_builders=("coordinator/src/strategies/native-arb.ts",),
@@ -97,7 +97,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 1,
                 "Detect degenbot opportunity",
-                ("engine/src/lib.rs", "solver/driver/execution/degenbot_ipc.py"),
+                ("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
                 "Opportunity carries flashToken, flashAmount, route, and estimated profit.",
             ),
             WorkflowStep(
@@ -199,7 +199,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         strategy_name="Four-leg composition / Pick B",
         status=WorkflowStatus.EXECUTABLE,
         decision_kinds=("four_leg",),
-        signal_sources=("engine/src/lib.rs", "coordinator/src/feeds/index.ts"),
+        signal_sources=("vendor/degenbot/rust/src/lib.rs", "coordinator/src/feeds/index.ts"),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/decision/engine.ts"),
         planner_modules=("coordinator/src/strategies/four-leg.ts",),
         calldata_builders=("coordinator/src/strategies/four-leg.ts", "coordinator/src/matching/encoder.ts"),
@@ -472,7 +472,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         decision_kinds=(),
         signal_sources=("coordinator/src/feeds/cow-competition.ts",),
         trigger_modules=("contracts/src/executors/Executor.sol::triggerCoWFlashLoanRouter",),
-        planner_modules=("solver/driver/auction_build.py", "coordinator/src/strategies/cow-quoter.ts"),
+        planner_modules=("vendor/degenbot/src/degenbot/auction_build.py", "coordinator/src/strategies/cow-quoter.ts"),
         calldata_builders=("contracts/src/interfaces/IExecutor.sol",),
         submission_modules=(),
         contract_entrypoints=("contracts/src/executors/Executor.sol::triggerCoWFlashLoanRouter",),
@@ -508,7 +508,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 2,
                 "Build quote/provenance view",
-                ("coordinator/src/strategies/cow-quoter.ts", "solver/driver/auction_build.py"),
+                ("coordinator/src/strategies/cow-quoter.ts", "vendor/degenbot/src/degenbot/auction_build.py"),
                 "TS prices eligible orders without signing a solver solution or posting capital.",
             ),
             WorkflowStep(
@@ -539,8 +539,8 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         signal_sources=("coordinator/src/feeds/cow-competition.ts",),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/strategies/d3-filter.ts"),
         planner_modules=("coordinator/src/strategies/d3-filter.ts", "coordinator/src/strategies/cow-quoter.ts"),
-        calldata_builders=("solver/driver/auction_build.py",),
-        submission_modules=("coordinator/src/strategies/cow-quoter.ts", "solver/driver/server.py"),
+        calldata_builders=("vendor/degenbot/src/degenbot/auction_build.py",),
+        submission_modules=("coordinator/src/strategies/cow-quoter.ts", "vendor/degenbot/src/degenbot/server.py"),
         contract_entrypoints=(),
         callback_entrypoints=(),
         flash_callback_encoding="No direct on-chain callback; CoW posture is quote-only with no bonded solver tx.",
@@ -580,7 +580,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 4,
                 "Record provenance",
-                ("solver/driver/auction_build.py",),
+                ("vendor/degenbot/src/degenbot/auction_build.py",),
                 "Python analysis sidecar can retain auction provenance or reject explicitly; it does not submit "
                 "a CoW solver solution.",
             ),

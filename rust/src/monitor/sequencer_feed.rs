@@ -396,8 +396,9 @@ fn decode_l2_message_bytes(
                     return Ok(());
                 }
                 let (len_bytes, after_len) = rest.split_at(8);
-                let seg_len =
-                    u64::from_be_bytes(len_bytes.try_into().expect("split_at(8) yields 8 bytes"));
+                let mut len_bytes_array = [0u8; 8];
+                len_bytes_array.copy_from_slice(len_bytes);
+                let seg_len = u64::from_be_bytes(len_bytes_array);
                 if seg_len > MAX_L2_MESSAGE_SIZE {
                     return Err(DecodeError::BatchSegmentTooLarge(seg_len));
                 }

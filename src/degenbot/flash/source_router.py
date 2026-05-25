@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Sequence, Mapping, Any, Protocol
+from typing import Literal
 
-from degenbot.decision.types import Address, Hex
+from degenbot.decision.types import Address
 from degenbot.strategies_coordinator.types import FLASH_PROTOCOL, FlashProtocol
 
 logger = logging.getLogger(__name__)
 
 FlashRouteSource = Literal["default", "explicit", "candidate"]
 
-DEFAULT_AAVE_V3_POOL: Address = "0x794a61358D6845594F94dc1DB02A252b5b4814aD" # Arbitrum One
+DEFAULT_AAVE_V3_POOL: Address = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"  # Arbitrum One
 DEFAULT_MORPHO_BLUE: Address = "0x6c247b1F6182318877311737BaC0844bAa518F5e"
 DEFAULT_WRAPPED_NATIVE_TOKEN: Address = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
 DEFAULT_WRAP_GAS_UNITS = 30_000
@@ -168,7 +169,7 @@ def _normalize_route(
         canonical = aave_v3_pool or DEFAULT_AAVE_V3_POOL
         _assert_canonical_lender(context, "Aave V3", canonical, lender)
         return _with_cost(protocol, canonical, source, candidate, cost)
-    
+
     if protocol == FLASH_PROTOCOL.MORPHO:
         canonical = morpho_blue or DEFAULT_MORPHO_BLUE
         _assert_canonical_lender(context, "Morpho Blue", canonical, lender)
@@ -212,18 +213,18 @@ def _calculate_route_cost(
     wrapped_native_token: Address | None,
 ) -> Mapping[str, int]:
     fee_bps = candidate.estimated_fee_bps if candidate and candidate.estimated_fee_bps is not None else _default_fee_rank_bps(protocol)
-    
+
     flash_fee = (
-        (amount * fee_bps + 9999) // 10000 
+        (amount * fee_bps + 9999) // 10000
         + (candidate.flat_fee if candidate and candidate.flat_fee else 0)
     )
-    
+
     wrapping_cost_wei = _calculate_wrapping_cost_wei(candidate)
     native_gas_cost_wei = (
         (candidate.gas_score_wei if candidate and candidate.gas_score_wei else 0)
         + _calculate_gas_units_cost_wei(candidate)
     )
-    
+
     native_cost_wei = wrapping_cost_wei + native_gas_cost_wei
     native_cost_in_borrow_token = _convert_native_cost_to_borrow_token(
         context=context,
@@ -232,10 +233,10 @@ def _calculate_route_cost(
         candidate=candidate,
         wrapped_native_token=wrapped_native_token
     )
-    
+
     total_cost_in_borrow_token = (
-        flash_fee 
-        + native_cost_in_borrow_token 
+        flash_fee
+        + native_cost_in_borrow_token
         + (candidate.extra_cost_in_borrow_token if candidate and candidate.extra_cost_in_borrow_token else 0)
     )
 
@@ -259,11 +260,11 @@ def _calculate_wrapping_cost_wei(candidate: FlashRouteCandidate | None) -> int:
     wrap_units = candidate.wrap_gas_units if candidate.wrap_native else 0
     if wrap_units == 0 and candidate.wrap_native:
         wrap_units = DEFAULT_WRAP_GAS_UNITS
-        
+
     unwrap_units = candidate.unwrap_gas_units if candidate.unwrap_native else 0
     if unwrap_units == 0 and candidate.unwrap_native:
         unwrap_units = DEFAULT_UNWRAP_GAS_UNITS
-        
+
     return (wrap_units + unwrap_units) * candidate.gas_price_wei
 
 
@@ -306,5 +307,5 @@ def _default_fee_rank_bps(protocol: FlashProtocol) -> int:
     if protocol == FLASH_PROTOCOL.UNI_V3:
         return 30
     if protocol == FLASH_PROTOCOL.ERC3156:
-        return 1000000 # Max rank
+        return 1000000  # Max rank
     raise ValueError(f"flash source router: unsupported protocol {protocol}")

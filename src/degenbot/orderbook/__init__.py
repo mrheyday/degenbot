@@ -1,11 +1,5 @@
 """CoW Protocol orderbook client and typed REST models."""
 
-from degenbot.orderbook.client import (
-    DEFAULT_BASE_URL,
-    DEFAULT_TIMEOUT_SEC,
-    OrderbookClient,
-    OrderbookError,
-)
 from degenbot.orderbook.models import (
     Address,
     Auction,
@@ -52,9 +46,31 @@ from degenbot.orderbook.models import (
     Volume,
 )
 
+_CLIENT_EXPORTS = {"DEFAULT_BASE_URL", "DEFAULT_TIMEOUT_SEC", "OrderbookClient", "OrderbookError"}
+
+
+def __getattr__(name: str) -> object:
+    """Lazily expose the HTTP client without creating an import cycle."""
+
+    if name in _CLIENT_EXPORTS:
+        from degenbot.orderbook.client import (  # noqa: PLC0415
+            DEFAULT_BASE_URL,
+            DEFAULT_TIMEOUT_SEC,
+            OrderbookClient,
+            OrderbookError,
+        )
+
+        exports: dict[str, object] = {
+            "DEFAULT_BASE_URL": DEFAULT_BASE_URL,
+            "DEFAULT_TIMEOUT_SEC": DEFAULT_TIMEOUT_SEC,
+            "OrderbookClient": OrderbookClient,
+            "OrderbookError": OrderbookError,
+        }
+        return exports[name]
+    raise AttributeError(name)
+
+
 __all__ = [
-    "DEFAULT_BASE_URL",
-    "DEFAULT_TIMEOUT_SEC",
     "Address",
     "Auction",
     "AuctionOrder",
@@ -86,8 +102,6 @@ __all__ = [
     "OrderQuoteValidity",
     "OrderStatus",
     "OrderUid",
-    "OrderbookClient",
-    "OrderbookError",
     "PriceEstimationError",
     "PriceImprovement",
     "PriceQuality",

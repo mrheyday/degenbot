@@ -578,14 +578,14 @@ class MorphoStandardLiquidationCandidatePayload:
 class MorphoLiquidationRankingConfig:
     """Cost and policy inputs for first-pass Morpho liquidation ranking."""
 
-    estimated_gas_cost_usd: Decimal = Decimal("0")
+    estimated_gas_cost_usd: Decimal = Decimal(0)
     flash_fee_bps_by_loan_token: Mapping[str, int] | None = None
     swap_cost_bps_by_collateral_token: Mapping[str, int] | None = None
     oracle_risk_bps_by_market_id: Mapping[str, int] | None = None
     swap_back_liquidity_usd_by_collateral_token: Mapping[str, Decimal] | None = None
     include_bad_debt: bool = False
     require_swap_back_liquidity: bool = True
-    min_net_edge_usd: Decimal = Decimal("0")
+    min_net_edge_usd: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -601,7 +601,7 @@ class MorphoLiquidationLiveRiskFeeds:
     swap_back_liquidity_usd_by_collateral_token: Mapping[str, Decimal] | None = None
     include_bad_debt: bool = False
     require_swap_back_liquidity: bool = True
-    min_net_edge_usd: Decimal = Decimal("0")
+    min_net_edge_usd: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -892,7 +892,7 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
         self,
         markets: list[MorphoMarket],
         *,
-        max_health_factor: Decimal = Decimal("1"),
+        max_health_factor: Decimal = Decimal(1),
         page_size: int = _GRAPHQL_PAGE_SIZE,
     ) -> list[MorphoLiquidationCandidate]:
         """List risky positions for the supplied markets.
@@ -1151,13 +1151,13 @@ def rank_liquidation_candidates_for_screening(
             continue
 
         swap_back_liquidity_usd: Decimal | None = None
-        swap_back_shortfall_usd = Decimal("0")
+        swap_back_shortfall_usd = Decimal(0)
         if config.swap_back_liquidity_usd_by_collateral_token is not None:
             swap_back_liquidity_usd = _decimal_mapping_value(
                 config.swap_back_liquidity_usd_by_collateral_token,
                 market.collateral_token,
             )
-            swap_back_shortfall_usd = max(borrow_usd - swap_back_liquidity_usd, Decimal("0"))
+            swap_back_shortfall_usd = max(borrow_usd - swap_back_liquidity_usd, Decimal(0))
             if config.require_swap_back_liquidity and swap_back_shortfall_usd > 0:
                 continue
 
@@ -1637,7 +1637,7 @@ def _bps_mapping_value(mapping: Mapping[str, int] | None, key: str) -> int:
 
 
 def _decimal_mapping_value(mapping: Mapping[str, Decimal], key: str) -> Decimal:
-    value = mapping.get(key.lower(), mapping.get(key, Decimal("0")))
+    value = mapping.get(key.lower(), mapping.get(key, Decimal(0)))
     if value < 0:
         raise ValueError(f"USD liquidity input must be non-negative, got {value}")
     return value

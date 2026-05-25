@@ -22,8 +22,10 @@ Spec
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, Sequence
 
 from degenbot.types_solver.executor import (
     ComposeParams,

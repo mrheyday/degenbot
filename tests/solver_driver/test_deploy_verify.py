@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from degenbot.ops import deploy_verify as verifier
+from degenbot.ops_solver import deploy_verify as verifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable

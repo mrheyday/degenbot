@@ -501,7 +501,7 @@ impl MockBackend {
                     block_number: 0xDEAD,
                     gas_used: 100_000,
                     effective_gas_price_wei: U256::from(1_500_000_000_u64),
-                    realized_balance_delta: I256::try_from(1_000_000_000_000_000_i128).unwrap(),
+                    realized_balance_delta: I256::from_raw(U256::from(1_000_000_000_000_000_u64)),
                     status: true,
                     revert_reason: None,
                 }))

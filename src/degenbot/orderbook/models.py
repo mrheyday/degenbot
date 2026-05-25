@@ -14,8 +14,8 @@ from degenbot.cow.models import (
     CompetitionSolution,
     OrderClass,
     OrderKind,
-    SigningScheme,
     SellTokenBalance,
+    SigningScheme,
 )
 
 __all__ = [

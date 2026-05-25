@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal, Any, Sequence
 
 Address = str
 Hex = str
@@ -11,6 +13,7 @@ Bytes32 = str
 ChainId = int
 
 # ... (Strategy and AggregatorSource literals remain same)
+
 
 class PathfinderPath(BaseModel):
     model_config = ConfigDict(frozen=True)

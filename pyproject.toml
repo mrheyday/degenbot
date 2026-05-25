@@ -13,13 +13,18 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic ~= 1.18",
+    "aiohttp ~= 3.13",
     "click ~= 8.3",
     "cvxpy ~= 1.8",
+    "eth-account ~= 0.13",
+    "httpx ~= 0.28",
     "networkx ~= 3.6",
+    "prometheus-client ~= 0.23",
     "pydantic ~= 2.12",
     "pydantic-settings ~= 2.13",
     "scipy ~= 1.17",
     "sqlalchemy ~= 2.0",
+    "structlog ~= 25.5",
     "tenacity ~= 9.1",
     "tomlkit ~= 0.14",
     "tqdm ~= 4.67",
@@ -206,6 +211,7 @@ dev = [
     "pytest-xdist",
     "pytest",
     "python-dotenv",
+    "respx",
     "ruff",
 ]
 

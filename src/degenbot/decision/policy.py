@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
 
 from degenbot.decision.precedence import DecisionKind
-from degenbot.decision.types import Strategy
 
 CapitalPolicyVerdict = Literal["allow", "deny", "observe"]
 CapitalFundingMode = Literal["zero_capital_atomic", "inventory_async", "observe"]

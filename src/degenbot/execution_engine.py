@@ -11,9 +11,10 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
+from hexbytes import HexBytes
+
 from degenbot.degenbot_rs import to_checksum_address
 from degenbot.utils.bytes import HexBytesLike, to_bytes
-from hexbytes import HexBytes
 
 try:  # Prefer canonical export from a rebuilt extension.
     from degenbot.degenbot_rs import compose_engine_job_json as _compose_engine_job_json

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal
 
 from degenbot.decision.types import Address, Hex
 
@@ -51,6 +52,10 @@ class DexKindEnum:
     RANGO = 26
     RUBIC = 27
     NATIVE = 28
+
+
+FLASH_PROTOCOL = FlashProtocolEnum
+DEX_KIND = DexKindEnum
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@
 # TC003: `Fraction` is used at runtime in the constructor signature.
 # PLR0913: matches degenbot's existing pool constructor pattern
 # (`AerodromeV2Pool.__init__` has 10+ args).
-# ruff: noqa: RUF003, TC002, TC003, PLR0913
+# ruff: noqa: RUF003, TC002, TC003
 """Solidly-fork pool adapter (Arbitrum venues).
 
 Targets the Solidly-fork DEXes deployed on Arbitrum:
@@ -60,9 +60,12 @@ from typing import TYPE_CHECKING, Literal
 from weakref import WeakSet
 
 import structlog
+from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
 
 # Re-use degenbot's audited Solidly primitives + base classes.
 from degenbot.exceptions.evm import EVMRevertError
+from degenbot.execution_adapters.adapter_base import configure_execution_logging
 from degenbot.registry import pool_registry
 from degenbot.solidly.solidly_functions import (
     general_calc_d,
@@ -72,10 +75,6 @@ from degenbot.solidly.solidly_functions import (
 )
 from degenbot.types.abstract import AbstractLiquidityPool
 from degenbot.types.concrete import PublisherMixin
-from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
-
-from degenbot.execution_adapters.adapter_base import configure_execution_logging
 
 if TYPE_CHECKING:
     from degenbot.types.concrete import Subscriber

@@ -4,7 +4,7 @@
 # TC002: `ChecksumAddress` is used at runtime as the `to_checksum_address`
 # annotation target — cannot move into TYPE_CHECKING.
 # PLR0913: matches degenbot's existing pool constructor pattern.
-# ruff: noqa: RUF003, TC002, PLR0913
+# ruff: noqa: RUF003, TC002
 """Curve New-Generation (NG) pool adapter.
 
 Curve NG is Curve's evolution of the StableSwap design with two
@@ -61,14 +61,14 @@ from typing import TYPE_CHECKING
 from weakref import WeakSet
 
 import structlog
-from degenbot.exceptions.evm import EVMRevertError
-from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractLiquidityPool
-from degenbot.types.concrete import PublisherMixin
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
+from degenbot.exceptions.evm import EVMRevertError
 from degenbot.execution_adapters.adapter_base import configure_execution_logging
+from degenbot.registry import pool_registry
+from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.concrete import PublisherMixin
 
 if TYPE_CHECKING:
     from degenbot.types.concrete import Subscriber

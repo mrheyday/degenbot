@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from pathlib import Path
 
-from degenbot.strategies.arbitrum_atomic_flash_research import (
+from degenbot.strategies_solver.arbitrum_atomic_flash_research import (
     AtomicFlashStatus,
     atomic_flash_target,
     ranked_atomic_flash_targets,

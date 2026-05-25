@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from degenbot.utils.metrics import SUBMISSION_LATENCY, SUBMISSION_REQUESTS
 from degenbot.cow.models import CompetitionSolution
 from degenbot.cow.signing import sign_solution
+from degenbot.utils.metrics import SUBMISSION_LATENCY, SUBMISSION_REQUESTS
 
 if TYPE_CHECKING:
     from degenbot.config import Settings

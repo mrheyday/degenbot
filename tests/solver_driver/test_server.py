@@ -15,7 +15,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from degenbot.protocol import Auction  # noqa: TC002 — used at runtime in stubs
 from degenbot.server import SolverEngineApp
-from degenbot.strategies.solver_quality import Solution as StrategySolution
+from degenbot.strategies_solver.solver_quality import Solution as StrategySolution
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import stat
+import string
 import sys
 import time
 from collections.abc import AsyncIterator, Iterable
@@ -25,6 +26,7 @@ from typing import Any, Protocol, cast
 
 import structlog
 
+from degenbot.adapters.config import DegenbotSettings, load_degenbot_settings
 from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
     ADDRESS_KEYED_DEGENBOT_DEX_KINDS as ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
 )
@@ -34,7 +36,6 @@ from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
 from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
     RECOGNIZED_DEX_KINDS as RECOGNIZED_DEX_KINDS,
 )
-from degenbot.adapters.config import DegenbotSettings, load_degenbot_settings
 
 type JsonObject = dict[str, Any]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -877,7 +878,7 @@ def _is_address_like(value: str) -> bool:
     return (
         value.startswith("0x")
         and len(value) == ADDRESS_HEX_LEN
-        and all(c in "0123456789abcdefABCDEF" for c in value[2:])
+        and all(c in string.hexdigits for c in value[2:])
     )
 
 

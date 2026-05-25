@@ -1,13 +1,11 @@
 """Internal matcher — Pick A core algorithm."""
 
 import json
-from typing import Iterable, Sequence
+from collections.abc import Iterable
 
 from degenbot.decision.types import (
-    CowOrderSummary,
     MatchCandidate,
     MatchPair,
-    UniswapXOrderSummary,
 )
 from degenbot.matching.price_compat import clearing_price, fill_amount, is_price_compatible
 
@@ -51,7 +49,7 @@ def find_best_match(
             counters_list = list(counters)
             if not outbound_list or not counters_list:
                 return None
-            
+
             res_json = find_best_match_json(
                 json.dumps([o.model_dump(by_alias=True) for o in outbound_list]),
                 json.dumps([c.model_dump(by_alias=True) for c in counters_list])

@@ -7,8 +7,8 @@ import pytest
 import respx
 from degenbot.protocol.models import Auction, Order, OrderClass, OrderKind, SigningScheme
 from degenbot.quote_engine import AggregatorQuote, QuoteEngineClient, QuoteRequest
-from degenbot.strategies.d3_filter import D3Filter
-from degenbot.strategies.solver_quality import SolutionBuilder
+from degenbot.strategies_solver.d3_filter import D3Filter
+from degenbot.strategies_solver.solver_quality import SolutionBuilder
 
 
 @pytest.fixture

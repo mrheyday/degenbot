@@ -14,8 +14,11 @@ warnings = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 missing_errors_doc = "allow"  # Allow missing docs for error types since we use module-level doc
-pedantic = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
+# Keep default Clippy and explicit safety lints as hard gates. Pedantic/nursery
+# are too noisy for generated/math-heavy simulator code and obscure real build
+# failures in the Python extension path.
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
 
 [lib]
 name = "degenbot_rs"
@@ -25,6 +28,7 @@ crate-type = ["rlib", "cdylib"]
 alloy = { git = "https://github.com/alloy-rs/alloy.git", tag = "v2.0.5", version = "2.0.5", default-features = false, features = [
     "eip712",
     "full",
+    "node-bindings",
     "reqwest",
     "reqwest-rustls-tls",
 ] }

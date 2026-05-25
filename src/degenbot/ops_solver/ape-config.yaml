@@ -1,0 +1,17 @@
+---
+# ApeWorx config for solver-driver ops scripts.
+# https://docs.apeworx.io
+#
+# This config is consumed by `ape run driver/ops/<script>.py`. The main
+# solver loop never reads this file.
+name: mev-arbitrum-ops
+plugins:
+  - name: arbitrum
+# Default network for ops scripts. Override on the command line:
+#   ape run ... --network arbitrum:mainnet:alchemy
+# RPC URL is supplied via env var (Alchemy plugin reads WEB3_ALCHEMY_API_KEY).
+arbitrum:
+  mainnet:
+    default_provider: alchemy
+# Verbose error reporting; ops scripts run rarely and we want full context.
+default_ecosystem: arbitrum

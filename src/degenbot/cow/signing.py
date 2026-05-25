@@ -101,7 +101,10 @@ def _validate_typed_data(typed_data: Mapping[str, Any]) -> None:
     required = ("types", "primaryType", "domain", "message")
     missing = [key for key in required if key not in typed_data]
     if missing:
-        raise Eip712SigningError(f"EIP-712 typed data missing required field(s): {', '.join(missing)}")
+        missing_fields = ", ".join(missing)
+        raise Eip712SigningError(
+            f"EIP-712 typed data missing required field(s): {missing_fields}",
+        )
 
     types = typed_data["types"]
     primary_type = typed_data["primaryType"]

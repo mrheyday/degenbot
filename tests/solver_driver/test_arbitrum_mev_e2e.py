@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from pathlib import Path
 
-from degenbot.strategies.arbitrum_mev_e2e import (
+from degenbot.strategies_solver.arbitrum_mev_e2e import (
     E2EAction,
     E2ELane,
     build_master_plan,
@@ -14,7 +14,7 @@ from degenbot.strategies.arbitrum_mev_e2e import (
     recon_strategy_ids,
     validate_master_plan,
 )
-from degenbot.strategies.execution_workflows import WorkflowStatus
+from degenbot.strategies_solver.execution_workflows import WorkflowStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

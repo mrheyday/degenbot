@@ -37,6 +37,12 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from aiohttp import web
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    generate_latest,
+)
+from pydantic import ValidationError
+
 from degenbot.auction_build import handle_auction_build_payload
 from degenbot.cow.models import (
     Auction,
@@ -48,11 +54,6 @@ from degenbot.cow.models import (
 from degenbot.d3_bridge import handle_d3_classify_payload
 from degenbot.quote_engine.http_client import QuoteRequest
 from degenbot.utils.metrics import SOLVE_LATENCY, SOLVE_REQUESTS
-from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    generate_latest,
-)
-from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from degenbot.cow.submitter import CompetitionSubmitter
@@ -213,7 +214,7 @@ class SolverEngineApp:
                 params.buy_token: sell_amount,
             },
             solver=self._solver_address,
-            gas=quote.estimated_gas if quote.estimated_gas else None,
+            gas=quote.estimated_gas or None,
         )
         return web.json_response(response.model_dump_wire())
 
