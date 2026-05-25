@@ -5,7 +5,7 @@ import json
 import click
 
 from degenbot.cli import cli
-from degenbot.execution import (
+from degenbot.execution_adapters import (
     encode_compose_four_leg_calldata,
     encode_match_internal_calldata,
     encode_native_arb_calldata,

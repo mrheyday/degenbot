@@ -13,7 +13,7 @@ from degenbot.logging import logger
 from degenbot.pathfinding import find_paths
 from degenbot.registry import pool_registry
 from degenbot.exceptions.base import DegenbotError
-from degenbot.types.aliases import BlockNumber, ChainId
+from degenbot.types_solver.aliases import BlockNumber, ChainId
 
 
 class ArbitrageStrategy(Protocol):

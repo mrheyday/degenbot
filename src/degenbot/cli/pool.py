@@ -58,7 +58,7 @@ from degenbot.functions import (
     raw_call,
 )
 from degenbot.logging import logger
-from degenbot.types.aliases import ChainId, Tick, Word
+from degenbot.types_solver.aliases import ChainId, Tick, Word
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.uniswap.v3_types import (
     UniswapV3BitmapAtWord,

@@ -19,7 +19,7 @@ from typing import Final, Protocol, cast
 import structlog
 from web3 import Web3
 
-from driver.execution.adapter_base import (
+from degenbot.execution_adapters.adapter_base import (
     AsyncGraphqlAdapterClient,
     GraphqlAdapterConfig,
     configure_execution_logging,

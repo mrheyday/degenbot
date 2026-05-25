@@ -12,15 +12,15 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from driver.metrics import SUBMISSION_LATENCY, SUBMISSION_REQUESTS
-from driver.orderbook.models import CompetitionSolution
-from driver.signing.eip712 import sign_solution
+from degenbot.utils.metrics import SUBMISSION_LATENCY, SUBMISSION_REQUESTS
+from degenbot.cow.models import CompetitionSolution
+from degenbot.cow.signing import sign_solution
 
 if TYPE_CHECKING:
-    from driver.config import Settings
-    from driver.orderbook.client import OrderbookClient
-    from driver.protocol.models import Auction
-    from driver.protocol.models import Solution as ProtocolSolution
+    from degenbot.config import Settings
+    from degenbot.cow.client import OrderbookClient
+    from degenbot.cow.models import Auction
+    from degenbot.cow.models import Solution as ProtocolSolution
 
 log = structlog.get_logger(__name__).bind(service="solver", component="competition_submitter")
 

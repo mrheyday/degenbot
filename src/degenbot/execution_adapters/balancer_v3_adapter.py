@@ -30,8 +30,8 @@ from enum import Enum
 
 import structlog
 
-from driver.execution import balancer_v3_weighted_math as _wm
-from driver.execution.adapter_base import AsyncHttpAdapterClient, configure_execution_logging
+from degenbot.execution_adapters import balancer_v3_weighted_math as _wm
+from degenbot.execution_adapters.adapter_base import AsyncHttpAdapterClient, configure_execution_logging
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

@@ -29,7 +29,7 @@ from degenbot.exceptions.evm import InvalidUint256
 from degenbot.exceptions.fetching import LogFetchingTimeout
 from degenbot.logging import logger
 from degenbot.provider.interface import ProviderAdapter
-from degenbot.types.aliases import BlockNumber
+from degenbot.types_solver.aliases import BlockNumber
 
 if TYPE_CHECKING:
     from eth_account.datastructures import SignedMessage

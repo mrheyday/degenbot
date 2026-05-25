@@ -39,7 +39,7 @@ from degenbot.provider.interface import (
     EthereumProvider,
     ProviderAdapter,
 )
-from degenbot.types.aliases import BlockNumber
+from degenbot.types_solver.aliases import BlockNumber
 
 
 @dataclass

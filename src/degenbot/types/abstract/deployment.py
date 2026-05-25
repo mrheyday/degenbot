@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from degenbot.types.aliases import ChainId
+from degenbot.types_solver.aliases import ChainId
 
 
 @dataclass(slots=True, frozen=True)

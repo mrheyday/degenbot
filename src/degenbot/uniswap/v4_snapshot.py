@@ -23,8 +23,8 @@ from degenbot.database.operations import get_scoped_sqlite_session
 from degenbot.exceptions.liquidity_pool import UnknownPoolId
 from degenbot.functions import fetch_logs_retrying, fetch_logs_retrying_async
 from degenbot.logging import logger
-from degenbot.types.aliases import BlockNumber, ChainId
-from degenbot.types.concrete import KeyedDefaultDict
+from degenbot.types_solver.aliases import BlockNumber, ChainId
+from degenbot.types_solver.concrete import KeyedDefaultDict
 from degenbot.uniswap.abi import UNISWAP_V4_POOL_MANAGER_ABI
 from degenbot.uniswap.v4_types import (
     UniswapV4BitmapAtWord,

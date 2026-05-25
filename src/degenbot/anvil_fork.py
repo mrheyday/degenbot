@@ -21,7 +21,7 @@ from degenbot.exceptions.anvil import AnvilError
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.exceptions.connection import IPCSocketTimeout, Web3ConnectionTimeout
 from degenbot.logging import logger
-from degenbot.types.aliases import BlockNumber
+from degenbot.types_solver.aliases import BlockNumber
 from degenbot.validation.evm_values import ValidatedUint256
 
 

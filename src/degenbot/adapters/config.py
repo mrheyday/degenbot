@@ -1,0 +1,141 @@
+"""Runtime settings loaded from environment variables.
+
+Source of truth for all driver configuration. Loaded once at process start;
+do not mutate after construction.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, HttpUrl, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LogLevel = Literal["debug", "info", "warning", "error", "critical"]
+
+
+class EnvSettings(BaseSettings):
+    """Base settings loaded from the project environment files."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+
+class DegenbotSettings(EnvSettings):
+    """Degenbot adapter settings that do not require solver signing secrets."""
+
+    degenbot_source_path: Path = Field(
+        default=Path("vendor/degenbot"),
+        description="Pinned degenbot source checkout used by the IPC adapter.",
+    )
+    degenbot_ipc_socket_path: str = Field(
+        # Unix socket only; the adapter refuses to replace non-socket paths.
+        default="/tmp/degenbot.sock",  # noqa: S108
+        description="Unix socket served by the degenbot IPC adapter and consumed by the TS coordinator.",
+    )
+    degenbot_heartbeat_interval_sec: int = Field(
+        default=5,
+        ge=1,
+        description="Heartbeat interval for the degenbot IPC adapter.",
+    )
+    log_level: LogLevel = Field(default="info", description="structlog log level.")
+
+
+class Settings(DegenbotSettings):
+    """Driver settings.
+
+    Loaded from environment variables (case-insensitive) with optional
+    `.env` file support. Sensitive fields use `SecretStr` so they never
+    leak via repr / structured logs.
+    """
+
+    # --- CoW protocol ---------------------------------------------------
+    cow_api_base: HttpUrl = Field(
+        default=HttpUrl("https://api.cow.fi/arbitrum_one"),
+        description="Base URL for the CoW Protocol orderbook + competition API.",
+    )
+    cow_api_key: SecretStr | None = Field(
+        default=None,
+        description="Optional CoW API key for higher rate limits / private endpoints.",
+    )
+    cow_solver_address: str | None = Field(
+        default=None,
+        description="Legacy CoW solver address. Optional because the active CoW posture is quote-only.",
+    )
+    cow_solver_private_key: SecretStr | None = Field(
+        default=None,
+        description="Legacy solver EOA key. Unset in quote-only deployments; never required for CoW quoting.",
+    )
+    chain_id: int = Field(
+        default=42161,
+        ge=1,
+        description="Execution chain id. Defaults to Arbitrum One.",
+    )
+
+    # --- Coordinator (TypeScript) ---------------------------------------
+    coordinator_quote_url: HttpUrl = Field(
+        default=HttpUrl("http://127.0.0.1:8080/quote"),
+        description="TS coordinator's quote engine HTTP endpoint.",
+    )
+
+    # --- Solver Engine HTTP server --------------------------------------
+    # The CoW driver POSTs auctions to /solve on this host:port; the same
+    # port serves /health and /metrics. Per CoW deployment guidance, the
+    # solver runs on a private network reachable only by the CoW driver
+    # — operators must enforce ACLs.
+    solver_engine_host: str = Field(
+        default="0.0.0.0",  # noqa: S104 — bind-all is intentional inside the private mesh
+        description="Bind host for the Solver Engine HTTP server.",
+    )
+    solver_engine_port: int = Field(
+        default=8080,
+        description="Bind port for the Solver Engine HTTP server (/solve, /health, /metrics).",
+    )
+    build_id: str = Field(
+        default="dev",
+        description="Build identifier surfaced on /health (git sha or container tag).",
+    )
+
+    # --- Observability (legacy, retained for back-compat) ---------------
+    # Prometheus is now served via the Solver Engine HTTP app at /metrics
+    # on `solver_engine_port`. `metrics_port` remains in the schema only
+    # to avoid breaking deployments that still set it.
+    metrics_port: int = Field(default=9091, description="Deprecated; use solver_engine_port.")
+
+    # --- Strategy flags -------------------------------------------------
+    strategy_c_enabled: bool = Field(
+        default=True,
+        description="Legacy Pick C switch. In the current posture it controls CoW quote-only analysis.",
+    )
+    strategy_d3_enabled: bool = Field(
+        default=True,
+        description="Pick D3 pre-batch filter on top of Pick C bidding.",
+    )
+
+    # --- Bidding policy -------------------------------------------------
+    min_profit_usd: float = Field(
+        default=2.0,
+        ge=0.0,
+        description=(
+            "Minimum estimated profit (USD) for quote/provenance reporting. "
+            "Quote-only mode never submits CoW solver solutions."
+        ),
+    )
+
+
+def load_settings() -> Settings:
+    """Construct Settings from the environment.
+
+    Raises on missing required fields. Call once at process start.
+    """
+    return Settings()
+
+
+def load_degenbot_settings() -> DegenbotSettings:
+    """Construct degenbot adapter settings without requiring solver secrets."""
+    return DegenbotSettings()

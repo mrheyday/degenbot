@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from driver.execution.adapter_base import AsyncHttpAdapterClient, configure_execution_logging
+from degenbot.execution_adapters.adapter_base import AsyncHttpAdapterClient, configure_execution_logging
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

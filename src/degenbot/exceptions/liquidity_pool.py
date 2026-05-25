@@ -4,7 +4,7 @@ from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 
 from degenbot.exceptions.base import DegenbotError
-from degenbot.types.aliases import BlockNumber
+from degenbot.types_solver.aliases import BlockNumber
 
 if TYPE_CHECKING:
     from degenbot.uniswap.v4_liquidity_pool import Hooks

@@ -34,7 +34,7 @@ from typing import Final
 
 import structlog
 
-from driver.execution.adapter_base import validate_executor_strategy
+from degenbot.execution_adapters.adapter_base import validate_executor_strategy
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

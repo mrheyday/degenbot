@@ -40,9 +40,9 @@ from degenbot.exceptions.liquidity_pool import BrokenPool, InvalidSwapInputAmoun
 from degenbot.functions import encode_function_calldata, get_number_for_block_identifier, raw_call
 from degenbot.logging import logger
 from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractArbitrage, AbstractLiquidityPool
-from degenbot.types.aliases import BlockNumber, ChainId
-from degenbot.types.concrete import (
+from degenbot.types_solver.abstract import AbstractArbitrage, AbstractLiquidityPool
+from degenbot.types_solver.aliases import BlockNumber, ChainId
+from degenbot.types_solver.concrete import (
     AbstractPublisherMessage,
     BoundedCache,
     Publisher,

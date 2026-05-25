@@ -8,7 +8,7 @@ from degenbot.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
-from degenbot.types.aliases import ChainId
+from degenbot.types_solver.aliases import ChainId
 from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolState
 

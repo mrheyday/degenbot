@@ -56,6 +56,12 @@ from .version import __version__
 
 # isort: split
 
+from .adapters.config import DegenbotSettings, load_degenbot_settings
+from .adapters.ipc import is_recognized_dex_kind
+from .connection.ipc import DegenbotIpcServer
+from .cow.models import Auction as CowAuction
+from .cow.submitter import CompetitionSubmitter
+
 from .aerodrome import (
     AerodromeV2Pool,
     AerodromeV2PoolManager,
@@ -195,6 +201,8 @@ __all__ = (
     "get_sqrt_ratio_at_tick",
     "get_tick_at_sqrt_ratio",
     "get_web3",
+    "is_recognized_dex_kind",
+    "load_degenbot_settings",
     "logger",
     "pool_registry",
     "set_async_web3",
@@ -203,4 +211,8 @@ __all__ = (
     "submit_dispatch_envelope",
     "to_checksum_address",
     "token_registry",
+    "CompetitionSubmitter",
+    "CowAuction",
+    "DegenbotIpcServer",
+    "DegenbotSettings",
 )

@@ -85,17 +85,17 @@ from weakref import WeakSet
 
 import structlog
 from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractLiquidityPool
-from degenbot.types.concrete import PublisherMixin
+from degenbot.types_solver.abstract import AbstractLiquidityPool
+from degenbot.types_solver.concrete import PublisherMixin
 from degenbot.uniswap.v3_libraries.swap_math import compute_swap_step
 from degenbot.uniswap.v3_libraries.tick_math import get_sqrt_ratio_at_tick
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from driver.execution.adapter_base import configure_execution_logging
+from degenbot.execution_adapters.adapter_base import configure_execution_logging
 
 if TYPE_CHECKING:
-    from degenbot.types.concrete import Subscriber
+    from degenbot.types_solver.concrete import Subscriber
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

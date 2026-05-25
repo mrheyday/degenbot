@@ -25,16 +25,16 @@ from typing import Any, Protocol, cast
 
 import structlog
 
-from driver.adapters.ipc import (  # pylint: disable=useless-import-alias
+from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
     ADDRESS_KEYED_DEGENBOT_DEX_KINDS as ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
 )
-from driver.adapters.ipc import (  # pylint: disable=useless-import-alias
+from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
     POOL_ID_REQUIRED_DEX_KINDS as POOL_ID_REQUIRED_DEX_KINDS,
 )
-from driver.adapters.ipc import (  # pylint: disable=useless-import-alias
+from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
     RECOGNIZED_DEX_KINDS as RECOGNIZED_DEX_KINDS,
 )
-from driver.config import DegenbotSettings, load_degenbot_settings
+from degenbot.adapters.config import DegenbotSettings, load_degenbot_settings
 
 type JsonObject = dict[str, Any]
 REPO_ROOT = Path(__file__).resolve().parents[3]

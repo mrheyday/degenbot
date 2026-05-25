@@ -7,7 +7,7 @@ from pydantic import BaseModel, HttpUrl, PlainSerializer, WebsocketUrl, field_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from degenbot.logging import logger
-from degenbot.types.aliases import ChainId
+from degenbot.types_solver.aliases import ChainId
 
 CONFIG_DIR = Path.home() / ".config" / "degenbot"
 CONFIG_FILE = CONFIG_DIR / "config.toml"

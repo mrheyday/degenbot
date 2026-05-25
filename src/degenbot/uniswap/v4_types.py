@@ -3,9 +3,9 @@ import dataclasses
 from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 
-from degenbot.types.abstract import AbstractPoolState
-from degenbot.types.aliases import BlockNumber
-from degenbot.types.concrete import PoolStateMessage
+from degenbot.types_solver.abstract import AbstractPoolState
+from degenbot.types_solver.aliases import BlockNumber
+from degenbot.types_solver.concrete import PoolStateMessage
 from degenbot.uniswap.v3_types import (
     BitmapWord,
     Liquidity,

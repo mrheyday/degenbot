@@ -5,8 +5,8 @@ from weakref import WeakValueDictionary
 from eth_typing import ChecksumAddress
 
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.types.abstract.liquidity_pool import AbstractLiquidityPool
-from degenbot.types.aliases import ChainId
+from degenbot.types_solver.abstract.liquidity_pool import AbstractLiquidityPool
+from degenbot.types_solver.aliases import ChainId
 
 
 class AbstractPoolManager[Pool: AbstractLiquidityPool]:

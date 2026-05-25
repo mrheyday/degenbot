@@ -37,9 +37,9 @@ from degenbot.exceptions.liquidity_pool import (
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractArbitrage, AbstractLiquidityPool
-from degenbot.types.aliases import BlockNumber, ChainId
-from degenbot.types.concrete import AbstractPublisherMessage, Publisher, PublisherMixin, Subscriber
+from degenbot.types_solver.abstract import AbstractArbitrage, AbstractLiquidityPool
+from degenbot.types_solver.aliases import BlockNumber, ChainId
+from degenbot.types_solver.concrete import AbstractPublisherMessage, Publisher, PublisherMixin, Subscriber
 from degenbot.uniswap.deployments import FACTORY_DEPLOYMENTS, UniswapV3ExchangeDeployment
 from degenbot.uniswap.types import UniswapPoolSwapVector
 from degenbot.uniswap.v3_functions import (

@@ -1,6 +1,6 @@
 import dataclasses
 
-from degenbot.types.abstract import AbstractPoolState
+from degenbot.types_solver.abstract import AbstractPoolState
 
 
 @dataclasses.dataclass(slots=True, frozen=True, kw_only=True)
