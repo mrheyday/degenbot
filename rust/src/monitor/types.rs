@@ -48,6 +48,7 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Opportunity {
     pub id: String,
     #[serde(deserialize_with = "deserialize_string_or_u64")]
@@ -287,6 +288,7 @@ pub struct Plan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AggregatorQuote {
     pub source: String,
     pub amount_out: U256,
@@ -300,6 +302,7 @@ pub struct AggregatorQuote {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MatchCandidate {
     pub id: String,
     pub side: String,
@@ -316,6 +319,7 @@ pub struct MatchCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CowOrderSummary {
     pub uid: B256,
     pub owner: Address,
@@ -333,6 +337,7 @@ pub struct CowOrderSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UniswapXOrderSummary {
     pub order_hash: B256,
     pub reactor: Address,
@@ -349,6 +354,7 @@ pub struct UniswapXOrderSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MatchPair {
     pub o: MatchCandidate,
     pub c: MatchCandidate,

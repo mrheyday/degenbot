@@ -10,7 +10,7 @@ from degenbot.decision.types import AggregatorQuote
 from degenbot.types_solver.wire import Opportunity
 
 try:
-    from degenbot.degenbot_rs.execution_engine import evaluate_sandoo_idea_json
+    from degenbot.degenbot_rs import evaluate_sandoo_idea_json
     HAS_RUST_ACCEL = True
 except ImportError:
     HAS_RUST_ACCEL = False
@@ -52,9 +52,9 @@ def evaluate_sandoo_idea(
     """Deterministic Sandoo-style candidate idea scoring for opportunities."""
     if HAS_RUST_ACCEL:
         try:
-            # Opportunity supports model_dump_json
-            opp_json = opp.model_dump_json()
-            quote_json = json.dumps(best_quote.__dict__) if best_quote else None
+            # Opportunity is a Pydantic model
+            opp_json = opp.model_dump_json(by_alias=True)
+            quote_json = best_quote.model_dump_json(by_alias=True) if best_quote else None
             
             res_json = evaluate_sandoo_idea_json(
                 opp_json,

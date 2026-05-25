@@ -12,7 +12,7 @@ from degenbot.decision.types import (
 from degenbot.matching.price_compat import clearing_price, fill_amount, is_price_compatible
 
 try:
-    from degenbot.degenbot_rs.execution_engine import find_best_match_json
+    from degenbot.degenbot_rs import find_best_match_json
     HAS_RUST_ACCEL = True
 except ImportError:
     HAS_RUST_ACCEL = False
@@ -52,26 +52,14 @@ def find_best_match(
             if not outbound_list or not counters_list:
                 return None
             
-            # Simple attribute-to-dict mapper for non-Pydantic dataclasses
-            def to_dict(c: MatchCandidate):
-                d = c.__dict__.copy()
-                if c.cow_order: d["cow_order"] = c.cow_order.__dict__
-                if c.uniswapx_order: d["uniswapx_order"] = c.uniswapx_order.__dict__
-                return d
-
             res_json = find_best_match_json(
-                json.dumps([to_dict(o) for o in outbound_list]),
-                json.dumps([to_dict(c) for c in counters_list])
+                json.dumps([o.model_dump(by_alias=True) for o in outbound_list]),
+                json.dumps([c.model_dump(by_alias=True) for c in counters_list])
             )
             if res_json:
                 data = json.loads(res_json)
                 # Reconstruct the MatchPair
-                return MatchPair(
-                    o=_reconstruct_candidate(data["o"]),
-                    c=_reconstruct_candidate(data["c"]),
-                    fill_amount=int(data["fill_amount"]),
-                    clearing_price=int(data["clearing_price"])
-                )
+                return MatchPair.model_validate(data)
             return None
         except Exception:
             pass
@@ -81,27 +69,3 @@ def find_best_match(
         if best is None or m.fill_amount > best.fill_amount:
             best = m
     return best
-
-
-def _reconstruct_candidate(data: dict) -> MatchCandidate:
-    cow = None
-    if data.get("cow_order"):
-        cow = CowOrderSummary(**data["cow_order"])
-    ux = None
-    if data.get("uniswapx_order"):
-        ux = UniswapXOrderSummary(**data["uniswapx_order"])
-    
-    return MatchCandidate(
-        id=data["id"],
-        side=data["side"],
-        pair_sell=data["pair_sell"],
-        pair_buy=data["pair_buy"],
-        amount_sell=int(data["amount_sell"]),
-        amount_buy_min=int(data["amount_buy_min"]),
-        source_id=data["source_id"],
-        source_venue=data["source_venue"],
-        source_expires_at=int(data["source_expires_at"]),
-        received_at_ms=int(data["received_at_ms"]),
-        cow_order=cow,
-        uniswapx_order=ux
-    )

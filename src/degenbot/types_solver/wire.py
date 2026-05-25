@@ -22,7 +22,8 @@ Spec
 from __future__ import annotations
 
 import json
-from typing import Any
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Sequence
 
 from degenbot.types_solver.executor import (
     ComposeParams,
@@ -32,6 +33,28 @@ from degenbot.types_solver.executor import (
     NativeArbParams,
     SwapStep,
 )
+
+
+class Opportunity(BaseModel):
+    """Coordinator/engine opportunity envelope consumed by strategy routing.
+
+    This is intentionally narrower than the full IPC JSON envelope. It carries
+    the fields currently used by the migrated TypeScript decision and native
+    arbitrage strategy modules while preserving raw integer amounts.
+    """
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    id: str
+    kind: str
+    token_in: str = Field(alias="tokenIn")
+    token_out: str = Field(alias="tokenOut")
+    amount_in: int = Field(alias="amountIn")
+    estimated_profit_wei: int = Field(alias="estimatedProfitWei")
+    flash_token: str = Field(alias="flashToken")
+    flash_amount: int = Field(alias="flashAmount")
+    path: Sequence[SwapStep] = Field(default_factory=list)
+    detected_at_ns: int = Field(default=0, alias="detectedAtNs")
+    pool_addresses: Sequence[str] = Field(default_factory=list, alias="poolAddresses")
 
 
 def from_wire_json(s: str) -> dict[str, Any]:
