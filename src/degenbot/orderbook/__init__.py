@@ -1,5 +1,6 @@
 """CoW Protocol orderbook client and typed REST models."""
 
+from degenbot.orderbook import addresses
 from degenbot.orderbook.models import (
     Address,
     Auction,
@@ -53,7 +54,7 @@ def __getattr__(name: str) -> object:
     """Lazily expose the HTTP client without creating an import cycle."""
 
     if name in _CLIENT_EXPORTS:
-        from degenbot.orderbook.client import (  # noqa: PLC0415
+        from degenbot.orderbook.client import (
             DEFAULT_BASE_URL,
             DEFAULT_TIMEOUT_SEC,
             OrderbookClient,
@@ -114,4 +115,5 @@ __all__ = [
     "Trade",
     "TransactionHash",
     "Volume",
+    "addresses",
 ]

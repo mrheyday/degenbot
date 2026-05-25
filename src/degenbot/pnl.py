@@ -10,19 +10,28 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from prometheus_client import Counter
+from prometheus_client import REGISTRY, Counter
+
+
+def _counter(name: str, documentation: str, labelnames: tuple[str, ...]) -> Counter:
+    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
+    existing = names_to_collectors.get(name.removesuffix("_total")) or names_to_collectors.get(name)
+    if existing is not None:
+        return existing
+    return Counter(name, documentation, labelnames=labelnames)
+
 
 # Counters are module-level so they share a single registry across the
 # process. `strategy` is always one of {"C", "C+D3"} for this driver.
-_PNL_USD_TOTAL = Counter(
+_PNL_USD_TOTAL = _counter(
     "solver_pnl_usd_total",
     "Cumulative solver P&L in USD by strategy and outcome.",
-    labelnames=("strategy", "outcome"),
+    ("strategy", "outcome"),
 )
-_AUCTIONS_TOTAL = Counter(
+_AUCTIONS_TOTAL = _counter(
     "solver_auctions_total",
     "Auctions observed and processed by the solver driver.",
-    labelnames=("strategy", "outcome"),
+    ("strategy", "outcome"),
 )
 
 
@@ -39,7 +48,7 @@ class PnLTracker:
             component="driver.pnl",
         )
 
-    def record(self, auction: Any, solution: Any) -> None:  # noqa: ANN401 -- scaffold: typed when Auction/Solution land
+    def record(self, auction: Any, solution: Any) -> None:
         """Record a submitted solution.
 
         Args:

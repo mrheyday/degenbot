@@ -114,9 +114,7 @@ def execution_match_internal(
 
     calldata = encode_match_internal_calldata(
         cow_settlement_calldata=bytes.fromhex(cow_settlement_calldata.removeprefix("0x")),
-        uniswapx_batch_calldata=bytes.fromhex(
-            uniswapx_batch_calldata.removeprefix("0x")
-        ),
+        uniswapx_batch_calldata=bytes.fromhex(uniswapx_batch_calldata.removeprefix("0x")),
         expected_token_inflows=_load_json(expected_token_inflows_json),
         expected_token_inflow_min=[
             int(amount) for amount in _load_json(expected_token_inflow_min_json)
@@ -181,9 +179,7 @@ def execution_compose_four_leg(
         across_fill_calldata=bytes.fromhex(across_fill_calldata.removeprefix("0x")),
         arb_swaps=_load_json(arb_swaps_json),
         cow_fill_calldata=bytes.fromhex(cow_fill_calldata.removeprefix("0x")),
-        uniswapx_rebalance_calldata=bytes.fromhex(
-            uniswapx_rebalance_calldata.removeprefix("0x")
-        ),
+        uniswapx_rebalance_calldata=bytes.fromhex(uniswapx_rebalance_calldata.removeprefix("0x")),
         flash_lender=flash_lender,
         flash_protocol=flash_protocol,
         flash_token=flash_token,

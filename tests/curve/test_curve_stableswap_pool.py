@@ -80,7 +80,7 @@ def _test_calculations(lp: CurveStableswapPool, w3: Web3):
                 ).call()
 
             assert calc_amount == contract_amount, (
-                f"Failure simulating swap (in-pool) at block {state_block} for {lp.address}: {amount} {token_in} for {token_out}"  # noqa:E501
+                f"Failure simulating swap (in-pool) at block {state_block} for {lp.address}: {amount} {token_in} for {token_out}"
             )
 
     if lp.base_pool is not None:

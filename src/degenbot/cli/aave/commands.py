@@ -557,7 +557,7 @@ def aave_update(
                                 verify_chunk=verify_chunk,
                                 show_progress=show_progress,
                             )
-                        except Exception as exc:  # noqa: BLE001
+                        except Exception as exc:
                             logger.exception("")
                             if aave_debug_logger.is_enabled():
                                 aave_debug_logger.log_exception(
@@ -779,13 +779,13 @@ def position_show(address: str, market: str, chain_id: int) -> None:
     default=False,
     help="Skip fetching prices from oracle (faster, but HF values are relative).",
 )
-def position_risk(  # noqa: PLR0917
+def position_risk(
     market: str,
     chain_id: int,
     threshold: float,
     limit: int | None,
-    show_positions: bool,  # noqa: FBT001
-    skip_prices: bool,  # noqa: FBT001
+    show_positions: bool,
+    skip_prices: bool,
 ) -> None:
     """
     Analyze positions for liquidation risk.

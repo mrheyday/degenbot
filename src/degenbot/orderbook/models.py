@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TC003 - Pydantic rebuild needs the runtime symbol.
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 

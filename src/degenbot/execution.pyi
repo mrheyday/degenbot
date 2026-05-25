@@ -20,7 +20,6 @@ def encode_native_arb_calldata(
     min_profit: int | bytes,
     deadline: int | bytes,
 ) -> bytes: ...
-
 def encode_match_internal_calldata(
     cow_settlement_calldata: bytes | HexBytesLike | str,
     uniswapx_batch_calldata: bytes | HexBytesLike | str,
@@ -33,7 +32,6 @@ def encode_match_internal_calldata(
     min_profit: int | bytes,
     deadline: int | bytes,
 ) -> bytes: ...
-
 def encode_compose_four_leg_calldata(
     across_fill_calldata: bytes | HexBytesLike | str,
     arb_swaps: list[dict[str, Any]],

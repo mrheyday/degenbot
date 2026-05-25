@@ -21,10 +21,12 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -61,26 +63,38 @@ class DelegateeReadable(Protocol):
 
 def _require_address(value: str | None, label: str) -> str:
     if value is None or not ADDRESS_RE.fullmatch(value):
-        raise ValueError(f"{label} must be a 20-byte hex address")
+        msg = f"{label} must be a 20-byte hex address"
+        raise ValueError(msg)
     if value.lower() == ZERO_ADDRESS:
-        raise ValueError(f"{label} must not be the zero address")
+        msg = f"{label} must not be the zero address"
+        raise ValueError(msg)
     return value
 
 
-def parse_delegatee_csv(raw: str | None) -> tuple[str, ...]:
+def parse_delegatee_csv(raw: str | None, *, label: str = "DELEGATEE_ADDRESSES") -> tuple[str, ...]:
     """Parse comma-separated delegatee addresses and require at least one."""
 
     if raw is None or not raw.strip():
-        raise ValueError("DELEGATEE_ADDRESSES must contain at least one address")
+        msg = f"{label} must contain at least one address"
+        raise ValueError(msg)
 
     delegatees: list[str] = []
     for item in raw.split(","):
         value = item.strip()
         if value:
-            delegatees.append(_require_address(value, "DELEGATEE_ADDRESSES"))
+            delegatees.append(_require_address(value, label))
     if not delegatees:
-        raise ValueError("DELEGATEE_ADDRESSES must contain at least one address")
+        msg = f"{label} must contain at least one address"
+        raise ValueError(msg)
     return tuple(delegatees)
+
+
+def delegatee_csv_from_env(env: Mapping[str, str]) -> tuple[str | None, str]:
+    """Return delegatee CSV plus the env label used for validation messages."""
+
+    if env.get("DELEGATEE_ADDRESSES"):
+        return env["DELEGATEE_ADDRESSES"], "DELEGATEE_ADDRESSES"
+    return env.get("DELEGATEES_INITIAL"), "DELEGATEES_INITIAL"
 
 
 def collect_delegatee_findings(
@@ -148,14 +162,14 @@ def write_report(path: Path, report: Mapping[str, object]) -> None:
     """Write a pure JSON verification report for downstream readiness gates."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{json.dumps(report, indent=2, sort_keys=True)}\n")
+    path.write_text(f"{json.dumps(report, indent=2, sort_keys=True)}\n", encoding="utf-8")
 
 
 def main() -> None:
     """ApeWorx entrypoint."""
 
     import ape_arbitrum  # noqa: F401  # pylint: disable=import-outside-toplevel,import-error,unused-import
-    from ape import Contract, networks  # pylint: disable=import-outside-toplevel,import-error
+    from ape import Contract  # pylint: disable=import-outside-toplevel,import-error
 
     try:
         executor_address = _require_address(os.environ.get("EXECUTOR_ADDRESS"), "EXECUTOR_ADDRESS")
@@ -163,14 +177,10 @@ def main() -> None:
             os.environ.get("LIQUIDATOR_ADDRESS") or os.environ.get("LIQUIDATION_EXECUTOR_ADDRESS"),
             "LIQUIDATOR_ADDRESS",
         )
-        delegatees = parse_delegatee_csv(os.environ.get("DELEGATEE_ADDRESSES"))
-    except ValueError as exc:
-        print(f"[delegatee-verify] {exc}", file=sys.stderr)
+        delegatee_csv, delegatee_label = delegatee_csv_from_env(os.environ)
+        delegatees = parse_delegatee_csv(delegatee_csv, label=delegatee_label)
+    except ValueError:
         sys.exit(2)
-
-    print(f"[delegatee-verify] network:    {networks.active_provider.name}")
-    print(f"[delegatee-verify] executor:   {executor_address}")
-    print(f"[delegatee-verify] liquidator: {liquidation_address}")
 
     executor_contract = Contract(executor_address, abi=list(DELEGATEE_ABI))
     liquidation_contract = Contract(liquidation_address, abi=list(DELEGATEE_ABI))
@@ -189,12 +199,9 @@ def main() -> None:
     )
     if output_path := os.environ.get("OUTPUT_PATH"):
         write_report(Path(output_path), report)
-    print(json.dumps(report, indent=2))
 
     if not report["all_passed"]:
-        print("[delegatee-verify] FAILED - see report above", file=sys.stderr)
         sys.exit(1)
-    print("[delegatee-verify] all checks passed")
 
 
 if __name__ == "__main__":

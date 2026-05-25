@@ -681,7 +681,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
         if not silent:
             logger.info(
-                f"{self.name} @ {self.address}, A={self.a_coefficient}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%"  # noqa:E501
+                f"{self.name} @ {self.address}, A={self.a_coefficient}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%"
             )
             for token_id, (token, balance) in enumerate(
                 zip(self.tokens, self.balances, strict=True)
@@ -701,7 +701,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
     def __repr__(self) -> str:  # pragma: no cover
         token_string = "-".join([token.symbol for token in self.tokens])
-        return f"{self.__class__.__name__}(address={self.address}, tokens={token_string}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%, A={self.a_coefficient})"  # noqa:E501
+        return f"{self.__class__.__name__}(address={self.address}, tokens={token_string}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%, A={self.a_coefficient})"
 
     @property
     def balances(self) -> tuple[int, ...]:
@@ -714,6 +714,21 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
     @property
     def state(self) -> CurveStableswapPoolState:
         return self._state
+
+    def to_curve_snapshot_json(self, state_override: CurveStableswapPoolState | None = None) -> str:
+        """
+        Serialize the pool state to a JSON format compatible with the Rust CurveSnapshot.
+        """
+        import json
+
+        s = state_override or self.state
+        snapshot = {
+            "balances": [str(b) for b in s.balances],
+            "A": str(s.amp),
+            "feeBps": s.fee_bps,
+            "isMeta": False,  # MetaPool handling deferred
+        }
+        return json.dumps(snapshot)
 
     @property
     def update_block(self) -> BlockNumber:
@@ -1768,7 +1783,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             d: int,
             d_p: int,
             n_coins: int,
-            a_precision: int,  # noqa:ARG001
+            a_precision: int,
         ) -> int:
             return (a_nn * s + d_p * n_coins) * d // ((a_nn - 1) * d + (n_coins + 1) * d_p)
 
@@ -1795,7 +1810,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         def calc_dp_variant_beta(
             *,
             d: int,
-            d_p: int,  # noqa:ARG001
+            d_p: int,
             xp: Sequence[int],
         ) -> int:
             return d * d // xp[0] * d // xp[1] // n_coins**2
@@ -1803,7 +1818,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         def calc_dp_variant_gamma(
             *,
             d: int,
-            d_p: int,  # noqa:ARG001
+            d_p: int,
             xp: Sequence[int],
         ) -> int:
             return d * d // xp[0] * d // xp[1] // cast("int", n_coins**n_coins)

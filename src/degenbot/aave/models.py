@@ -213,7 +213,7 @@ class IndexScaledEvent(BaseEnrichedScaledTokenEvent):
         # Special case: Pool Revision 9+ LIQUIDATION debt amounts
         # For Pool Rev 9+, the debtToCover in LiquidationCall is already scaled
         # Skip validation since raw_amount == scaled_amount for these cases
-        if pool_rev >= 9 and event_type == ScaledTokenEventType.DEBT_BURN:  # noqa: PLR2004
+        if pool_rev >= 9 and event_type == ScaledTokenEventType.DEBT_BURN:
             return self
 
         # Calculate expected scaled amount
@@ -386,7 +386,7 @@ class EnrichedGhoDebtMintEvent(IndexScaledEvent):
     @field_validator("discount_percent")
     @classmethod
     def validate_discount_percent(cls, v: int) -> int:
-        if not 0 <= v <= 10000:  # noqa:PLR2004
+        if not 0 <= v <= 10000:
             msg = f"Discount percent must be 0-10000, got {v}"
             raise ValueError(msg)
         return v
@@ -413,7 +413,7 @@ class EnrichedGhoDebtBurnEvent(IndexScaledEvent):
     @field_validator("discount_percent")
     @classmethod
     def validate_discount_percent(cls, v: int) -> int:
-        if not 0 <= v <= 10000:  # noqa:PLR2004
+        if not 0 <= v <= 10000:
             msg = f"Discount percent must be 0-10000, got {v}"
             raise ValueError(msg)
         return v
@@ -467,7 +467,7 @@ class EnrichedGhoDebtInterestMintEvent(InterestAccrualEvent):
     @field_validator("discount_percent")
     @classmethod
     def validate_discount_percent(cls, v: int) -> int:
-        if not 0 <= v <= 10000:  # noqa:PLR2004
+        if not 0 <= v <= 10000:
             msg = f"Discount percent must be 0-10000, got {v}"
             raise ValueError(msg)
         return v
@@ -487,7 +487,7 @@ class EnrichedGhoDebtInterestBurnEvent(InterestAccrualEvent):
     @field_validator("discount_percent")
     @classmethod
     def validate_discount_percent(cls, v: int) -> int:
-        if not 0 <= v <= 10000:  # noqa:PLR2004
+        if not 0 <= v <= 10000:
             msg = f"Discount percent must be 0-10000, got {v}"
             raise ValueError(msg)
         return v

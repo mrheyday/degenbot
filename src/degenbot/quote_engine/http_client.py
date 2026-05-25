@@ -40,7 +40,9 @@ class AggregatorQuote(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: str = Field(..., description="Aggregator that won the fanout.")
-    sell_amount: str = Field(..., alias="sellAmount", description="Sell amount as base-10 wei string.")
+    sell_amount: str = Field(
+        ..., alias="sellAmount", description="Sell amount as base-10 wei string."
+    )
     buy_amount: str = Field(..., alias="buyAmount", description="Buy amount as base-10 wei string.")
     # Encoded calldata + router that the executor would call to realise the swap.
     router: str = Field(..., description="Aggregator router address.")
@@ -84,7 +86,8 @@ class QuoteEngineClient:
         `tenacity`. Non-retryable errors (4xx) bubble up as-is.
         """
         if self._client is None:
-            raise RuntimeError("QuoteEngineClient used outside of `async with` block")
+            msg = "QuoteEngineClient used outside of `async with` block"
+            raise RuntimeError(msg)
 
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(self._max_retries),
@@ -100,4 +103,5 @@ class QuoteEngineClient:
                 response.raise_for_status()
                 return AggregatorQuote.model_validate(response.json())
         # unreachable but appeases mypy --strict
-        raise RuntimeError("unreachable")
+        msg = "unreachable"
+        raise RuntimeError(msg)

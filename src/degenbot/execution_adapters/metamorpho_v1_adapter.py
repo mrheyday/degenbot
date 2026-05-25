@@ -216,13 +216,11 @@ class MetaMorphoV1Client:
         contract = self._contract()
         supply_queue = self._read_queue(contract, "supply")
         withdraw_queue = self._read_queue(contract, "withdraw")
-        market_ids = _dedupe_market_ids(
-            [
-                *supply_queue,
-                *withdraw_queue,
-                *(extra_market_ids or []),
-            ]
-        )
+        market_ids = _dedupe_market_ids([
+            *supply_queue,
+            *withdraw_queue,
+            *(extra_market_ids or []),
+        ])
         return MetaMorphoVaultSnapshot(
             vault=self._vault_address,
             asset=Web3.to_checksum_address(cast("str", contract.functions.asset().call())),
@@ -232,7 +230,9 @@ class MetaMorphoV1Client:
             last_total_assets=int(cast("int | str", contract.functions.lastTotalAssets().call())),
             lost_assets=int(cast("int | str", contract.functions.lostAssets().call())),
             market_configs=tuple(self.read_market_config(market_id) for market_id in market_ids),
-            erc4626_limits=(self.read_erc4626_limits(erc4626_account) if erc4626_account is not None else None),
+            erc4626_limits=(
+                self.read_erc4626_limits(erc4626_account) if erc4626_account is not None else None
+            ),
         )
 
     def read_erc4626_limits(self, account: str) -> MetaMorphoErc4626Limits:
@@ -241,8 +241,12 @@ class MetaMorphoV1Client:
         checksum_account = Web3.to_checksum_address(account)
         return MetaMorphoErc4626Limits(
             account=checksum_account,
-            max_deposit_assets=int(cast("int | str", contract.functions.maxDeposit(checksum_account).call())),
-            max_withdraw_assets=int(cast("int | str", contract.functions.maxWithdraw(checksum_account).call())),
+            max_deposit_assets=int(
+                cast("int | str", contract.functions.maxDeposit(checksum_account).call())
+            ),
+            max_withdraw_assets=int(
+                cast("int | str", contract.functions.maxWithdraw(checksum_account).call())
+            ),
         )
 
     def read_market_config(self, market_id: str) -> MetaMorphoMarketConfig:
@@ -269,11 +273,16 @@ class MetaMorphoV1Client:
     def _read_queue(self, contract: _MetaMorphoV1Contract, queue: str) -> tuple[str, ...]:
         if queue == "supply":
             length = int(cast("int | str", contract.functions.supplyQueueLength().call()))
-            return tuple(_bytes32_hex(contract.functions.supplyQueue(i).call()) for i in range(length))
+            return tuple(
+                _bytes32_hex(contract.functions.supplyQueue(i).call()) for i in range(length)
+            )
         if queue == "withdraw":
             length = int(cast("int | str", contract.functions.withdrawQueueLength().call()))
-            return tuple(_bytes32_hex(contract.functions.withdrawQueue(i).call()) for i in range(length))
-        raise ValueError(f"unknown MetaMorpho queue: {queue}")
+            return tuple(
+                _bytes32_hex(contract.functions.withdrawQueue(i).call()) for i in range(length)
+            )
+        msg = f"unknown MetaMorpho queue: {queue}"
+        raise ValueError(msg)
 
     def _contract(self) -> _MetaMorphoV1Contract:
         if self._web3 is None:
@@ -298,7 +307,8 @@ def _dedupe_market_ids(market_ids: list[str]) -> tuple[str, ...]:
 def _bytes32(value: str) -> bytes:
     raw = bytes.fromhex(value.lower().removeprefix("0x"))
     if len(raw) != _BYTES32_BYTES:
-        raise ValueError(f"expected bytes32 hex string, got {value!r}")
+        msg = f"expected bytes32 hex string, got {value!r}"
+        raise ValueError(msg)
     return raw
 
 
@@ -308,5 +318,6 @@ def _bytes32_hex(value: object) -> str:
     elif isinstance(value, str):
         raw = _bytes32(value)
     else:
-        raise ValueError(f"expected bytes32 return value, got {value!r}")
+        msg = f"expected bytes32 return value, got {value!r}"
+        raise ValueError(msg)
     return Web3.to_hex(raw)

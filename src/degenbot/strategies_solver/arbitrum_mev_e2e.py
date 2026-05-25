@@ -152,7 +152,8 @@ class ArbitrumMevMasterPlan:
         for route in self.routes:
             if route.strategy_id == strategy_id:
                 return route
-        raise KeyError(f"unknown E2E strategy route: {strategy_id}")
+        msg = f"unknown E2E strategy route: {strategy_id}"
+        raise KeyError(msg)
 
     def execution_queue(self) -> tuple[StrategyE2ERoute, ...]:
         """Return routes that may dispatch through existing workflows."""
@@ -256,7 +257,9 @@ EV_ESTIMATES: tuple[StrategyEvEstimate, ...] = (
         annual_low_usd_cents=0,
         annual_base_usd_cents=0,
         annual_high_usd_cents=0,
-        notes=("JIT remains research-only without controlled/private orderflow and ordering proof.",),
+        notes=(
+            "JIT remains research-only without controlled/private orderflow and ordering proof.",
+        ),
     ),
     StrategyEvEstimate(
         strategy_id="B-1",
@@ -297,7 +300,8 @@ def ev_estimate(strategy_id: str) -> StrategyEvEstimate:
     try:
         return _EV_BY_ID[strategy_id]
     except KeyError as exc:
-        raise KeyError(f"unknown EV estimate: {strategy_id}") from exc
+        msg = f"unknown EV estimate: {strategy_id}"
+        raise KeyError(msg) from exc
 
 
 def build_master_plan() -> ArbitrumMevMasterPlan:
@@ -463,9 +467,20 @@ def build_master_plan() -> ArbitrumMevMasterPlan:
             workflow_id=None,
             dispatchable=False,
             ev=ev_estimate("B-1"),
-            required_inputs=("Boros settlement event ABI", "oracle timestamp source", "30d spread sample"),
-            stop_conditions=("spread is LP-absorbed", "no delayed settlement price", "capturable spread below cost"),
-            next_steps=("decode Boros settlement and PositionFilled events", "measure execution/oracle spread"),
+            required_inputs=(
+                "Boros settlement event ABI",
+                "oracle timestamp source",
+                "30d spread sample",
+            ),
+            stop_conditions=(
+                "spread is LP-absorbed",
+                "no delayed settlement price",
+                "capturable spread below cost",
+            ),
+            next_steps=(
+                "decode Boros settlement and PositionFilled events",
+                "measure execution/oracle spread",
+            ),
         ),
         StrategyE2ERoute(
             priority=strategy_priority("T-1"),
@@ -476,7 +491,9 @@ def build_master_plan() -> ArbitrumMevMasterPlan:
             ev=ev_estimate("T-1"),
             required_inputs=("event EV exceeds $33 break-even", "Kairos endpoint configured"),
             stop_conditions=("always-on bidding requested", "event EV below on-demand fee"),
-            next_steps=("use as per-event rail for L-2, U-1, A-1, V-1, L-1 Atlas, and confirmed B-1 only",),
+            next_steps=(
+                "use as per-event rail for L-2, U-1, A-1, V-1, L-1 Atlas, and confirmed B-1 only",
+            ),
         ),
         StrategyE2ERoute(
             priority=strategy_priority("S-1"),
@@ -542,10 +559,14 @@ def validate_master_plan(plan: ArbitrumMevMasterPlan | None = None) -> tuple[str
     plan = plan or build_master_plan()
     violations: list[str] = []
 
-    ranked_ids = tuple(priority.strategy_id for priority in ranked_strategy_priorities(include_deprioritized=True))
+    ranked_ids = tuple(
+        priority.strategy_id for priority in ranked_strategy_priorities(include_deprioritized=True)
+    )
     route_ids = tuple(route.strategy_id for route in plan.routes)
     if route_ids != ranked_ids:
-        violations.append(f"route order {route_ids!r} does not match market-map order {ranked_ids!r}")
+        violations.append(
+            f"route order {route_ids!r} does not match market-map order {ranked_ids!r}"
+        )
 
     for route in plan.routes:
         if route.dispatchable:
@@ -554,11 +575,20 @@ def validate_master_plan(plan: ArbitrumMevMasterPlan | None = None) -> tuple[str
                 continue
             workflow = workflow_for_id(route.workflow_id)
             if workflow.status is not WorkflowStatus.EXECUTABLE:
-                violations.append(f"{route.strategy_id} dispatches through non-executable workflow {route.workflow_id}")
-            if route.priority.status not in {StrategyPocStatus.EXECUTABLE, StrategyPocStatus.MONITOR_ONLY}:
-                violations.append(f"{route.strategy_id} dispatchable but market status is {route.priority.status}")
+                violations.append(
+                    f"{route.strategy_id} dispatches through non-executable workflow {route.workflow_id}"
+                )
+            if route.priority.status not in {
+                StrategyPocStatus.EXECUTABLE,
+                StrategyPocStatus.MONITOR_ONLY,
+            }:
+                violations.append(
+                    f"{route.strategy_id} dispatchable but market status is {route.priority.status}"
+                )
         elif route.priority.status is StrategyPocStatus.EXECUTABLE:
-            violations.append(f"{route.strategy_id} executable market status is not dispatchable in E2E plan")
+            violations.append(
+                f"{route.strategy_id} executable market status is not dispatchable in E2E plan"
+            )
 
     if plan.known_vectors_base_usd_cents != EXPECTED_KNOWN_VECTOR_BASE_USD_CENTS:
         violations.append("known vector base EV drifted")

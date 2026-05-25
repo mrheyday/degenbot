@@ -67,8 +67,8 @@ class CollateralV5Processor(CollateralV1Processor):
     def process_burn_event(
         self,
         event_data: CollateralBurnEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
         scaled_delta: int | None = None,
     ) -> ScaledTokenBurnResult:
         """
@@ -116,8 +116,8 @@ class CollateralV5Processor(CollateralV1Processor):
     def process_mint_event(
         self,
         event_data: CollateralMintEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
         scaled_delta: int | None = None,
     ) -> ScaledTokenMintResult:
         """

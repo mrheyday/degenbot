@@ -128,7 +128,7 @@ class ProviderAdapter:
 
     def __init__(
         self,
-        provider: Any,  # noqa: ANN401
+        provider: Any,
         *,
         provider_type: Literal["web3", "alloy"],
     ) -> None:
@@ -142,7 +142,7 @@ class ProviderAdapter:
         self._provider_type = provider_type
 
     @classmethod
-    def from_web3(cls, w3: Any) -> Self:  # noqa: ANN401
+    def from_web3(cls, w3: Any) -> Self:
         """Create an adapter wrapping a Web3 instance.
 
         Args:
@@ -154,7 +154,7 @@ class ProviderAdapter:
         return cls(provider=w3, provider_type="web3")
 
     @classmethod
-    def from_alloy(cls, alloy: Any) -> Self:  # noqa: ANN401
+    def from_alloy(cls, alloy: Any) -> Self:
         """Create an adapter wrapping an AlloyProvider instance.
 
         Args:
@@ -171,7 +171,7 @@ class ProviderAdapter:
         return self._provider_type
 
     @property
-    def underlying(self) -> Any:  # noqa: ANN401
+    def underlying(self) -> Any:
         """Get the underlying provider instance."""
         return self._provider
 

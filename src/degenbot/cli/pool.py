@@ -1285,7 +1285,7 @@ def _read_algebra_pool_fee_and_tick_spacing(
 
 def arbitrum_curve_stableswap_ng_pool_updater(
     w3: Web3,
-    start_block: int,  # noqa: ARG001
+    start_block: int,
     end_block: int,
     exchange: ExchangeTable,
     session: Session,

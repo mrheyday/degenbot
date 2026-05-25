@@ -97,7 +97,7 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
         self,
         input_token: Erc20Token,
         swap_pools: Sequence[Pool],
-        id: str | None = None,  # noqa:A002
+        id: str | None = None,
         max_input: int | None = None,
     ) -> None:
         self._validate_pools(swap_pools)
@@ -163,7 +163,7 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
                     )
                 case _:
                     raise DegenbotValueError(
-                        message=f"Token {input_token} could not be matched. Pool holds {pool.token0} & {pool.token1}"  # noqa: E501
+                        message=f"Token {input_token} could not be matched. Pool holds {pool.token0} & {pool.token1}"
                     )
 
         self._swap_vectors = tuple(swap_vectors)
@@ -477,17 +477,56 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
 
         # Negate the return value from the profit function to make the curve compatible with a
         # minimizing solver.
-        opt: OptimizeResult = minimize_scalar(
-            fun=lambda x: -self._arb_profit(x, state_overrides=state_overrides),
-            method="bounded",
-            bounds=bounds,
-            bracket=bracket,
-            options={"xatol": 1.0},
-        )
+        optimal_x: int | None = None
+        if len(self.swap_pools) == 2:
+            try:
+                p1, p2 = self.swap_pools
+                from degenbot import optimal_input_2pool_v3 as rust_optimal_input_v3
+
+                if rust_optimal_input_v3 is not None:
+                    # V3-V3 case
+                    if isinstance(p1, UniswapV3Pool) and isinstance(p2, UniswapV3Pool):
+                        p1_zfo = p1.token0 == self.input_token
+                        p1_json = p1.to_v3_snapshot_json(state_overrides.get(p1))
+                        p2_json = p2.to_v3_snapshot_json(state_overrides.get(p2))
+                        res_str = rust_optimal_input_v3(p1_json, p1_zfo, p2_json, None)
+                        optimal_x = int(res_str)
+
+                    # V3-V2 case
+                    elif isinstance(p1, UniswapV3Pool) and isinstance(p2, UniswapV2Pool):
+                        p1_zfo = p1.token0 == self.input_token
+                        p1_json = p1.to_v3_snapshot_json(state_overrides.get(p1))
+                        p2_state = state_overrides.get(p2) or p2.state
+                        r_in = (
+                            p2_state.reserves_token0
+                            if p2.token0 == p1.token1
+                            else p2_state.reserves_token1
+                        )
+                        r_out = (
+                            p2_state.reserves_token1
+                            if p2.token0 == p1.token1
+                            else p2_state.reserves_token0
+                        )
+                        res_str = rust_optimal_input_v3(
+                            p1_json, p1_zfo, None, (str(r_in), str(r_out), p2.fee_bps)
+                        )
+                        optimal_x = int(res_str)
+            except Exception:
+                pass
+
+        if optimal_x is None:
+            opt: OptimizeResult = minimize_scalar(
+                fun=lambda x: -self._arb_profit(x, state_overrides=state_overrides),
+                method="bounded",
+                bounds=bounds,
+                bracket=bracket,
+                options={"xatol": 1.0},
+            )
+            optimal_x = int(opt.x)
 
         # Generate the swap amounts for the optimal input value
         optimal_amounts = self._build_swap_amounts(
-            token_in_quantity=int(opt.x),
+            token_in_quantity=optimal_x,
             state_overrides=state_overrides,
         )
 
@@ -571,7 +610,7 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
             pool.sparse_liquidity_map for pool in self.swap_pools if isinstance(pool, UniswapV3Pool)
         ):
             raise DegenbotValueError(
-                message="Cannot perform calculation with process pool executor. One or more V3 pools has a sparse bitmap."  # noqa:E501
+                message="Cannot perform calculation with process pool executor. One or more V3 pools has a sparse bitmap."
             )
 
         self._pre_calculation_check(

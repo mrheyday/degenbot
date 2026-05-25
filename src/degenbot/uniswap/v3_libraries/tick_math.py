@@ -97,7 +97,7 @@ def get_tick_at_sqrt_ratio(
 
     f = r > 1
     msb |= f
-    r = ratio >> msb - 127 if msb >= 128 else ratio << 127 - msb  # noqa: PLR2004
+    r = ratio >> msb - 127 if msb >= 128 else ratio << 127 - msb
 
     log_2 = (msb - 128) << 64
 

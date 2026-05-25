@@ -195,15 +195,19 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
             ValueError: on degenerate inputs.
         """
         if sqrt_price_x96 <= 0:
-            raise ValueError("sqrt_price_x96 must be positive")
+            msg = "sqrt_price_x96 must be positive"
+            raise ValueError(msg)
         if liquidity < 0:
-            raise ValueError("liquidity must be non-negative")
+            msg = "liquidity must be non-negative"
+            raise ValueError(msg)
         if fee_pips < 0 or fee_pips >= _FEE_PIPS_DENOMINATOR:
+            msg = f"fee_pips must be in [0, {_FEE_PIPS_DENOMINATOR}), got {fee_pips}"
             raise ValueError(
-                f"fee_pips must be in [0, {_FEE_PIPS_DENOMINATOR}), got {fee_pips}",
+                msg,
             )
         if tick_spacing <= 0:
-            raise ValueError(f"tick_spacing must be positive, got {tick_spacing}")
+            msg = f"tick_spacing must be positive, got {tick_spacing}"
+            raise ValueError(msg)
 
         self.address = to_checksum_address(address)
         self.token0 = to_checksum_address(token0)
@@ -276,7 +280,8 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
                 back to Algebra QuoterV2.
         """
         if token_in_quantity <= 0:
-            raise ValueError(f"token_in_quantity must be positive, got {token_in_quantity}")
+            msg = f"token_in_quantity must be positive, got {token_in_quantity}"
+            raise ValueError(msg)
 
         token_in_cs = to_checksum_address(token_in)
         if token_in_cs == self.token0:
@@ -284,16 +289,19 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
         elif token_in_cs == self.token1:
             zero_for_one = False
         else:
+            msg = (
+                f"token_in {token_in_cs} matches neither pool token ({self.token0}, {self.token1})"
+            )
             raise ValueError(
-                f"token_in {token_in_cs} matches neither pool token "
-                f"({self.token0}, {self.token1})",
+                msg,
             )
 
         s = override_state if override_state is not None else self._state
 
         if s.liquidity == 0:
+            msg = f"pool {self.address} has zero liquidity at tick {s.tick} — swap would revert"
             raise ValueError(
-                f"pool {self.address} has zero liquidity at tick {s.tick} — swap would revert",
+                msg,
             )
 
         # Resolve the boundary tick we'd cross if this swap exhausts
@@ -306,9 +314,7 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
         # zero_for_one=true ⇒ price decreasing ⇒ target = lower tick boundary.
         # zero_for_one=false ⇒ price increasing ⇒ target = upper tick boundary.
         target_tick = (
-            compressed * s.tick_spacing
-            if zero_for_one
-            else (compressed + 1) * s.tick_spacing
+            compressed * s.tick_spacing if zero_for_one else (compressed + 1) * s.tick_spacing
         )
 
         sqrt_ratio_target = get_sqrt_ratio_at_tick(tick=target_tick)
@@ -325,11 +331,14 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
         # the swap reached the next tick boundary — and we'd need to
         # cross. Refuse rather than silently truncate.
         if sqrt_next == sqrt_ratio_target:
-            raise MultiTickCrossingNotSupportedError(
+            msg = (
                 f"swap on pool {self.address} would cross tick "
                 f"{target_tick} (current tick {s.tick}, spacing "
                 f"{s.tick_spacing}); fall back to Algebra QuoterV2 "
-                f"or wait for upstream-PR TickTree port (CLAUDE.md Q-5)",
+                f"or wait for upstream-PR TickTree port (CLAUDE.md Q-5)"
+            )
+            raise MultiTickCrossingNotSupportedError(
+                msg,
             )
 
         return amount_out
@@ -352,8 +361,9 @@ class CamelotV3Pool(PublisherMixin, AbstractLiquidityPool):
         configuration didn't change.
         """
         if block < (self._state.block or 0):
+            msg = f"update for block {block} predates current state block {self._state.block}"
             raise ValueError(
-                f"update for block {block} predates current state block {self._state.block}",
+                msg,
             )
 
         new_state = CamelotV3PoolState(

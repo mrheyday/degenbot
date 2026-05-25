@@ -57,7 +57,7 @@ class PoolMath:
               which calls rayMulFloor
               (see contract_reference/aave/Pool/rev_9.sol)
         """
-        if pool_revision >= 9:  # noqa: PLR2004
+        if pool_revision >= 9:
             # TokenMath library: floor rounding
             amount = wad_ray_math.ray_mul_floor(accrued_to_treasury, index)
             logger.debug(
@@ -101,7 +101,7 @@ class PoolMath:
             debug/aave/0034: Pool Rev 9 MINT_TO_TREASURY rounding
             debug/aave/0036: Pool Rev 8 MINT_TO_TREASURY rounding
         """
-        if pool_revision >= 9:  # noqa: PLR2004
+        if pool_revision >= 9:
             # Reverse of ray_mul_floor = ray_div_ceil
             scaled = wad_ray_math.ray_div_ceil(underlying_amount, liquidity_index)
             logger.debug(
@@ -140,7 +140,7 @@ class PoolMath:
             - get_debt_balance uses ray_mul_ceil (prevent under-accounting)
             - So reverse uses ray_div_floor (prevent over-scaling)
         """
-        if pool_revision >= 9:  # noqa: PLR2004
+        if pool_revision >= 9:
             # Reverse of ray_mul_ceil = ray_div_floor
             scaled = wad_ray_math.ray_div_floor(underlying_amount, borrow_index)
             logger.debug(

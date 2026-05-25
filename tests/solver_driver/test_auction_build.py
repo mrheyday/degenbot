@@ -74,7 +74,7 @@ def test_parses_coordinator_payload_aliases() -> None:
     assert request.auction.orders[0].sell_amount == 1_000_000
     assert request.policy.chain_id == 42161
     assert request.policy.max_bid_fraction_bps == 3500
-    assert request.policy.min_profit_usd == 12.5
+    assert request.policy.min_profit_usd == pytest.approx(12.5)
     assert request.policy.d3_filter_enabled is True
 
 

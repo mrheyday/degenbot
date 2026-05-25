@@ -299,16 +299,15 @@ class MorphoMarketParams:
     def id(self) -> str:
         """Return the Morpho `Id` bytes32 hex string for this MarketParams tuple."""
         if self.lltv < 0:
-            raise ValueError("Morpho market LLTV must be non-negative")
-        encoded = b"".join(
-            (
-                _encode_address(self.loan_token),
-                _encode_address(self.collateral_token),
-                _encode_address(self.oracle),
-                _encode_address(self.irm),
-                self.lltv.to_bytes(32, "big"),
-            )
-        )
+            msg = "Morpho market LLTV must be non-negative"
+            raise ValueError(msg)
+        encoded = b"".join((
+            _encode_address(self.loan_token),
+            _encode_address(self.collateral_token),
+            _encode_address(self.oracle),
+            _encode_address(self.irm),
+            self.lltv.to_bytes(32, "big"),
+        ))
         return Web3.to_hex(Web3.keccak(encoded))
 
 
@@ -517,9 +516,13 @@ class MorphoLiquidationRiskCosts:
             "estimatedGasCostUsd": _decimal_to_wire(self.estimated_gas_cost_usd),
             "oracleRiskPenaltyUsd": _decimal_to_wire(self.oracle_risk_penalty_usd),
             "swapBackLiquidityUsd": (
-                None if self.swap_back_liquidity_usd is None else _decimal_to_wire(self.swap_back_liquidity_usd)
+                None
+                if self.swap_back_liquidity_usd is None
+                else _decimal_to_wire(self.swap_back_liquidity_usd)
             ),
-            "swapBackLiquidityShortfallUsd": _decimal_to_wire(self.swap_back_liquidity_shortfall_usd),
+            "swapBackLiquidityShortfallUsd": _decimal_to_wire(
+                self.swap_back_liquidity_shortfall_usd
+            ),
         }
 
 
@@ -561,7 +564,9 @@ class MorphoStandardLiquidationCandidatePayload:
             "collateralToken": self.collateral_token,
             "repayAssets": str(self.repay_assets),
             "expectedCollateralSeized": (
-                None if self.expected_collateral_seized is None else str(self.expected_collateral_seized)
+                None
+                if self.expected_collateral_seized is None
+                else str(self.expected_collateral_seized)
             ),
             "healthFactorWad": str(self.health_factor_wad),
             "liquidationBonusBps": self.liquidation_bonus_bps,
@@ -668,10 +673,13 @@ class MorphoLiquidationPlan:
     def market_id(self) -> str:
         return self.revalidation.candidate.market.id
 
-    def to_executor_swap_step(self, *, morpho_blue_address: str, amount_out_min: int) -> MorphoLiquidationSwapStep:
+    def to_executor_swap_step(
+        self, *, morpho_blue_address: str, amount_out_min: int
+    ) -> MorphoLiquidationSwapStep:
         """Return a coordinator/degenbot-compatible MorphoBlue action step."""
         if amount_out_min < 0:
-            raise ValueError(f"amount_out_min must be non-negative, got {amount_out_min}")
+            msg = f"amount_out_min must be non-negative, got {amount_out_min}"
+            raise ValueError(msg)
         market = self.revalidation.candidate.market
         return MorphoLiquidationSwapStep(
             pool=morpho_blue_address,
@@ -753,9 +761,15 @@ class MorphoApiMetadata:
         return cls(
             chain_id=chain_id,
             listed_tokens=tokens,
-            vault_v2_addresses=_load_address_set(metadata_dir / "vaults-v2-listing.json", chain_id=chain_id),
-            legacy_vault_addresses=_load_address_set(metadata_dir / "vaults-listing.json", chain_id=chain_id),
-            market_blacklist=_load_market_id_set(metadata_dir / "markets-blacklist.json", chain_id=chain_id),
+            vault_v2_addresses=_load_address_set(
+                metadata_dir / "vaults-v2-listing.json", chain_id=chain_id
+            ),
+            legacy_vault_addresses=_load_address_set(
+                metadata_dir / "vaults-listing.json", chain_id=chain_id
+            ),
+            market_blacklist=_load_market_id_set(
+                metadata_dir / "markets-blacklist.json", chain_id=chain_id
+            ),
             red_market_warnings=_load_red_warning_targets(
                 metadata_dir / "custom-warnings.json",
                 chain_id=chain_id,
@@ -856,9 +870,11 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
         )
         market = data.get("marketById")
         if market is None:
-            raise ValueError(f"Morpho market not found: {market_id}")
+            msg = f"Morpho market not found: {market_id}"
+            raise ValueError(msg)
         if not isinstance(market, dict):
-            raise ValueError("unexpected Morpho marketById response")
+            msg = "unexpected Morpho marketById response"
+            raise ValueError(msg)
         return _market_from_graphql(market)
 
     async def get_position(self, market_id: str, user: str) -> MorphoPosition:
@@ -869,9 +885,11 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
         )
         position = data.get("marketPosition")
         if position is None:
-            raise ValueError(f"Morpho position not found: market={market_id} user={user}")
+            msg = f"Morpho position not found: market={market_id} user={user}"
+            raise ValueError(msg)
         if not isinstance(position, dict):
-            raise ValueError("unexpected Morpho marketPosition response")
+            msg = "unexpected Morpho marketPosition response"
+            raise ValueError(msg)
         return _position_from_graphql(position)
 
     async def get_priority_markets(self, market_ids: list[str]) -> list[MorphoMarket]:
@@ -987,7 +1005,14 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
         if position.borrow_shares < candidate.repay_shares:
             reasons.append("candidate_repay_shares_exceed_onchain_borrow_shares")
 
-        total_supply_assets, total_supply_shares, total_borrow_assets, total_borrow_shares, last_update, fee = cast(
+        (
+            total_supply_assets,
+            total_supply_shares,
+            total_borrow_assets,
+            total_borrow_shares,
+            last_update,
+            fee,
+        ) = cast(
             "tuple[int, int, int, int, int, int]",
             contract.functions.market(market_id).call(),
         )
@@ -1032,9 +1057,17 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
         """
         revalidation = self.revalidate_liquidation_candidate_onchain(candidate)
         if not revalidation.valid:
-            raise ValueError("cannot plan Morpho liquidation for invalid candidate: " + ", ".join(revalidation.reasons))
-        if revalidation.market_params is None or revalidation.position is None or revalidation.market_state is None:
-            raise ValueError("cannot plan Morpho liquidation without complete on-chain revalidation")
+            raise ValueError(
+                "cannot plan Morpho liquidation for invalid candidate: "
+                + ", ".join(revalidation.reasons)
+            )
+        if (
+            revalidation.market_params is None
+            or revalidation.position is None
+            or revalidation.market_state is None
+        ):
+            msg = "cannot plan Morpho liquidation without complete on-chain revalidation"
+            raise ValueError(msg)
 
         collateral_price = self._oracle_price(revalidation.market_params.oracle)
         return build_standard_liquidation_plan(
@@ -1046,7 +1079,8 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
 
     def _morpho_contract(self) -> _MorphoBlueContract:
         if self._rpc_url is None:
-            raise ValueError("rpc_url is required for Morpho on-chain revalidation")
+            msg = "rpc_url is required for Morpho on-chain revalidation"
+            raise ValueError(msg)
         if self._web3 is None:
             self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
         return cast(
@@ -1059,7 +1093,8 @@ class MorphoLpClient(AsyncGraphqlAdapterClient):
 
     def _oracle_price(self, oracle_address: str) -> int:
         if self._rpc_url is None:
-            raise ValueError("rpc_url is required for Morpho oracle reads")
+            msg = "rpc_url is required for Morpho oracle reads"
+            raise ValueError(msg)
         if self._web3 is None:
             self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
         oracle = cast(
@@ -1082,16 +1117,19 @@ def _encode_address(address: str) -> bytes:
     try:
         raw = bytes.fromhex(address.removeprefix("0x"))
     except ValueError as exc:
-        raise ValueError(f"invalid address hex: {address!r}") from exc
+        msg = f"invalid address hex: {address!r}"
+        raise ValueError(msg) from exc
     if len(raw) != _EVM_ADDRESS_BYTES or int.from_bytes(raw, "big") == 0:
-        raise ValueError(f"expected non-zero 20-byte address, got {address!r}")
+        msg = f"expected non-zero 20-byte address, got {address!r}"
+        raise ValueError(msg)
     return raw.rjust(32, b"\x00")
 
 
 def _bytes32(value: str) -> bytes:
     raw = bytes.fromhex(value.removeprefix("0x"))
     if len(raw) != _BYTES32_BYTES:
-        raise ValueError(f"expected bytes32 hex string, got {value!r}")
+        msg = f"expected bytes32 hex string, got {value!r}"
+        raise ValueError(msg)
     return raw
 
 
@@ -1107,7 +1145,8 @@ def filter_markets_for_metadata(
         if metadata.should_skip_market(market.id):
             continue
         if require_listed_tokens and (
-            not metadata.is_token_listed(market.loan_token) or not metadata.is_token_listed(market.collateral_token)
+            not metadata.is_token_listed(market.loan_token)
+            or not metadata.is_token_listed(market.collateral_token)
         ):
             continue
         filtered.append(market)
@@ -1133,9 +1172,11 @@ def rank_liquidation_candidates_for_screening(
     """
     config = config or MorphoLiquidationRankingConfig()
     if config.estimated_gas_cost_usd < 0:
-        raise ValueError(f"estimated_gas_cost_usd must be non-negative, got {config.estimated_gas_cost_usd}")
+        msg = f"estimated_gas_cost_usd must be non-negative, got {config.estimated_gas_cost_usd}"
+        raise ValueError(msg)
     if config.min_net_edge_usd < 0:
-        raise ValueError(f"min_net_edge_usd must be non-negative, got {config.min_net_edge_usd}")
+        msg = f"min_net_edge_usd must be non-negative, got {config.min_net_edge_usd}"
+        raise ValueError(msg)
 
     priorities: list[MorphoLiquidationPriority] = []
     for candidate in candidates:
@@ -1229,13 +1270,19 @@ def ranking_config_from_live_risk_feeds(
     live inputs into the deterministic screening policy shape.
     """
     if feeds.estimated_gas_units < 0:
-        raise ValueError(f"estimated_gas_units must be non-negative, got {feeds.estimated_gas_units}")
+        msg = f"estimated_gas_units must be non-negative, got {feeds.estimated_gas_units}"
+        raise ValueError(msg)
     if feeds.gas_price_wei < 0:
-        raise ValueError(f"gas_price_wei must be non-negative, got {feeds.gas_price_wei}")
+        msg = f"gas_price_wei must be non-negative, got {feeds.gas_price_wei}"
+        raise ValueError(msg)
     if feeds.eth_price_usd < 0:
-        raise ValueError(f"eth_price_usd must be non-negative, got {feeds.eth_price_usd}")
+        msg = f"eth_price_usd must be non-negative, got {feeds.eth_price_usd}"
+        raise ValueError(msg)
     estimated_gas_cost_usd = (
-        Decimal(feeds.estimated_gas_units) * Decimal(feeds.gas_price_wei) * feeds.eth_price_usd / Decimal(10**18)
+        Decimal(feeds.estimated_gas_units)
+        * Decimal(feeds.gas_price_wei)
+        * feeds.eth_price_usd
+        / Decimal(10**18)
     )
     return MorphoLiquidationRankingConfig(
         estimated_gas_cost_usd=estimated_gas_cost_usd,
@@ -1258,10 +1305,12 @@ def liquidation_incentive_factor_wad(lltv: int) -> int:
     All arithmetic mirrors Solidity's wad `wMulDown` / `wDivDown` rounding.
     """
     if lltv < 0 or lltv >= _WAD:
-        raise ValueError(f"Morpho LLTV must be in [0, 1e18), got {lltv}")
+        msg = f"Morpho LLTV must be in [0, 1e18), got {lltv}"
+        raise ValueError(msg)
     denominator = _WAD - _mul_div_down(_LIQUIDATION_CURSOR, _WAD - lltv, _WAD)
     if denominator <= 0:
-        raise ValueError(f"Morpho LIF denominator must be positive, got {denominator}")
+        msg = f"Morpho LIF denominator must be positive, got {denominator}"
+        raise ValueError(msg)
     return min(_MAX_LIQUIDATION_INCENTIVE_FACTOR, _mul_div_down(_WAD, _WAD, denominator))
 
 
@@ -1292,12 +1341,19 @@ def build_standard_liquidation_plan(
     """
     if not revalidation.valid:
         raise ValueError(
-            "cannot build Morpho liquidation plan for invalid revalidation: " + ", ".join(revalidation.reasons)
+            "cannot build Morpho liquidation plan for invalid revalidation: "
+            + ", ".join(revalidation.reasons)
         )
-    if revalidation.market_params is None or revalidation.position is None or revalidation.market_state is None:
-        raise ValueError("cannot build Morpho liquidation plan without complete revalidation")
+    if (
+        revalidation.market_params is None
+        or revalidation.position is None
+        or revalidation.market_state is None
+    ):
+        msg = "cannot build Morpho liquidation plan without complete revalidation"
+        raise ValueError(msg)
     if collateral_price <= 0:
-        raise ValueError(f"Morpho oracle price must be > 0, got {collateral_price}")
+        msg = f"Morpho oracle price must be > 0, got {collateral_price}"
+        raise ValueError(msg)
 
     position = revalidation.position
     market_state = revalidation.market_state
@@ -1313,17 +1369,24 @@ def build_standard_liquidation_plan(
         _ORACLE_PRICE_SCALE,
     )
     max_borrow_assets = _mul_div_down(collateral_value_assets, market_params.lltv, _WAD)
-    health_factor_wad = _mul_div_down(max_borrow_assets, _WAD, borrowed_assets) if borrowed_assets > 0 else 2**256 - 1
+    health_factor_wad = (
+        _mul_div_down(max_borrow_assets, _WAD, borrowed_assets)
+        if borrowed_assets > 0
+        else 2**256 - 1
+    )
     if max_borrow_assets >= borrowed_assets:
-        raise ValueError("cannot liquidate healthy Morpho position")
+        msg = "cannot liquidate healthy Morpho position"
+        raise ValueError(msg)
 
     repay_shares = position.borrow_shares
     if max_repay_shares is not None:
         if max_repay_shares <= 0:
-            raise ValueError(f"max_repay_shares must be > 0, got {max_repay_shares}")
+            msg = f"max_repay_shares must be > 0, got {max_repay_shares}"
+            raise ValueError(msg)
         repay_shares = min(repay_shares, max_repay_shares)
     if repay_shares <= 0:
-        raise ValueError("Morpho liquidation repay_shares must be > 0")
+        msg = "Morpho liquidation repay_shares must be > 0"
+        raise ValueError(msg)
     repay_assets = _to_assets_up(
         repay_shares,
         market_state.total_borrow_assets,
@@ -1364,20 +1427,26 @@ def build_standard_liquidation_candidate_payload(
     performs no RPC and is safe for offline fixture tests.
     """
     if priority.candidate != plan.revalidation.candidate:
-        raise ValueError("ranking priority and liquidation plan must reference the same Morpho candidate")
+        msg = "ranking priority and liquidation plan must reference the same Morpho candidate"
+        raise ValueError(msg)
     if not plan.revalidation.valid:
-        raise ValueError("cannot build payload from invalid Morpho revalidation")
+        msg = "cannot build payload from invalid Morpho revalidation"
+        raise ValueError(msg)
     if plan.revalidation.market_params is None:
-        raise ValueError("cannot build payload without full on-chain MarketParams")
+        msg = "cannot build payload without full on-chain MarketParams"
+        raise ValueError(msg)
     if plan.repay_shares <= 0:
-        raise ValueError("Morpho standard-liquidation payload requires repaidShares > 0")
+        msg = "Morpho standard-liquidation payload requires repaidShares > 0"
+        raise ValueError(msg)
 
     market = priority.candidate.market
     market_params = plan.revalidation.market_params
     if market_params.loan_token.lower() != market.loan_token.lower():
-        raise ValueError("payload MarketParams loan token must match ranked market")
+        msg = "payload MarketParams loan token must match ranked market"
+        raise ValueError(msg)
     if market_params.collateral_token.lower() != market.collateral_token.lower():
-        raise ValueError("payload MarketParams collateral token must match ranked market")
+        msg = "payload MarketParams collateral token must match ranked market"
+        raise ValueError(msg)
 
     resolved_expected_collateral = (
         estimate_standard_liquidation_collateral_seized(plan)
@@ -1385,7 +1454,8 @@ def build_standard_liquidation_candidate_payload(
         else expected_collateral_seized
     )
     if resolved_expected_collateral < 0:
-        raise ValueError(f"expected_collateral_seized must be non-negative, got {resolved_expected_collateral}")
+        msg = f"expected_collateral_seized must be non-negative, got {resolved_expected_collateral}"
+        raise ValueError(msg)
 
     return MorphoStandardLiquidationCandidatePayload(
         market_id=priority.market_id,
@@ -1423,9 +1493,11 @@ def estimate_standard_liquidation_collateral_seized(plan: MorphoLiquidationPlan)
     inside `liquidate` against the latest accrued market state.
     """
     if plan.revalidation.market_params is None or plan.revalidation.market_state is None:
-        raise ValueError("cannot estimate seized collateral without MarketParams and market state")
+        msg = "cannot estimate seized collateral without MarketParams and market state"
+        raise ValueError(msg)
     if plan.collateral_price <= 0:
-        raise ValueError(f"Morpho oracle price must be > 0, got {plan.collateral_price}")
+        msg = f"Morpho oracle price must be > 0, got {plan.collateral_price}"
+        raise ValueError(msg)
     repaid_assets_down = _to_assets_down(
         plan.repay_shares,
         plan.revalidation.market_state.total_borrow_assets,
@@ -1454,17 +1526,22 @@ def compose_standard_liquidation_executor_path(
     """
     market = plan.revalidation.candidate.market
     if swap_back_quote.sell_token.lower() != market.collateral_token.lower():
-        raise ValueError("swap-back quote sell_token must match Morpho collateral token")
+        msg = "swap-back quote sell_token must match Morpho collateral token"
+        raise ValueError(msg)
     if swap_back_quote.buy_token.lower() != market.loan_token.lower():
-        raise ValueError("swap-back quote buy_token must match Morpho loan/flash token")
+        msg = "swap-back quote buy_token must match Morpho loan/flash token"
+        raise ValueError(msg)
     sell_amount = swap_back_quote.sell_amount
     buy_amount = swap_back_quote.buy_amount
     if sell_amount <= 0:
-        raise ValueError(f"swap-back quote sell_amount must be > 0, got {sell_amount}")
+        msg = f"swap-back quote sell_amount must be > 0, got {sell_amount}"
+        raise ValueError(msg)
     if buy_amount <= 0:
-        raise ValueError(f"swap-back quote buy_amount must be > 0, got {buy_amount}")
+        msg = f"swap-back quote buy_amount must be > 0, got {buy_amount}"
+        raise ValueError(msg)
     if not swap_back_quote.calldata or swap_back_quote.calldata == "0x":
-        raise ValueError("swap-back quote must include executable calldata")
+        msg = "swap-back quote must include executable calldata"
+        raise ValueError(msg)
 
     liquidation_step = plan.to_executor_swap_step(
         morpho_blue_address=morpho_blue_address,
@@ -1498,35 +1575,38 @@ def encode_morpho_liquidate_calldata(
     `liquidate((address,address,address,address,uint256),address,uint256,uint256,bytes)`.
     """
     if seized_assets < 0:
-        raise ValueError(f"seized_assets must be non-negative, got {seized_assets}")
+        msg = f"seized_assets must be non-negative, got {seized_assets}"
+        raise ValueError(msg)
     if repaid_shares < 0:
-        raise ValueError(f"repaid_shares must be non-negative, got {repaid_shares}")
+        msg = f"repaid_shares must be non-negative, got {repaid_shares}"
+        raise ValueError(msg)
     if (seized_assets == 0) == (repaid_shares == 0):
-        raise ValueError("Morpho liquidate requires exactly one of seized_assets or repaid_shares to be zero")
+        msg = "Morpho liquidate requires exactly one of seized_assets or repaid_shares to be zero"
+        raise ValueError(msg)
 
-    head = b"".join(
-        (
-            _encode_address(market_params.loan_token),
-            _encode_address(market_params.collateral_token),
-            _encode_address(market_params.oracle),
-            _encode_address(market_params.irm),
-            _encode_uint256(market_params.lltv),
-            _encode_address(borrower),
-            _encode_uint256(seized_assets),
-            _encode_uint256(repaid_shares),
-            _encode_uint256(9 * _BYTES32_BYTES),
-        )
-    )
+    head = b"".join((
+        _encode_address(market_params.loan_token),
+        _encode_address(market_params.collateral_token),
+        _encode_address(market_params.oracle),
+        _encode_address(market_params.irm),
+        _encode_uint256(market_params.lltv),
+        _encode_address(borrower),
+        _encode_uint256(seized_assets),
+        _encode_uint256(repaid_shares),
+        _encode_uint256(9 * _BYTES32_BYTES),
+    ))
     return _LIQUIDATE_SELECTOR + head + _encode_bytes(data)
 
 
 def _extract_items(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
     container = data.get(key)
     if not isinstance(container, dict):
-        raise ValueError(f"unexpected Morpho GraphQL response: missing {key}")
+        msg = f"unexpected Morpho GraphQL response: missing {key}"
+        raise ValueError(msg)
     items = container.get("items")
     if not isinstance(items, list):
-        raise ValueError(f"unexpected Morpho GraphQL response: missing {key}.items")
+        msg = f"unexpected Morpho GraphQL response: missing {key}.items"
+        raise ValueError(msg)
     return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
 
 
@@ -1577,14 +1657,16 @@ def _position_from_graphql(item: dict[str, Any]) -> MorphoPosition:
 def _object_field(item: dict[str, Any], key: str) -> dict[str, Any]:
     value = item.get(key)
     if not isinstance(value, dict):
-        raise ValueError(f"expected object field in Morpho GraphQL response: {key}")
+        msg = f"expected object field in Morpho GraphQL response: {key}"
+        raise ValueError(msg)
     return cast("dict[str, Any]", value)
 
 
 def _string_field(item: dict[str, Any], key: str) -> str:
     value = item.get(key)
     if not isinstance(value, str) or value == "":
-        raise ValueError(f"expected non-empty string field in Morpho GraphQL response: {key}")
+        msg = f"expected non-empty string field in Morpho GraphQL response: {key}"
+        raise ValueError(msg)
     return value
 
 
@@ -1594,14 +1676,16 @@ def _int_field(item: dict[str, Any], key: str) -> int:
         return value
     if isinstance(value, str):
         return int(value)
-    raise ValueError(f"expected integer field in Morpho GraphQL response: {key}")
+    msg = f"expected integer field in Morpho GraphQL response: {key}"
+    raise ValueError(msg)
 
 
 def _int_string_field(item: dict[str, Any], key: str) -> str:
     value = item.get(key)
     if isinstance(value, int | str):
         return str(value)
-    raise ValueError(f"expected integer-like field in Morpho GraphQL response: {key}")
+    msg = f"expected integer-like field in Morpho GraphQL response: {key}"
+    raise ValueError(msg)
 
 
 def _decimal_string_field(item: dict[str, Any], key: str) -> str:
@@ -1610,7 +1694,8 @@ def _decimal_string_field(item: dict[str, Any], key: str) -> str:
         return str(value)
     if isinstance(value, float):
         return Decimal(str(value)).to_eng_string()
-    raise ValueError(f"expected decimal-like field in Morpho GraphQL response: {key}")
+    msg = f"expected decimal-like field in Morpho GraphQL response: {key}"
+    raise ValueError(msg)
 
 
 def _market_params_to_wire(market_params: MorphoMarketParams) -> JsonObject:
@@ -1632,34 +1717,40 @@ def _bps_mapping_value(mapping: Mapping[str, int] | None, key: str) -> int:
         return 0
     value = mapping.get(key.lower(), mapping.get(key, 0))
     if value < 0:
-        raise ValueError(f"basis-point input must be non-negative, got {value}")
+        msg = f"basis-point input must be non-negative, got {value}"
+        raise ValueError(msg)
     return value
 
 
 def _decimal_mapping_value(mapping: Mapping[str, Decimal], key: str) -> Decimal:
     value = mapping.get(key.lower(), mapping.get(key, Decimal(0)))
     if value < 0:
-        raise ValueError(f"USD liquidity input must be non-negative, got {value}")
+        msg = f"USD liquidity input must be non-negative, got {value}"
+        raise ValueError(msg)
     return value
 
 
 def _usd_cost_from_bps(notional_usd: Decimal, bps: int, label: str) -> Decimal:
     if bps < 0:
-        raise ValueError(f"{label} must be non-negative, got {bps}")
+        msg = f"{label} must be non-negative, got {bps}"
+        raise ValueError(msg)
     return notional_usd * Decimal(bps) / Decimal(10_000)
 
 
 def _read_json_objects(path: Path) -> list[dict[str, object]]:
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise ValueError(f"missing Morpho metadata file: {path}") from exc
+        msg = f"missing Morpho metadata file: {path}"
+        raise ValueError(msg) from exc
     if not isinstance(raw, list):
-        raise ValueError(f"expected JSON array in Morpho metadata file: {path}")
+        msg = f"expected JSON array in Morpho metadata file: {path}"
+        raise ValueError(msg)
     objects: list[dict[str, object]] = []
     for item in raw:
         if not isinstance(item, dict):
-            raise ValueError(f"expected object entries in Morpho metadata file: {path}")
+            msg = f"expected object entries in Morpho metadata file: {path}"
+            raise ValueError(msg)
         objects.append(item)
     return objects
 
@@ -1671,7 +1762,11 @@ def _load_listed_tokens(path: Path, *, chain_id: int) -> list[MorphoListedToken]
             continue
         metadata = item.get("metadata")
         tags_raw = metadata.get("tags", []) if isinstance(metadata, dict) else []
-        tags = tuple(tag for tag in tags_raw if isinstance(tag, str)) if isinstance(tags_raw, list) else ()
+        tags = (
+            tuple(tag for tag in tags_raw if isinstance(tag, str))
+            if isinstance(tags_raw, list)
+            else ()
+        )
         tokens.append(
             MorphoListedToken(
                 chain_id=chain_id,
@@ -1686,13 +1781,17 @@ def _load_listed_tokens(path: Path, *, chain_id: int) -> list[MorphoListedToken]
 
 def _load_address_set(path: Path, *, chain_id: int) -> frozenset[str]:
     return frozenset(
-        _metadata_str(item, "address").lower() for item in _read_json_objects(path) if item.get("chainId") == chain_id
+        _metadata_str(item, "address").lower()
+        for item in _read_json_objects(path)
+        if item.get("chainId") == chain_id
     )
 
 
 def _load_market_id_set(path: Path, *, chain_id: int) -> frozenset[str]:
     return frozenset(
-        _metadata_str(item, "id").lower() for item in _read_json_objects(path) if item.get("chainId") == chain_id
+        _metadata_str(item, "id").lower()
+        for item in _read_json_objects(path)
+        if item.get("chainId") == chain_id
     )
 
 
@@ -1700,21 +1799,25 @@ def _load_red_warning_targets(path: Path, *, chain_id: int, target_field: str) -
     return frozenset(
         _metadata_str(item, target_field).lower()
         for item in _read_json_objects(path)
-        if item.get("chainId") == chain_id and item.get("level") == "red" and isinstance(item.get(target_field), str)
+        if item.get("chainId") == chain_id
+        and item.get("level") == "red"
+        and isinstance(item.get(target_field), str)
     )
 
 
 def _metadata_str(item: dict[str, object], key: str) -> str:
     value = item.get(key)
     if not isinstance(value, str) or value == "":
-        raise ValueError(f"expected non-empty string metadata field: {key}")
+        msg = f"expected non-empty string metadata field: {key}"
+        raise ValueError(msg)
     return value
 
 
 def _metadata_int(item: dict[str, object], key: str) -> int:
     value = item.get(key)
     if not isinstance(value, int):
-        raise ValueError(f"expected integer metadata field: {key}")
+        msg = f"expected integer metadata field: {key}"
+        raise ValueError(msg)
     return value
 
 
@@ -1728,20 +1831,23 @@ def _to_assets_down(shares: int, total_assets: int, total_shares: int) -> int:
 
 def _mul_div_down(x: int, y: int, denominator: int) -> int:
     if denominator <= 0:
-        raise ValueError("denominator must be > 0")
+        msg = "denominator must be > 0"
+        raise ValueError(msg)
     return x * y // denominator
 
 
 def _mul_div_up(x: int, y: int, denominator: int) -> int:
     if denominator <= 0:
-        raise ValueError("denominator must be > 0")
+        msg = "denominator must be > 0"
+        raise ValueError(msg)
     product = x * y
     return (product + denominator - 1) // denominator
 
 
 def _encode_uint256(value: int) -> bytes:
     if not 0 <= value < 2**256:
-        raise ValueError(f"expected uint256-compatible value, got {value}")
+        msg = f"expected uint256-compatible value, got {value}"
+        raise ValueError(msg)
     return value.to_bytes(32, "big")
 
 

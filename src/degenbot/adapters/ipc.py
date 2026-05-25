@@ -14,13 +14,11 @@ def _union(attr: str) -> frozenset[str]:
 
 ADDRESS_KEYED_DEGENBOT_DEX_KINDS = _union("ipc_address_keyed_kinds")
 POOL_ID_REQUIRED_DEX_KINDS = _union("ipc_pool_id_required_kinds")
-RECOGNIZED_DEX_KINDS = frozenset(
-    {
-        *ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
-        *POOL_ID_REQUIRED_DEX_KINDS,
-        *_union("ipc_recognized_kinds"),
-    }
-)
+RECOGNIZED_DEX_KINDS = frozenset({
+    *ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
+    *POOL_ID_REQUIRED_DEX_KINDS,
+    *_union("ipc_recognized_kinds"),
+})
 
 
 def is_address_keyed_degenbot_kind(dex: str) -> bool:

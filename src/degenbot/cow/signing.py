@@ -24,7 +24,7 @@ class Eip712SigningError(ValueError):
 EIP712_SIGNATURE_LENGTH: Final[int] = 65
 
 
-def sign_solution(solution: Any, private_key: SecretStr) -> bytes:  # noqa: ANN401
+def sign_solution(solution: Any, private_key: SecretStr) -> bytes:
     """Sign a CoW solution with EIP-712 typed data.
 
     Args:
@@ -45,18 +45,20 @@ def sign_solution(solution: Any, private_key: SecretStr) -> bytes:  # noqa: ANN4
     typed_data = _extract_typed_data(solution)
     key = private_key.get_secret_value()
     if not key:
-        raise Eip712SigningError("empty solver private key")
+        msg = "empty solver private key"
+        raise Eip712SigningError(msg)
 
     # eth_account's `Account` exposes sign_typed_data via @combomethod; pylint
     # mis-reads it as an unbound method that still needs an explicit `private_key`.
     signed = Account.sign_typed_data(key, full_message=typed_data)  # pylint: disable=no-value-for-parameter
     signature = getattr(signed, "signature", None)
     if not isinstance(signature, bytes | bytearray) or len(signature) != EIP712_SIGNATURE_LENGTH:
-        raise Eip712SigningError("eth-account returned an invalid signature shape")
+        msg = "eth-account returned an invalid signature shape"
+        raise Eip712SigningError(msg)
     return bytes(signature)
 
 
-def _extract_typed_data(solution: Any) -> dict[str, Any]:  # noqa: ANN401
+def _extract_typed_data(solution: Any) -> dict[str, Any]:
     """Normalize supported solution containers into a full EIP-712 message."""
     candidate = solution
     if hasattr(candidate, "to_eip712"):
@@ -72,7 +74,8 @@ def _extract_typed_data(solution: Any) -> dict[str, Any]:  # noqa: ANN401
                 break
 
     if not isinstance(candidate, Mapping):
-        raise Eip712SigningError("solution does not expose an EIP-712 typed-data mapping")
+        msg = "solution does not expose an EIP-712 typed-data mapping"
+        raise Eip712SigningError(msg)
 
     typed_data = _plain_dict(candidate)
     _validate_typed_data(typed_data)
@@ -84,12 +87,13 @@ def _plain_dict(value: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, item in value.items():
         if not isinstance(key, str):
-            raise Eip712SigningError("EIP-712 typed-data keys must be strings")
+            msg = "EIP-712 typed-data keys must be strings"
+            raise Eip712SigningError(msg)
         out[key] = _plain_value(item)
     return out
 
 
-def _plain_value(value: Any) -> Any:  # noqa: ANN401
+def _plain_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return _plain_dict(cast("Mapping[str, Any]", value))
     if isinstance(value, list | tuple):
@@ -102,8 +106,9 @@ def _validate_typed_data(typed_data: Mapping[str, Any]) -> None:
     missing = [key for key in required if key not in typed_data]
     if missing:
         missing_fields = ", ".join(missing)
+        msg = f"EIP-712 typed data missing required field(s): {missing_fields}"
         raise Eip712SigningError(
-            f"EIP-712 typed data missing required field(s): {missing_fields}",
+            msg,
         )
 
     types = typed_data["types"]
@@ -112,14 +117,20 @@ def _validate_typed_data(typed_data: Mapping[str, Any]) -> None:
     message = typed_data["message"]
 
     if not isinstance(types, Mapping):
-        raise Eip712SigningError("EIP-712 `types` must be a mapping")
+        msg = "EIP-712 `types` must be a mapping"
+        raise Eip712SigningError(msg)
     if "EIP712Domain" not in types:
-        raise Eip712SigningError("EIP-712 `types` must include EIP712Domain")
+        msg = "EIP-712 `types` must include EIP712Domain"
+        raise Eip712SigningError(msg)
     if not isinstance(primary_type, str) or not primary_type:
-        raise Eip712SigningError("EIP-712 `primaryType` must be a non-empty string")
+        msg = "EIP-712 `primaryType` must be a non-empty string"
+        raise Eip712SigningError(msg)
     if primary_type not in types:
-        raise Eip712SigningError("EIP-712 `primaryType` has no matching type definition")
+        msg = "EIP-712 `primaryType` has no matching type definition"
+        raise Eip712SigningError(msg)
     if not isinstance(domain, Mapping):
-        raise Eip712SigningError("EIP-712 `domain` must be a mapping")
+        msg = "EIP-712 `domain` must be a mapping"
+        raise Eip712SigningError(msg)
     if not isinstance(message, Mapping):
-        raise Eip712SigningError("EIP-712 `message` must be a mapping")
+        msg = "EIP-712 `message` must be a mapping"
+        raise Eip712SigningError(msg)

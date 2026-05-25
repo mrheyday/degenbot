@@ -27,18 +27,14 @@ from typing import Any, Protocol, cast
 import structlog
 
 from degenbot.adapters.config import DegenbotSettings, load_degenbot_settings
-from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
-    ADDRESS_KEYED_DEGENBOT_DEX_KINDS as ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
-)
-from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
-    POOL_ID_REQUIRED_DEX_KINDS as POOL_ID_REQUIRED_DEX_KINDS,
-)
-from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias
-    RECOGNIZED_DEX_KINDS as RECOGNIZED_DEX_KINDS,
+from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias  # pylint: disable=useless-import-alias  # pylint: disable=useless-import-alias
+    ADDRESS_KEYED_DEGENBOT_DEX_KINDS,
+    POOL_ID_REQUIRED_DEX_KINDS,
+    RECOGNIZED_DEX_KINDS,
 )
 
 type JsonObject = dict[str, Any]
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 ARBITRUM_CHAIN_ID = 42161
 ADDRESS_HEX_LEN = 42
 BYTES32_HEX_LEN = 66
@@ -123,7 +119,9 @@ class DegenbotSimulator(Protocol):
     pool objects from `degenbot.pool_registry`.
     """
 
-    def simulate_exact_input_path(self, path: tuple[SwapStep, ...], amount_in: int) -> SimulationResult:
+    def simulate_exact_input_path(
+        self, path: tuple[SwapStep, ...], amount_in: int
+    ) -> SimulationResult:
         """Simulate an exact-input path and return final amount out."""
         ...
 
@@ -195,7 +193,8 @@ def decode_control_message(line: str) -> JsonObject:
     """Decode one inbound coordinator control message."""
     parsed = json.loads(line)
     if not isinstance(parsed, dict):
-        raise ValueError("control message must be a JSON object")
+        msg = "control message must be a JSON object"
+        raise ValueError(msg)
 
     wire = cast("JsonObject", parsed)
     if "kind" in wire and isinstance(wire["kind"], str):
@@ -207,7 +206,8 @@ def decode_control_message(line: str) -> JsonObject:
             payload = cast("JsonObject", value) if isinstance(value, dict) else {}
             return {"kind": key, **payload}
 
-    raise ValueError("control message is missing a kind")
+    msg = "control message is missing a kind"
+    raise ValueError(msg)
 
 
 def encode_heartbeat(runtime: DegenbotRuntime) -> str:
@@ -236,19 +236,23 @@ def parse_simulation_request(msg: JsonObject) -> tuple[tuple[SwapStep, ...], int
     """Parse and validate an inbound `Simulate` request."""
     raw_path = msg.get("path")
     if not isinstance(raw_path, list) or not raw_path:
-        raise SimulationInputError("Simulate.path must be a non-empty array")
+        msg = "Simulate.path must be a non-empty array"
+        raise SimulationInputError(msg)
 
     try:
         amount_in = int(cast("str | int", msg["amount_in"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise SimulationInputError("Simulate.amount_in must be a positive integer string") from exc
+        msg = "Simulate.amount_in must be a positive integer string"
+        raise SimulationInputError(msg) from exc
     if amount_in <= 0:
-        raise SimulationInputError("Simulate.amount_in must be positive")
+        msg = "Simulate.amount_in must be positive"
+        raise SimulationInputError(msg)
 
     steps: list[SwapStep] = []
     for idx, raw_step in enumerate(raw_path):
         if not isinstance(raw_step, dict):
-            raise SimulationInputError(f"Simulate.path[{idx}] must be an object")
+            msg = f"Simulate.path[{idx}] must be an object"
+            raise SimulationInputError(msg)
         step = cast("JsonObject", raw_step)
         try:
             dex = str(step["dex"])
@@ -256,7 +260,8 @@ def parse_simulation_request(msg: JsonObject) -> tuple[tuple[SwapStep, ...], int
             amount_out_min = int(cast("str | int", step["amount_out_min"]))
             zero_for_one = step["zero_for_one"]
             if not isinstance(zero_for_one, bool):
-                raise TypeError("zero_for_one must be bool")
+                msg = "zero_for_one must be bool"
+                raise TypeError(msg)
             parsed = SwapStep(
                 pool=str(step["pool"]),
                 token_in=str(step["token_in"]),
@@ -276,18 +281,23 @@ def parse_simulation_request(msg: JsonObject) -> tuple[tuple[SwapStep, ...], int
                 is_legacy=_optional_bool(step, "is_legacy"),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise SimulationInputError(f"Simulate.path[{idx}] is malformed: {exc}") from exc
+            msg = f"Simulate.path[{idx}] is malformed: {exc}"
+            raise SimulationInputError(msg) from exc
 
         if parsed.dex not in RECOGNIZED_DEX_KINDS:
-            raise SimulationInputError(f"Simulate.path[{idx}] dex {parsed.dex!r} is not recognized by degenbot IPC")
+            msg = f"Simulate.path[{idx}] dex {parsed.dex!r} is not recognized by degenbot IPC"
+            raise SimulationInputError(msg)
         if parsed.amount_in <= 0:
-            raise SimulationInputError(f"Simulate.path[{idx}].amount_in must be positive")
+            msg = f"Simulate.path[{idx}].amount_in must be positive"
+            raise SimulationInputError(msg)
         if parsed.amount_out_min < 0:
-            raise SimulationInputError(f"Simulate.path[{idx}].amount_out_min must be non-negative")
+            msg = f"Simulate.path[{idx}].amount_out_min must be non-negative"
+            raise SimulationInputError(msg)
         steps.append(parsed)
 
     if steps[0].amount_in != amount_in:
-        raise SimulationInputError("Simulate.amount_in must equal path[0].amount_in")
+        msg = "Simulate.amount_in must equal path[0].amount_in"
+        raise SimulationInputError(msg)
 
     return tuple(steps), amount_in
 
@@ -304,7 +314,8 @@ def _optional_bool(payload: JsonObject, key: str) -> bool | None:
     if value is None:
         return None
     if not isinstance(value, bool):
-        raise TypeError(f"{key} must be bool when supplied")
+        msg = f"{key} must be bool when supplied"
+        raise TypeError(msg)
     return value
 
 
@@ -312,12 +323,14 @@ def _optional_pool_key(value: object) -> JsonObject | None:
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise TypeError("pool_key must be object when supplied")
+        msg = "pool_key must be object when supplied"
+        raise TypeError(msg)
     key = cast("JsonObject", value)
     required = ("currency0", "currency1", "fee", "tick_spacing", "hooks")
     missing = [name for name in required if name not in key]
     if missing:
-        raise ValueError(f"pool_key missing required fields: {', '.join(missing)}")
+        msg = f"pool_key missing required fields: {', '.join(missing)}"
+        raise ValueError(msg)
     return {
         "currency0": str(key["currency0"]),
         "currency1": str(key["currency1"]),
@@ -362,21 +375,26 @@ def parse_subscribe_request(msg: JsonObject) -> tuple[TokenPair, ...]:
     """Parse and validate an inbound `Subscribe` request."""
     raw_pairs = msg.get("pairs")
     if not isinstance(raw_pairs, list):
-        raise SimulationInputError("Subscribe.pairs must be an array")
+        msg = "Subscribe.pairs must be an array"
+        raise SimulationInputError(msg)
 
     pairs: list[TokenPair] = []
     for idx, raw_pair in enumerate(raw_pairs):
         if not isinstance(raw_pair, dict):
-            raise SimulationInputError(f"Subscribe.pairs[{idx}] must be an object")
+            msg = f"Subscribe.pairs[{idx}] must be an object"
+            raise SimulationInputError(msg)
         try:
             token0 = str(raw_pair["token0"])
             token1 = str(raw_pair["token1"])
         except KeyError as exc:
-            raise SimulationInputError(f"Subscribe.pairs[{idx}] missing {exc.args[0]}") from exc
+            msg = f"Subscribe.pairs[{idx}] missing {exc.args[0]}"
+            raise SimulationInputError(msg) from exc
         if not _is_address_like(token0) or not _is_address_like(token1):
-            raise SimulationInputError(f"Subscribe.pairs[{idx}] token addresses must be 0x-prefixed 20-byte hex")
+            msg = f"Subscribe.pairs[{idx}] token addresses must be 0x-prefixed 20-byte hex"
+            raise SimulationInputError(msg)
         if token0.lower() == token1.lower():
-            raise SimulationInputError(f"Subscribe.pairs[{idx}] token0 and token1 must differ")
+            msg = f"Subscribe.pairs[{idx}] token0 and token1 must differ"
+            raise SimulationInputError(msg)
         pairs.append(TokenPair(token0=token0, token1=token1))
 
     return tuple(pairs)
@@ -387,23 +405,28 @@ def parse_best_opportunity_request(msg: JsonObject) -> BotBestOpportunityRequest
     try:
         chain_id = int(cast("str | int", msg.get("chain_id", ARBITRUM_CHAIN_ID)))
     except (TypeError, ValueError) as exc:
-        raise SimulationInputError("BestOpportunity.chain_id must be a positive integer") from exc
+        msg = "BestOpportunity.chain_id must be a positive integer"
+        raise SimulationInputError(msg) from exc
     if chain_id <= 0:
-        raise SimulationInputError("BestOpportunity.chain_id must be positive")
+        msg = "BestOpportunity.chain_id must be positive"
+        raise SimulationInputError(msg)
 
     input_token = str(msg.get("input_token", ""))
     if not _is_address_like(input_token):
-        raise SimulationInputError("BestOpportunity.input_token must be a 0x-prefixed 20-byte hex address")
+        msg = "BestOpportunity.input_token must be a 0x-prefixed 20-byte hex address"
+        raise SimulationInputError(msg)
 
     from_address = str(msg.get("from_address", ""))
     if not _is_address_like(from_address):
-        raise SimulationInputError("BestOpportunity.from_address must be a 0x-prefixed 20-byte hex address")
+        msg = "BestOpportunity.from_address must be a 0x-prefixed 20-byte hex address"
+        raise SimulationInputError(msg)
 
     min_profit = _non_negative_int(msg, "min_profit", default=0)
     min_depth = _positive_int(msg, "min_depth", default=2)
     max_depth = _optional_positive_int(msg, "max_depth")
     if max_depth is not None and max_depth < min_depth:
-        raise SimulationInputError("BestOpportunity.max_depth must be >= min_depth")
+        msg = "BestOpportunity.max_depth must be >= min_depth"
+        raise SimulationInputError(msg)
     max_input = _optional_positive_int(msg, "max_input")
     min_rate = _optional_fraction(msg, "min_rate_of_exchange")
 
@@ -424,9 +447,11 @@ def _non_negative_int(payload: JsonObject, key: str, *, default: int) -> int:
     try:
         parsed = int(cast("str | int", value))
     except (TypeError, ValueError) as exc:
-        raise SimulationInputError(f"BestOpportunity.{key} must be a non-negative integer") from exc
+        msg = f"BestOpportunity.{key} must be a non-negative integer"
+        raise SimulationInputError(msg) from exc
     if parsed < 0:
-        raise SimulationInputError(f"BestOpportunity.{key} must be non-negative")
+        msg = f"BestOpportunity.{key} must be non-negative"
+        raise SimulationInputError(msg)
     return parsed
 
 
@@ -435,9 +460,11 @@ def _positive_int(payload: JsonObject, key: str, *, default: int) -> int:
     try:
         parsed = int(cast("str | int", value))
     except (TypeError, ValueError) as exc:
-        raise SimulationInputError(f"BestOpportunity.{key} must be a positive integer") from exc
+        msg = f"BestOpportunity.{key} must be a positive integer"
+        raise SimulationInputError(msg) from exc
     if parsed <= 0:
-        raise SimulationInputError(f"BestOpportunity.{key} must be positive")
+        msg = f"BestOpportunity.{key} must be positive"
+        raise SimulationInputError(msg)
     return parsed
 
 
@@ -454,9 +481,11 @@ def _optional_fraction(payload: JsonObject, key: str) -> Fraction | None:
     try:
         parsed = Fraction(str(value))
     except (TypeError, ValueError, ZeroDivisionError) as exc:
-        raise SimulationInputError(f"BestOpportunity.{key} must be a positive decimal or fraction string") from exc
+        msg = f"BestOpportunity.{key} must be a positive decimal or fraction string"
+        raise SimulationInputError(msg) from exc
     if parsed <= 0:
-        raise SimulationInputError(f"BestOpportunity.{key} must be positive")
+        msg = f"BestOpportunity.{key} must be positive"
+        raise SimulationInputError(msg)
     return parsed
 
 
@@ -490,13 +519,16 @@ def encode_opportunity_from_bot(request: BotBestOpportunityRequest, opportunity:
     input_amount = int(result_any.input_amount)
     profit_amount = int(result_any.profit_amount)
     if input_amount <= 0:
-        raise SimulationUnavailableError("degenbot bot opportunity input_amount must be positive")
+        msg = "degenbot bot opportunity input_amount must be positive"
+        raise SimulationUnavailableError(msg)
     if profit_amount < 0:
-        raise SimulationUnavailableError("degenbot bot opportunity profit_amount must be non-negative")
+        msg = "degenbot bot opportunity profit_amount must be non-negative"
+        raise SimulationUnavailableError(msg)
 
     path = _swap_steps_from_bot_opportunity(opportunity)
     if not path:
-        raise SimulationUnavailableError("degenbot bot opportunity has no executable swap path")
+        msg = "degenbot bot opportunity has no executable swap path"
+        raise SimulationUnavailableError(msg)
 
     input_token = _token_address(getattr(result, "input_token", None)) or request.input_token
     profit_token = _token_address(getattr(result, "profit_token", None)) or input_token
@@ -528,12 +560,14 @@ def _swap_steps_from_bot_opportunity(opportunity: object) -> tuple[SwapStep, ...
     raw_amounts = getattr(result_any, "swap_amounts", ())
     raw_pools = getattr(opportunity_any, "swap_pools", ())
     if not isinstance(raw_amounts, Iterable) or not isinstance(raw_pools, Iterable):
-        raise SimulationUnavailableError("degenbot bot opportunity exposes invalid swap path metadata")
+        msg = "degenbot bot opportunity exposes invalid swap path metadata"
+        raise SimulationUnavailableError(msg)
 
     amounts = tuple(raw_amounts)
     pools = tuple(raw_pools)
     if len(amounts) != len(pools):
-        raise SimulationUnavailableError("degenbot bot opportunity swap_pools length does not match swap_amounts")
+        msg = "degenbot bot opportunity swap_pools length does not match swap_amounts"
+        raise SimulationUnavailableError(msg)
 
     steps: list[SwapStep] = []
     for pool, amounts_for_pool in zip(pools, amounts, strict=True):
@@ -542,16 +576,20 @@ def _swap_steps_from_bot_opportunity(opportunity: object) -> tuple[SwapStep, ...
 
 
 def _swap_step_from_degenbot_pool_amounts(pool: object, amounts: object) -> SwapStep:
-    pool_address = str(getattr(amounts, "pool", getattr(amounts, "address", getattr(pool, "address", ""))))
+    pool_address = str(
+        getattr(amounts, "pool", getattr(amounts, "address", getattr(pool, "address", "")))
+    )
     if not _is_address_like(pool_address):
-        raise SimulationUnavailableError(f"degenbot bot pool address is invalid: {pool_address!r}")
+        msg = f"degenbot bot pool address is invalid: {pool_address!r}"
+        raise SimulationUnavailableError(msg)
 
     if hasattr(amounts, "amounts_in") and hasattr(amounts, "amounts_out"):
         amount_any = cast("Any", amounts)
         amounts_in = tuple(int(value) for value in amount_any.amounts_in)
         amounts_out = tuple(int(value) for value in amount_any.amounts_out)
         if len(amounts_in) != V2_TOKEN_SLOTS or len(amounts_out) != V2_TOKEN_SLOTS:
-            raise SimulationUnavailableError("V2 swap amounts must have two input and output slots")
+            msg = "V2 swap amounts must have two input and output slots"
+            raise SimulationUnavailableError(msg)
         zero_for_one = amounts_in[0] > 0
         token_in_attr = "token0" if zero_for_one else "token1"
         token_out_attr = "token1" if zero_for_one else "token0"
@@ -582,7 +620,11 @@ def _swap_step_from_degenbot_pool_amounts(pool: object, amounts: object) -> Swap
             is_legacy=True,
         )
 
-    if hasattr(amounts, "amount_in") and hasattr(amounts, "amount_out") and hasattr(amounts, "zero_for_one"):
+    if (
+        hasattr(amounts, "amount_in")
+        and hasattr(amounts, "amount_out")
+        and hasattr(amounts, "zero_for_one")
+    ):
         amount_any = cast("Any", amounts)
         zero_for_one = bool(amount_any.zero_for_one)
         pool_key = _optional_v4_pool_key(pool)
@@ -599,20 +641,23 @@ def _swap_step_from_degenbot_pool_amounts(pool: object, amounts: object) -> Swap
             hook_data="0x" if pool_key is not None else None,
         )
 
-    raise SimulationUnavailableError(f"unsupported degenbot bot swap amount type: {type(amounts).__name__}")
+    msg = f"unsupported degenbot bot swap amount type: {type(amounts).__name__}"
+    raise SimulationUnavailableError(msg)
 
 
 def _pool_token_address(pool: object, attr: str) -> str:
     token = getattr(pool, attr, None)
     if token is None:
-        raise SimulationUnavailableError(f"pool {getattr(pool, 'address', '<unknown>')} missing {attr}")
+        msg = f"pool {getattr(pool, 'address', '<unknown>')} missing {attr}"
+        raise SimulationUnavailableError(msg)
     return _token_address_or_raise(token)
 
 
 def _token_address_or_raise(token: object) -> str:
     address = _token_address(token)
     if address is None:
-        raise SimulationUnavailableError(f"invalid token address on degenbot object: {token!r}")
+        msg = f"invalid token address on degenbot object: {token!r}"
+        raise SimulationUnavailableError(msg)
     return address
 
 
@@ -635,7 +680,8 @@ def _dex_kind_from_pool(pool: object) -> str:
             dex_kind = candidate
             break
     if dex_kind is None:
-        raise SimulationUnavailableError(f"unsupported degenbot bot pool type: {class_name}")
+        msg = f"unsupported degenbot bot pool type: {class_name}"
+        raise SimulationUnavailableError(msg)
     return dex_kind
 
 
@@ -648,15 +694,21 @@ def _optional_v4_pool_key(pool: object) -> JsonObject | None:
     key = getattr(pool, "pool_key", None)
     if key is None:
         return None
-    fee = _first_present_attr(key, ("fee",), default=_first_present_attr(pool, ("fee",), default=None))
+    fee = _first_present_attr(
+        key, ("fee",), default=_first_present_attr(pool, ("fee",), default=None)
+    )
     tick_spacing = _first_present_attr(
         key,
         ("tick_spacing",),
         default=_first_present_attr(pool, ("tick_spacing",), default=None),
     )
     return {
-        "currency0": _token_address_or_raise(getattr(key, "currency0", getattr(pool, "token0", None))),
-        "currency1": _token_address_or_raise(getattr(key, "currency1", getattr(pool, "token1", None))),
+        "currency0": _token_address_or_raise(
+            getattr(key, "currency0", getattr(pool, "token0", None))
+        ),
+        "currency1": _token_address_or_raise(
+            getattr(key, "currency1", getattr(pool, "token1", None))
+        ),
         "fee": _object_to_int(fee, "pool_key.fee"),
         "tick_spacing": _object_to_int(tick_spacing, "pool_key.tick_spacing"),
         "hooks": _token_address_or_raise(getattr(key, "hooks", getattr(pool, "hooks", None))),
@@ -670,7 +722,8 @@ def _optional_state_block(result: object) -> str | None:
 
 def _object_to_int(value: object, field_name: str) -> int:
     if value is None:
-        raise SimulationUnavailableError(f"{field_name} is required")
+        msg = f"{field_name} is required"
+        raise SimulationUnavailableError(msg)
     return int(cast("Any", value))
 
 
@@ -685,15 +738,20 @@ def encode_morpho_liquidation_opportunity(
     externally-tagged kind shape decoded by `coordinator/src/ipc/client.ts`.
     """
     if envelope.opportunity_id == "":
-        raise ValueError("opportunity_id must be non-empty")
+        msg = "opportunity_id must be non-empty"
+        raise ValueError(msg)
     if envelope.detected_at_ns < 0:
-        raise ValueError(f"detected_at_ns must be non-negative, got {envelope.detected_at_ns}")
+        msg = f"detected_at_ns must be non-negative, got {envelope.detected_at_ns}"
+        raise ValueError(msg)
     if envelope.estimated_profit_wei < 0:
-        raise ValueError(f"estimated_profit_wei must be non-negative, got {envelope.estimated_profit_wei}")
+        msg = f"estimated_profit_wei must be non-negative, got {envelope.estimated_profit_wei}"
+        raise ValueError(msg)
     if envelope.flash_amount is not None and envelope.flash_amount <= 0:
-        raise ValueError(f"flash_amount must be positive when provided, got {envelope.flash_amount}")
+        msg = f"flash_amount must be positive when provided, got {envelope.flash_amount}"
+        raise ValueError(msg)
     if envelope.risk_cost_wei < 0:
-        raise ValueError(f"risk_cost_wei must be non-negative, got {envelope.risk_cost_wei}")
+        msg = f"risk_cost_wei must be non-negative, got {envelope.risk_cost_wei}"
+        raise ValueError(msg)
     _validate_morpho_liquidation_payload(payload)
 
     loan_token = _required_str(payload, "loanToken")
@@ -701,9 +759,14 @@ def encode_morpho_liquidation_opportunity(
     repay_assets = _required_str(payload, "repayAssets")
     expected_seized_assets = _required_str(payload, "expectedCollateralSeized")
     if expected_seized_assets == "None":
-        raise ValueError("expectedCollateralSeized is required for coordinator Morpho liquidation opportunities")
+        msg = (
+            "expectedCollateralSeized is required for coordinator Morpho liquidation opportunities"
+        )
+        raise ValueError(msg)
     ranking_score_bps = str(payload.get("rankingScoreBps", payload.get("liquidationBonusBps", 0)))
-    resolved_flash_amount = str(envelope.flash_amount) if envelope.flash_amount is not None else repay_assets
+    resolved_flash_amount = (
+        str(envelope.flash_amount) if envelope.flash_amount is not None else repay_assets
+    )
 
     opportunity: JsonObject = {
         "id": envelope.opportunity_id,
@@ -711,13 +774,17 @@ def encode_morpho_liquidation_opportunity(
         "kind": {
             "MorphoLiquidation": {
                 "market_id": _required_str(payload, "marketId"),
-                "market_params": _market_params_to_wire(cast("JsonObject", payload["marketParams"])),
+                "market_params": _market_params_to_wire(
+                    cast("JsonObject", payload["marketParams"])
+                ),
                 "borrower": _required_str(payload, "borrower"),
                 "repaid_shares": _required_str(payload, "repaidShares"),
                 "expected_seized_assets": expected_seized_assets,
                 "ranking_score_bps": ranking_score_bps,
                 "risk_cost_wei": str(envelope.risk_cost_wei),
-                "bad_debt_mode": _bad_debt_mode_from_classification(_required_str(payload, "badDebtClassification")),
+                "bad_debt_mode": _bad_debt_mode_from_classification(
+                    _required_str(payload, "badDebtClassification")
+                ),
             },
         },
         "token_in": loan_token,
@@ -744,11 +811,13 @@ def encode_pool_update_from_degenbot(publisher: object, message: object | None =
     if state is None:
         state = getattr(publisher, "state", None)
     if state is None:
-        raise ValueError("pool update has no state")
+        msg = "pool update has no state"
+        raise ValueError(msg)
 
     address = str(getattr(state, "address", getattr(publisher, "address", "")))
     if not _is_address_like(address):
-        raise ValueError(f"pool update address is invalid: {address!r}")
+        msg = f"pool update address is invalid: {address!r}"
+        raise ValueError(msg)
 
     block_number = getattr(state, "block", None)
     reserves = _encode_reserves_from_pool_state(publisher, state)
@@ -764,18 +833,22 @@ def decode_morpho_liquidation_opportunity(line: str) -> JsonObject:
     """Decode and validate an externally-tagged Morpho liquidation Opportunity."""
     parsed = json.loads(line)
     if not isinstance(parsed, dict):
-        raise ValueError("Morpho liquidation opportunity must be a JSON object")
+        msg = "Morpho liquidation opportunity must be a JSON object"
+        raise ValueError(msg)
     envelope = cast("JsonObject", parsed)
     raw_opportunity = envelope.get("Opportunity")
     if not isinstance(raw_opportunity, dict):
-        raise ValueError("Morpho liquidation opportunity is missing Opportunity envelope")
+        msg = "Morpho liquidation opportunity is missing Opportunity envelope"
+        raise ValueError(msg)
     opportunity = cast("JsonObject", raw_opportunity)
     raw_kind = opportunity.get("kind")
     if not isinstance(raw_kind, dict) or "MorphoLiquidation" not in raw_kind:
-        raise ValueError("Opportunity.kind must contain MorphoLiquidation")
+        msg = "Opportunity.kind must contain MorphoLiquidation"
+        raise ValueError(msg)
     raw_payload = raw_kind["MorphoLiquidation"]
     if not isinstance(raw_payload, dict):
-        raise ValueError("Opportunity.kind.MorphoLiquidation must be an object")
+        msg = "Opportunity.kind.MorphoLiquidation must be an object"
+        raise ValueError(msg)
     _validate_morpho_liquidation_wire_opportunity(opportunity, cast("JsonObject", raw_payload))
     return opportunity
 
@@ -797,14 +870,19 @@ def _validate_morpho_liquidation_payload(payload: JsonObject) -> None:
     if missing:
         raise ValueError("Morpho liquidation payload missing required keys: " + ", ".join(missing))
     if payload["badDebtClassification"] not in {"collateralized", "bad_debt"}:
-        raise ValueError("badDebtClassification must be collateralized or bad_debt")
+        msg = "badDebtClassification must be collateralized or bad_debt"
+        raise ValueError(msg)
     if not isinstance(payload["marketParams"], dict):
-        raise ValueError("marketParams must be an object")
+        msg = "marketParams must be an object"
+        raise ValueError(msg)
     if not isinstance(payload["riskCosts"], dict):
-        raise ValueError("riskCosts must be an object")
+        msg = "riskCosts must be an object"
+        raise ValueError(msg)
 
 
-def _validate_morpho_liquidation_wire_opportunity(opportunity: JsonObject, payload: JsonObject) -> None:
+def _validate_morpho_liquidation_wire_opportunity(
+    opportunity: JsonObject, payload: JsonObject
+) -> None:
     required_opportunity_keys = (
         "id",
         "detected_at_ns",
@@ -821,7 +899,8 @@ def _validate_morpho_liquidation_wire_opportunity(opportunity: JsonObject, paylo
     missing_opportunity_keys = [key for key in required_opportunity_keys if key not in opportunity]
     if missing_opportunity_keys:
         raise ValueError(
-            "Morpho liquidation opportunity missing required keys: " + ", ".join(missing_opportunity_keys),
+            "Morpho liquidation opportunity missing required keys: "
+            + ", ".join(missing_opportunity_keys),
         )
 
     required_payload_keys = (
@@ -837,22 +916,28 @@ def _validate_morpho_liquidation_wire_opportunity(opportunity: JsonObject, paylo
     missing_payload_keys = [key for key in required_payload_keys if key not in payload]
     if missing_payload_keys:
         raise ValueError(
-            "Morpho liquidation kind payload missing required keys: " + ", ".join(missing_payload_keys),
+            "Morpho liquidation kind payload missing required keys: "
+            + ", ".join(missing_payload_keys),
         )
     if payload["bad_debt_mode"] not in {"none", "allow_profitable", "realize_anyway"}:
-        raise ValueError("bad_debt_mode must be none, allow_profitable, or realize_anyway")
+        msg = "bad_debt_mode must be none, allow_profitable, or realize_anyway"
+        raise ValueError(msg)
     if not isinstance(payload["market_params"], dict):
-        raise ValueError("market_params must be an object")
+        msg = "market_params must be an object"
+        raise ValueError(msg)
     if not isinstance(opportunity["path"], list):
-        raise ValueError("path must be an array")
+        msg = "path must be an array"
+        raise ValueError(msg)
     if not isinstance(opportunity["pool_addresses"], list) or not opportunity["pool_addresses"]:
-        raise ValueError("pool_addresses must be a non-empty array")
+        msg = "pool_addresses must be a non-empty array"
+        raise ValueError(msg)
 
 
 def _required_str(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     if value is None:
-        raise ValueError(f"Morpho liquidation payload field {key} is required")
+        msg = f"Morpho liquidation payload field {key} is required"
+        raise ValueError(msg)
     return str(value)
 
 
@@ -871,7 +956,8 @@ def _bad_debt_mode_from_classification(classification: str) -> str:
         return "none"
     if classification == "bad_debt":
         return "allow_profitable"
-    raise ValueError("badDebtClassification must be collateralized or bad_debt")
+    msg = "badDebtClassification must be collateralized or bad_debt"
+    raise ValueError(msg)
 
 
 def _is_address_like(value: str) -> bool:
@@ -942,17 +1028,23 @@ def _encode_reserves_from_pool_state(pool: object, state: object) -> JsonObject:
     if hasattr(state, "balances"):
         balances = cast("Any", state).balances
         if not isinstance(balances, Iterable):
-            raise ValueError("Curve pool state balances must be iterable")
-        amplification = _first_present_attr(pool, ("A", "amplification_coefficient", "_A"), default=0)
+            msg = "Curve pool state balances must be iterable"
+            raise ValueError(msg)
+        amplification = _first_present_attr(
+            pool, ("A", "amplification_coefficient", "_A"), default=0
+        )
         return {
             "Curve": {
                 "balances": [str(int(balance)) for balance in balances],
                 "A": str(_object_to_int(amplification, "Curve.A")),
-                "fee": _object_to_int(_first_present_attr(pool, ("fee", "_fee"), default=0), "Curve.fee"),
+                "fee": _object_to_int(
+                    _first_present_attr(pool, ("fee", "_fee"), default=0), "Curve.fee"
+                ),
             },
         }
 
-    raise ValueError(f"unsupported degenbot pool state type: {type(state).__name__}")
+    msg = f"unsupported degenbot pool state type: {type(state).__name__}"
+    raise ValueError(msg)
 
 
 def _bytes32_hex(value: object) -> str:
@@ -966,7 +1058,8 @@ def _bytes32_hex(value: object) -> str:
     if not text.startswith("0x"):
         text = "0x" + text
     if len(text) != BYTES32_HEX_LEN:
-        raise ValueError(f"expected 32-byte hex value, got {text!r}")
+        msg = f"expected 32-byte hex value, got {text!r}"
+        raise ValueError(msg)
     return text.lower()
 
 
@@ -983,18 +1076,20 @@ class RegistryBackedDegenbotSimulator:
     def __init__(self, *, chain_id: int = ARBITRUM_CHAIN_ID) -> None:
         self._chain_id = chain_id
 
-    def simulate_exact_input_path(self, path: tuple[SwapStep, ...], amount_in: int) -> SimulationResult:
+    def simulate_exact_input_path(
+        self, path: tuple[SwapStep, ...], amount_in: int
+    ) -> SimulationResult:
         running_amount = amount_in
         normalized_steps: list[SwapStep] = []
         override_states: dict[str, object] = {}
 
         for raw_step in path:
             if raw_step.dex in POOL_ID_REQUIRED_DEX_KINDS:
-                raise SimulationUnavailableError(f"dex {raw_step.dex!r} requires a pool-id-aware IPC wire format")
+                msg = f"dex {raw_step.dex!r} requires a pool-id-aware IPC wire format"
+                raise SimulationUnavailableError(msg)
             if raw_step.dex not in ADDRESS_KEYED_DEGENBOT_DEX_KINDS:
-                raise SimulationUnavailableError(
-                    f"dex {raw_step.dex!r} is recognized but does not have an enabled degenbot pool adapter yet"
-                )
+                msg = f"dex {raw_step.dex!r} is recognized but does not have an enabled degenbot pool adapter yet"
+                raise SimulationUnavailableError(msg)
             step = SwapStep(
                 pool=raw_step.pool,
                 token_in=raw_step.token_in,
@@ -1015,9 +1110,8 @@ class RegistryBackedDegenbotSimulator:
             )
             running_amount = self._simulate_step(step, override_states)
             if running_amount < step.amount_out_min:
-                raise SimulationUnavailableError(
-                    f"simulated amount_out {running_amount} below min {step.amount_out_min} for pool {step.pool}"
-                )
+                msg = f"simulated amount_out {running_amount} below min {step.amount_out_min} for pool {step.pool}"
+                raise SimulationUnavailableError(msg)
             normalized_steps.append(step)
 
         return SimulationResult(
@@ -1030,11 +1124,13 @@ class RegistryBackedDegenbotSimulator:
         try:
             pool_registry = importlib.import_module("degenbot.registry").pool_registry
         except (AttributeError, ImportError) as exc:  # pragma: no cover - production config issue
-            raise SimulationUnavailableError("degenbot registry is not importable") from exc
+            msg = "degenbot registry is not importable"
+            raise SimulationUnavailableError(msg) from exc
 
         pool = pool_registry.get(chain_id=self._chain_id, pool_address=step.pool)
         if pool is None:
-            raise SimulationUnavailableError(f"pool {step.pool} is not loaded in degenbot registry")
+            msg = f"pool {step.pool} is not loaded in degenbot registry"
+            raise SimulationUnavailableError(msg)
 
         token_in = self._resolve_pool_token(pool, step.token_in)
         token_out = self._resolve_pool_token(pool, step.token_out)
@@ -1066,10 +1162,12 @@ class RegistryBackedDegenbotSimulator:
                 override_state=override_state,
             )
         except Exception as exc:  # pragma: no cover - degenbot pool-specific failure
-            raise SimulationUnavailableError(f"degenbot simulation failed for pool {step.pool}: {exc}") from exc
+            msg = f"degenbot simulation failed for pool {step.pool}: {exc}"
+            raise SimulationUnavailableError(msg) from exc
 
         if not isinstance(amount_out, int) or amount_out < 0:
-            raise SimulationUnavailableError(f"degenbot returned invalid amount_out for pool {step.pool}")
+            msg = f"degenbot returned invalid amount_out for pool {step.pool}"
+            raise SimulationUnavailableError(msg)
         return amount_out
 
     @staticmethod
@@ -1083,8 +1181,9 @@ class RegistryBackedDegenbotSimulator:
             if str(getattr(token, "address", "")).lower() == target:
                 return token
         pool_address = getattr(pool, "address", "<unknown>")
+        msg = f"token {token_address} is not part of pool {pool_address}"
         raise SimulationUnavailableError(
-            f"token {token_address} is not part of pool {pool_address}",
+            msg,
         )
 
     @staticmethod
@@ -1094,10 +1193,12 @@ class RegistryBackedDegenbotSimulator:
         if isinstance(amount0_delta, int) and isinstance(amount1_delta, int):
             delta = amount1_delta if token_out_index == 1 else amount0_delta
             if delta >= 0:
-                raise SimulationUnavailableError("degenbot simulation did not produce negative output delta")
+                msg = "degenbot simulation did not produce negative output delta"
+                raise SimulationUnavailableError(msg)
             return -delta
 
-        raise SimulationUnavailableError("degenbot simulation result has no token delta fields")
+        msg = "degenbot simulation result has no token delta fields"
+        raise SimulationUnavailableError(msg)
 
 
 class RegistryBackedDegenbotSubscriptionSource:
@@ -1165,11 +1266,13 @@ class RegistryBackedDegenbotSubscriptionSource:
         try:
             pool_registry = importlib.import_module("degenbot.registry").pool_registry
         except (AttributeError, ImportError) as exc:  # pragma: no cover - production config issue
-            raise SimulationUnavailableError("degenbot registry is not importable") from exc
+            msg = "degenbot registry is not importable"
+            raise SimulationUnavailableError(msg) from exc
 
         raw_pools = getattr(pool_registry, "_all_pools", None)
         if not isinstance(raw_pools, dict):
-            raise SimulationUnavailableError("degenbot pool registry does not expose loaded pools")
+            msg = "degenbot pool registry does not expose loaded pools"
+            raise SimulationUnavailableError(msg)
 
         pair_keys = {_pair_key(pair.token0, pair.token1) for pair in pairs}
         out: list[object] = []
@@ -1178,7 +1281,9 @@ class RegistryBackedDegenbotSubscriptionSource:
             if not _pool_registry_key_matches_chain(key, self._chain_id):
                 continue
             pool_tokens = _pool_token_set(pool)
-            if pool_tokens is None or not any(pair_key.issubset(pool_tokens) for pair_key in pair_keys):
+            if pool_tokens is None or not any(
+                pair_key.issubset(pool_tokens) for pair_key in pair_keys
+            ):
                 continue
             pool_identity = id(pool)
             if pool_identity in seen:
@@ -1196,7 +1301,8 @@ class PathfindingDegenbotOpportunitySource:
         try:
             bot_module = importlib.import_module("degenbot.bot")
         except ImportError as exc:  # pragma: no cover - production configuration issue
-            raise SimulationUnavailableError("degenbot bot module is not importable") from exc
+            msg = "degenbot bot module is not importable"
+            raise SimulationUnavailableError(msg) from exc
 
         bot = bot_module.DegenbotBot.from_pathfinding(
             chain_id=request.chain_id,
@@ -1254,10 +1360,14 @@ class DegenbotIpcServer:
         self._runtime = runtime
         self._simulator = simulator if simulator is not None else RegistryBackedDegenbotSimulator()
         self._subscription_source = (
-            subscription_source if subscription_source is not None else RegistryBackedDegenbotSubscriptionSource()
+            subscription_source
+            if subscription_source is not None
+            else RegistryBackedDegenbotSubscriptionSource()
         )
         self._opportunity_source = (
-            opportunity_source if opportunity_source is not None else PathfindingDegenbotOpportunitySource()
+            opportunity_source
+            if opportunity_source is not None
+            else PathfindingDegenbotOpportunitySource()
         )
         self._log = structlog.get_logger(__name__).bind(
             service="degenbot",
@@ -1327,7 +1437,9 @@ class DegenbotIpcServer:
         try:
             msg = decode_control_message(line)
         except (ValueError, json.JSONDecodeError) as exc:
-            await self._write_line(writer, encode_error("bad_control_message", str(exc)), write_lock)
+            await self._write_line(
+                writer, encode_error("bad_control_message", str(exc)), write_lock
+            )
             return subscription
 
         kind_value = msg.get("kind")
@@ -1352,7 +1464,9 @@ class DegenbotIpcServer:
             case _:
                 await self._write_line(
                     writer,
-                    encode_error("unsupported_control_message", f"unsupported control kind: {kind}"),
+                    encode_error(
+                        "unsupported_control_message", f"unsupported control kind: {kind}"
+                    ),
                     write_lock,
                 )
         return subscription
@@ -1369,7 +1483,9 @@ class DegenbotIpcServer:
         except SimulationInputError as exc:
             await self._write_line(
                 writer,
-                encode_error("bad_subscribe_request", str(exc), {"degenbot_version": self._runtime.version}),
+                encode_error(
+                    "bad_subscribe_request", str(exc), {"degenbot_version": self._runtime.version}
+                ),
                 write_lock,
             )
             return subscription
@@ -1397,14 +1513,18 @@ class DegenbotIpcServer:
         except SimulationInputError as exc:
             await self._write_line(
                 writer,
-                encode_error("bad_simulation_request", str(exc), {"degenbot_version": self._runtime.version}),
+                encode_error(
+                    "bad_simulation_request", str(exc), {"degenbot_version": self._runtime.version}
+                ),
                 write_lock,
             )
             return
         except SimulationUnavailableError as exc:
             await self._write_line(
                 writer,
-                encode_error("simulation_unavailable", str(exc), {"degenbot_version": self._runtime.version}),
+                encode_error(
+                    "simulation_unavailable", str(exc), {"degenbot_version": self._runtime.version}
+                ),
                 write_lock,
             )
             return
@@ -1423,14 +1543,18 @@ class DegenbotIpcServer:
         except SimulationInputError as exc:
             await self._write_line(
                 writer,
-                encode_error("bad_opportunity_request", str(exc), {"degenbot_version": self._runtime.version}),
+                encode_error(
+                    "bad_opportunity_request", str(exc), {"degenbot_version": self._runtime.version}
+                ),
                 write_lock,
             )
             return
         except SimulationUnavailableError as exc:
             await self._write_line(
                 writer,
-                encode_error("opportunity_unavailable", str(exc), {"degenbot_version": self._runtime.version}),
+                encode_error(
+                    "opportunity_unavailable", str(exc), {"degenbot_version": self._runtime.version}
+                ),
                 write_lock,
             )
             return
@@ -1501,7 +1625,8 @@ class DegenbotIpcServer:
             socket_path.unlink()
             return
 
-        raise RuntimeError(f"refusing to replace non-socket path: {socket_path}")
+        msg = f"refusing to replace non-socket path: {socket_path}"
+        raise RuntimeError(msg)
 
 
 def configure_logging(level: str) -> None:

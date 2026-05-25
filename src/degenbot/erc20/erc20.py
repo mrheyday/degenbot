@@ -155,7 +155,7 @@ class Erc20Token(AbstractErc20Token):
             logger.info(f"• {self.symbol} ({self.name})")
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}(address={self.address}, symbol='{self.symbol}', name='{self.name}', decimals={self.decimals})"  # noqa:E501
+        return f"{self.__class__.__name__}(address={self.address}, symbol='{self.symbol}', name='{self.name}', decimals={self.decimals})"
 
     def get_name_symbol_decimals_batched(self, w3: Web3) -> tuple[str, str, int]:
         with w3.batch_requests() as batch:

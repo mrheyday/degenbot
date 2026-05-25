@@ -467,7 +467,7 @@ async def test_process_pool_calculation(fork_mainnet_full: AnvilFork, weth: Erc2
             for i, task in enumerate(asyncio.as_completed(calculation_futures)):
                 await task
                 print(
-                    f"Completed process_pool calc #{i}, {time.perf_counter() - start:.2f}s since start"  # noqa:E501
+                    f"Completed process_pool calc #{i}, {time.perf_counter() - start:.2f}s since start"
                 )
             print(f"Completed {num_futures} calculations in {time.perf_counter() - start:.1f}s")
 

@@ -7,11 +7,12 @@ The Rust layer remains the source of truth for validation and encoding.
 
 import sys as _sys
 from collections.abc import Mapping, Sequence
+from importlib import import_module as _import_module
+from types import ModuleType as _ModuleType
 from typing import Any, TypedDict
 
 from hexbytes import HexBytes
 
-from degenbot.cow import submitter as _competition_submitter
 from degenbot.degenbot_rs import to_checksum_address
 from degenbot.utils.bytes import HexBytesLike, to_bytes
 
@@ -166,9 +167,52 @@ __all__ = [
     "encode_native_arb_calldata",
 ]
 
-# Compatibility for the migrated solver-driver import path. `execution.py`
-# remains the calldata-encoding module, but legacy code imported
-# `degenbot.execution.competition_submitter` before the CoW submitter moved to
-# `degenbot.cow.submitter`.
 __path__ = []  # type: ignore[var-annotated]
-_sys.modules[__name__ + ".competition_submitter"] = _competition_submitter
+
+
+def _alias_submodule(public_name: str, target_name: str) -> _ModuleType:
+    """Expose a migrated module under the legacy `degenbot.execution.*` path."""
+
+    module = _import_module(target_name)
+    _sys.modules[f"{__name__}.{public_name}"] = module
+    globals()[public_name] = module
+    return module
+
+
+_ALIASED_SUBMODULES = {
+    "aave_v3_addresses": "degenbot.execution_adapters.aave_v3_addresses",
+    "aave_v3_flashloan_adapter": "degenbot.execution_adapters.aave_v3_flashloan_adapter",
+    "aave_v4_adapter": "degenbot.execution_adapters.aave_v4_adapter",
+    "aggregator_validator": "degenbot.execution_adapters.aggregator_validator",
+    "arbitrum_token_addresses": "degenbot.execution_adapters.arbitrum_token_addresses",
+    "arbitrum_token_metadata": "degenbot.execution_adapters.arbitrum_token_metadata",
+    "balancer_fixed_point": "degenbot.execution_adapters.balancer_fixed_point",
+    "balancer_log_exp_math": "degenbot.execution_adapters.balancer_log_exp_math",
+    "balancer_v3_adapter": "degenbot.execution_adapters.balancer_v3_adapter",
+    "balancer_v3_addresses": "degenbot.execution_adapters.balancer_v3_addresses",
+    "balancer_v3_weighted_math": "degenbot.execution_adapters.balancer_v3_weighted_math",
+    "camelot_v3_adapter": "degenbot.execution_adapters.camelot_v3_adapter",
+    "competition_submitter": "degenbot.cow.submitter",
+    "compound_v3_addresses": "degenbot.execution_adapters.compound_v3_addresses",
+    "curve_ng_adapter": "degenbot.execution_adapters.curve_ng_adapter",
+    "degenbot_ipc": "degenbot.connection.ipc",
+    "dodo_addresses": "degenbot.execution_adapters.dodo_addresses",
+    "dodo_pmm_adapter": "degenbot.execution_adapters.dodo_pmm_adapter",
+    "dodo_pmm_math": "degenbot.execution_adapters.dodo_pmm_math",
+    "dodo_v1_math": "degenbot.execution_adapters.dodo_v1_math",
+    "fluid_dex_adapter": "degenbot.execution_adapters.fluid_dex_adapter",
+    "fluid_dex_addresses": "degenbot.execution_adapters.fluid_dex_addresses",
+    "maverick_v2_adapter": "degenbot.execution_adapters.maverick_v2_adapter",
+    "metamorpho_v1_adapter": "degenbot.execution_adapters.metamorpho_v1_adapter",
+    "morpho_blue_addresses": "degenbot.execution_adapters.morpho_blue_addresses",
+    "morpho_flashloan_adapter": "degenbot.execution_adapters.morpho_flashloan_adapter",
+    "morpho_lp_adapter": "degenbot.execution_adapters.morpho_lp_adapter",
+    "morpho_preliquidation_adapter": "degenbot.execution_adapters.morpho_preliquidation_adapter",
+    "solidly_adapter": "degenbot.execution_adapters.solidly_adapter",
+    "uniswap_addresses": "degenbot.execution_adapters.uniswap_addresses",
+}
+
+for _public_name, _target_name in _ALIASED_SUBMODULES.items():
+    _alias_submodule(_public_name, _target_name)
+
+del _public_name, _target_name

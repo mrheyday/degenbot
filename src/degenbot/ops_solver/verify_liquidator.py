@@ -16,7 +16,7 @@ The script asserts the contract's hard-coded constants match the
 verified-live anchors and exits non-zero on any mismatch so this can
 be wired into a post-deploy CI gate.
 
-Foundry remains the canonical contract dev framework per CLAUDE.md;
+Foundry remains the canonical contract dev framework per PROGRESS.md;
 this is a Python-side post-deploy assertion only.
 """
 
@@ -25,9 +25,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Verified live at block 460,140,172 (2026-05-06) per
 # docs/research/2026-05-06-defillama-arbitrum-liquidator-build.pdf.
@@ -97,6 +100,18 @@ def _checksum(addr: str) -> str:
     return addr.lower()
 
 
+def liquidator_address_from_env(env: Mapping[str, str]) -> str | None:
+    """Return the LiquidationExecutor address from canonical or legacy env."""
+
+    return env.get("LIQUIDATOR_ADDRESS") or env.get("LIQUIDATION_EXECUTOR_ADDRESS")
+
+
+def delegatee_csv_from_env(env: Mapping[str, str]) -> str:
+    """Return delegatee verifier env, falling back to deploy-script env."""
+
+    return env.get("DELEGATEE_ADDRESSES") or env.get("DELEGATEES_INITIAL") or ""
+
+
 def build_report(liquidator_address: str, findings: list[Finding]) -> dict[str, object]:
     """Build the JSON-serialisable LiquidationExecutor verification report."""
 
@@ -121,7 +136,7 @@ def write_report(path: Path, report: Mapping[str, object]) -> None:
     """Write a pure JSON verification report for downstream readiness gates."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{json.dumps(report, indent=2, sort_keys=True)}\n")
+    path.write_text(f"{json.dumps(report, indent=2, sort_keys=True)}\n", encoding="utf-8")
 
 
 # pylint: disable=too-many-locals
@@ -129,17 +144,14 @@ def main() -> None:
     """ApeWorx entrypoint."""
     # Lazy import so the main solver loop never pulls Ape into its env.
     import ape_arbitrum  # noqa: F401  # pylint: disable=import-outside-toplevel,import-error,unused-import
-    from ape import Contract, networks  # pylint: disable=import-outside-toplevel,import-error
+    from ape import Contract  # pylint: disable=import-outside-toplevel,import-error
 
-    liq_addr = os.environ.get("LIQUIDATOR_ADDRESS")
+    liq_addr = liquidator_address_from_env(os.environ)
     safe_addr = os.environ.get("SAFE_ADDRESS")
     if not liq_addr or not safe_addr:
-        print("[verify-liquidator] LIQUIDATOR_ADDRESS and SAFE_ADDRESS must be set", file=sys.stderr)
         sys.exit(2)
 
     # Connect to whichever network ape was invoked with.
-    print(f"[verify-liquidator] network: {networks.active_provider.name}")
-    print(f"[verify-liquidator] target:  {liq_addr}")
 
     contract = Contract(liq_addr, abi=list(LIQUIDATOR_ABI))
 
@@ -182,7 +194,7 @@ def main() -> None:
         ),
     ]
 
-    delegatee_csv = os.environ.get("DELEGATEE_ADDRESSES", "").strip()
+    delegatee_csv = delegatee_csv_from_env(os.environ).strip()
     if delegatee_csv:
         for d in (a.strip() for a in delegatee_csv.split(",") if a.strip()):
             allowed = bool(contract.delegatees(d))
@@ -198,12 +210,9 @@ def main() -> None:
     report = build_report(liq_addr, findings)
     if output_path := os.environ.get("OUTPUT_PATH"):
         write_report(Path(output_path), report)
-    print(json.dumps(report, indent=2))
 
     if not report["all_passed"]:
-        print("[verify-liquidator] FAILED — see report above", file=sys.stderr)
         sys.exit(1)
-    print("[verify-liquidator] all checks passed")
 
 
 if __name__ == "__main__":

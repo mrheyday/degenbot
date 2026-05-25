@@ -68,8 +68,7 @@ class OrderbookError(Exception):
 
     def __repr__(self) -> str:  # pragma: no cover — debugging only
         return (
-            f"OrderbookError({self.args[0]!r}, status={self.status_code},"
-            f" parsed={self.parsed!r})"
+            f"OrderbookError({self.args[0]!r}, status={self.status_code}, parsed={self.parsed!r})"
         )
 
 
@@ -146,7 +145,7 @@ class OrderbookClient:
 
     async def get_orders_by_uids(self, uids: Sequence[str]) -> list[Order]:
         """`POST /api/v1/orders/by_uids`. Up to 128 UIDs per call."""
-        if len(uids) > 128:  # noqa: PLR2004 — server-enforced limit
+        if len(uids) > 128:
             msg = "get_orders_by_uids: max 128 UIDs per call"
             raise ValueError(msg)
         resp = await self._request(
@@ -212,18 +211,20 @@ class OrderbookClient:
                     resp = await self._client.request(method, path, json=json)
                     if resp.status_code in _RETRYABLE_STATUS:
                         raise _RetryableTransportError(resp.status_code, resp.text)
-                    if resp.status_code >= 400:  # noqa: PLR2004 — HTTP semantic
+                    if resp.status_code >= 400:
                         raise _to_orderbook_error(resp)
                     return resp
         except _RetryableTransportError as exhausted:
+            msg = f"{method} {path} -> HTTP {exhausted.status} (retries exhausted)"
             raise OrderbookError(
-                f"{method} {path} -> HTTP {exhausted.status} (retries exhausted)",
+                msg,
                 status_code=exhausted.status,
                 body=exhausted.body,
             ) from exhausted
         # Unreachable: AsyncRetrying always either returns inside the loop
         # or raises on exhaustion (handled above).
-        raise OrderbookError("retry loop exited without response")  # pragma: no cover
+        msg = "retry loop exited without response"
+        raise OrderbookError(msg)  # pragma: no cover
 
 
 class _RetryableTransportError(Exception):

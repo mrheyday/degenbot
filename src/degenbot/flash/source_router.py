@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from degenbot.decision.types import Address
 from degenbot.strategies_coordinator.types import FLASH_PROTOCOL, FlashProtocol
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from degenbot.decision.types import Address
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +141,8 @@ def _pick_best_candidate(
         valid.append(route)
 
     if not valid:
-        raise ValueError(f"{context}: no flash candidate has enough liquidity for requested amount")
+        msg = f"{context}: no flash candidate has enough liquidity for requested amount"
+        raise ValueError(msg)
 
     valid.sort(key=lambda r: r.total_cost_in_borrow_token)
     return valid[0]
@@ -177,15 +181,18 @@ def _normalize_route(
 
     if protocol == FLASH_PROTOCOL.ERC3156:
         if lender is None:
-            raise ValueError(f"{context}: ERC3156 flashProtocol requires explicit flashLender")
+            msg = f"{context}: ERC3156 flashProtocol requires explicit flashLender"
+            raise ValueError(msg)
         return _with_cost(protocol, lender, source, candidate, cost)
 
     if protocol == FLASH_PROTOCOL.UNI_V3:
         if lender is None:
-            raise ValueError(f"{context}: Uniswap V3 flashProtocol requires explicit pool lender")
+            msg = f"{context}: Uniswap V3 flashProtocol requires explicit pool lender"
+            raise ValueError(msg)
         return _with_cost(protocol, lender, source, candidate, cost)
 
-    raise ValueError(f"{context}: unsupported Executor flashProtocol {protocol}")
+    msg = f"{context}: unsupported Executor flashProtocol {protocol}"
+    raise ValueError(msg)
 
 
 def _with_cost(
@@ -200,7 +207,7 @@ def _with_cost(
         lender=lender,
         source=source,
         available_liquidity=candidate.available_liquidity if candidate else None,
-        **cost
+        **cost,
     )
 
 
@@ -212,18 +219,20 @@ def _calculate_route_cost(
     candidate: FlashRouteCandidate | None,
     wrapped_native_token: Address | None,
 ) -> Mapping[str, int]:
-    fee_bps = candidate.estimated_fee_bps if candidate and candidate.estimated_fee_bps is not None else _default_fee_rank_bps(protocol)
+    fee_bps = (
+        candidate.estimated_fee_bps
+        if candidate and candidate.estimated_fee_bps is not None
+        else _default_fee_rank_bps(protocol)
+    )
 
-    flash_fee = (
-        (amount * fee_bps + 9999) // 10000
-        + (candidate.flat_fee if candidate and candidate.flat_fee else 0)
+    flash_fee = (amount * fee_bps + 9999) // 10000 + (
+        candidate.flat_fee if candidate and candidate.flat_fee else 0
     )
 
     wrapping_cost_wei = _calculate_wrapping_cost_wei(candidate)
     native_gas_cost_wei = (
-        (candidate.gas_score_wei if candidate and candidate.gas_score_wei else 0)
-        + _calculate_gas_units_cost_wei(candidate)
-    )
+        candidate.gas_score_wei if candidate and candidate.gas_score_wei else 0
+    ) + _calculate_gas_units_cost_wei(candidate)
 
     native_cost_wei = wrapping_cost_wei + native_gas_cost_wei
     native_cost_in_borrow_token = _convert_native_cost_to_borrow_token(
@@ -231,13 +240,17 @@ def _calculate_route_cost(
         token=token,
         native_cost_wei=native_cost_wei,
         candidate=candidate,
-        wrapped_native_token=wrapped_native_token
+        wrapped_native_token=wrapped_native_token,
     )
 
     total_cost_in_borrow_token = (
         flash_fee
         + native_cost_in_borrow_token
-        + (candidate.extra_cost_in_borrow_token if candidate and candidate.extra_cost_in_borrow_token else 0)
+        + (
+            candidate.extra_cost_in_borrow_token
+            if candidate and candidate.extra_cost_in_borrow_token
+            else 0
+        )
     )
 
     return {
@@ -284,9 +297,8 @@ def _convert_native_cost_to_borrow_token(
     if token.lower() == wrapped_native.lower():
         return native_cost_wei
 
-    raise ValueError(
-        f"{context}: non-WETH flash route with native gas/wrap cost requires nativeCostInBorrowToken"
-    )
+    msg = f"{context}: non-WETH flash route with native gas/wrap cost requires nativeCostInBorrowToken"
+    raise ValueError(msg)
 
 
 def _assert_canonical_lender(
@@ -296,7 +308,8 @@ def _assert_canonical_lender(
     explicit: Address | None,
 ) -> None:
     if explicit is not None and explicit.lower() != canonical.lower():
-        raise ValueError(f"{context}: {protocol_name} flashLender must match configured Executor pin")
+        msg = f"{context}: {protocol_name} flashLender must match configured Executor pin"
+        raise ValueError(msg)
 
 
 def _default_fee_rank_bps(protocol: FlashProtocol) -> int:
@@ -308,4 +321,5 @@ def _default_fee_rank_bps(protocol: FlashProtocol) -> int:
         return 30
     if protocol == FLASH_PROTOCOL.ERC3156:
         return 1000000  # Max rank
-    raise ValueError(f"flash source router: unsupported protocol {protocol}")
+    msg = f"flash source router: unsupported protocol {protocol}"
+    raise ValueError(msg)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, Self, cast
 from urllib.request import urlopen
 
 from degenbot.adapters.templates import SOURCIFY_SERVER, AdapterTemplate, ContractBinding
@@ -18,7 +18,7 @@ class SourceVerificationError(RuntimeError):
 
 class _HttpResponse(Protocol):
     def read(self) -> bytes: ...
-    def __enter__(self) -> _HttpResponse: ...
+    def __enter__(self) -> Self: ...
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> object: ...
 
 
@@ -75,7 +75,8 @@ def source_verification_requests(adapter: AdapterTemplate) -> tuple[SourceVerifi
 def parse_sourcify_status(payload: object) -> SourcifyStatus:
     """Parse a Sourcify v2 JSON payload."""
     if not isinstance(payload, dict):
-        raise SourceVerificationError("Sourcify status must be a JSON object")
+        msg = "Sourcify status must be a JSON object"
+        raise SourceVerificationError(msg)
     raw = cast("dict[str, object]", payload)
     return SourcifyStatus(
         match=_parse_match(raw.get("match")),
@@ -101,7 +102,8 @@ def fetch_sourcify_status(
         with urlopen(request.url, timeout=timeout_sec) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        raise SourceVerificationError(f"Sourcify fetch failed for {request.source_ref}: {exc}") from exc
+        msg = f"Sourcify fetch failed for {request.source_ref}: {exc}"
+        raise SourceVerificationError(msg) from exc
     return parse_sourcify_status(payload)
 
 
@@ -110,13 +112,15 @@ def _parse_match(value: object) -> SourcifyMatch:
         return None
     if value in {"match", "exact_match", "partial_match"}:
         return cast("SourcifyMatch", value)
-    raise SourceVerificationError(f"unknown Sourcify match value: {value!r}")
+    msg = f"unknown Sourcify match value: {value!r}"
+    raise SourceVerificationError(msg)
 
 
 def _required_str(payload: dict[str, object], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or value == "":
-        raise SourceVerificationError(f"Sourcify status missing string field {key}")
+        msg = f"Sourcify status missing string field {key}"
+        raise SourceVerificationError(msg)
     return value
 
 
@@ -124,5 +128,6 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or value == "":
-        raise SourceVerificationError("optional Sourcify string field must be non-empty when present")
+        msg = "optional Sourcify string field must be non-empty when present"
+        raise SourceVerificationError(msg)
     return value

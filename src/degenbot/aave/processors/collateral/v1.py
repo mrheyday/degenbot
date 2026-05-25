@@ -29,9 +29,9 @@ class CollateralV1Processor(CollateralTokenProcessor):
     def process_mint_event(
         self,
         event_data: CollateralMintEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
-        scaled_delta: int | None = None,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
+        scaled_delta: int | None = None,
     ) -> ScaledTokenMintResult:
         """
         Process a collateral mint event.
@@ -89,8 +89,8 @@ class CollateralV1Processor(CollateralTokenProcessor):
     def process_burn_event(
         self,
         event_data: CollateralBurnEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
         scaled_delta: int | None = None,
     ) -> ScaledTokenBurnResult:
         """

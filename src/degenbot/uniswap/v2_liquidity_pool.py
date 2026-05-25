@@ -297,7 +297,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             }
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1})"  # noqa:E501
+        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1})"
 
     def _verified_address(self) -> ChecksumAddress:
         return generate_v2_pool_address(
@@ -518,13 +518,13 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             fee = self.fee_token1
         else:  # pragma: no cover
             raise DegenbotValueError(
-                message=f"Could not identify token_out: {token_out}! This pool holds: {self.token0} {self.token1}"  # noqa:E501
+                message=f"Could not identify token_out: {token_out}! This pool holds: {self.token0} {self.token1}"
             )
 
         # last token becomes infinitely expensive, so largest possible swap out is reserves - 1
         if token_out_quantity > reserves_out - 1:
             raise LiquidityPoolError(
-                message=f"Requested amount out ({token_out_quantity}) >= pool reserves ({reserves_out})"  # noqa:E501
+                message=f"Requested amount out ({token_out_quantity}) >= pool reserves ({reserves_out})"
             )
 
         return constant_product_calc_exact_out(
@@ -576,7 +576,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             fee = self.fee_token1
         else:  # pragma: no cover
             raise DegenbotValueError(
-                message=f"Could not identify token_in: {token_in}! Pool holds: {self.token0} {self.token1}"  # noqa:E501
+                message=f"Could not identify token_in: {token_in}! Pool holds: {self.token0} {self.token1}"
             )
 
         return constant_product_calc_exact_in(
@@ -592,7 +592,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
     ) -> None:
         if update.block_number < self.update_block:
             raise ExternalUpdateError(
-                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"  # noqa:E501
+                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"
             )
 
         with self._state_lock:

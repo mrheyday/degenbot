@@ -81,14 +81,12 @@ class AaveDebugLogger:
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
         self._file_handle = self._output_path.open("a", buffering=1, encoding="utf-8")
 
-        self._write_entry(
-            {
-                "type": "session_start",
-                "timestamp": datetime.now(tz=UTC).isoformat(),
-                "chain_id": chain_id.value if chain_id else None,
-                "market_id": market_id,
-            }
-        )
+        self._write_entry({
+            "type": "session_start",
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+            "chain_id": chain_id.value if chain_id else None,
+            "market_id": market_id,
+        })
 
         return True
 
@@ -266,7 +264,12 @@ class AaveDebugLogger:
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][1])
                 assert user_addr == "0x" + topics[1].hex()[-40:]
                 user_addresses.add(user_addr)
-            elif topic == AaveV3PoolEvent.BORROW.value or topic == AaveV3PoolEvent.REPAY.value or topic == AaveV3PoolEvent.SUPPLY.value or topic == AaveV3PoolEvent.WITHDRAW.value:
+            elif topic in {
+                AaveV3PoolEvent.BORROW.value,
+                AaveV3PoolEvent.REPAY.value,
+                AaveV3PoolEvent.SUPPLY.value,
+                AaveV3PoolEvent.WITHDRAW.value,
+            }:
                 assert len(topics) == 4
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][2])
                 assert user_addr == "0x" + topics[2].hex()[-40:]
@@ -276,7 +279,10 @@ class AaveDebugLogger:
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][3])
                 assert user_addr == "0x" + topics[3].hex()[-40:]
                 user_addresses.add(user_addr)
-            elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value or topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
+            elif topic in {
+                AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value,
+                AaveV3PoolEvent.USER_E_MODE_SET.value,
+            }:
                 assert len(topics) == 2
                 (user_addr,) = eth_abi.abi.decode(types=["address"], data=event["topics"][1])
                 assert user_addr == "0x" + topics[1].hex()[-40:]
@@ -578,12 +584,10 @@ class AaveDebugLogger:
         if not self._enabled or self._file_handle is None:
             return
 
-        self._write_entry(
-            {
-                "type": "session_end",
-                "timestamp": datetime.now(tz=UTC).isoformat(),
-            }
-        )
+        self._write_entry({
+            "type": "session_end",
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+        })
 
         self._file_handle.close()
         self._file_handle = None

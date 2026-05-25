@@ -69,11 +69,13 @@ def _validate_inputs(
     balances: list[int] | tuple[int, ...],
 ) -> None:
     if len(normalized_weights) != len(balances):
+        msg = f"weights / balances length mismatch: {len(normalized_weights)} vs {len(balances)}"
         raise ValueError(
-            f"weights / balances length mismatch: {len(normalized_weights)} vs {len(balances)}",
+            msg,
         )
     if len(normalized_weights) == 0:
-        raise ValueError("weights and balances must be non-empty")
+        msg = "weights and balances must be non-empty"
+        raise ValueError(msg)
 
 
 def compute_invariant_down(
@@ -91,7 +93,8 @@ def compute_invariant_down(
     for w, b in zip(normalized_weights, balances, strict=True):
         invariant = fp.mul_down(invariant, fp.pow_down(b, w))
     if invariant == 0:
-        raise ZeroInvariantError("computed invariant is zero")
+        msg = "computed invariant is zero"
+        raise ZeroInvariantError(msg)
     return invariant
 
 
@@ -108,7 +111,8 @@ def compute_invariant_up(
     for w, b in zip(normalized_weights, balances, strict=True):
         invariant = fp.mul_up(invariant, fp.pow_up(b, w))
     if invariant == 0:
-        raise ZeroInvariantError("computed invariant is zero")
+        msg = "computed invariant is zero"
+        raise ZeroInvariantError(msg)
     return invariant
 
 
@@ -130,7 +134,9 @@ def compute_balance_out_given_invariant(
     """
     # Exponent: 1/weight. For invariantRatio > 1, x^y is increasing → round
     # exponent up. For invariantRatio < 1, x^y is decreasing → round down.
-    exponent = fp.div_up(fp.ONE, weight) if invariant_ratio > fp.ONE else fp.div_down(fp.ONE, weight)
+    exponent = (
+        fp.div_up(fp.ONE, weight) if invariant_ratio > fp.ONE else fp.div_down(fp.ONE, weight)
+    )
     balance_ratio = fp.pow_up(invariant_ratio, exponent)
     return fp.mul_up(current_balance, balance_ratio)
 
@@ -160,8 +166,9 @@ def compute_out_given_exact_in(
       rounds the complement DOWN — favors the protocol)
     """
     if amount_in > fp.mul_down(balance_in, MAX_IN_RATIO):
+        msg = f"amount_in {amount_in} exceeds MAX_IN_RATIO * balance_in ({fp.mul_down(balance_in, MAX_IN_RATIO)})"
         raise MaxInRatioError(
-            f"amount_in {amount_in} exceeds MAX_IN_RATIO * balance_in ({fp.mul_down(balance_in, MAX_IN_RATIO)})",
+            msg,
         )
 
     denominator = balance_in + amount_in
@@ -191,8 +198,9 @@ def compute_in_given_exact_out(
     - exponent rounded UP (since base ≥ 1, rounds power UP — favors protocol)
     """
     if amount_out > fp.mul_down(balance_out, MAX_OUT_RATIO):
+        msg = f"amount_out {amount_out} exceeds MAX_OUT_RATIO * balance_out ({fp.mul_down(balance_out, MAX_OUT_RATIO)})"
         raise MaxOutRatioError(
-            f"amount_out {amount_out} exceeds MAX_OUT_RATIO * balance_out ({fp.mul_down(balance_out, MAX_OUT_RATIO)})",
+            msg,
         )
 
     base = fp.div_up(balance_out, balance_out - amount_out)

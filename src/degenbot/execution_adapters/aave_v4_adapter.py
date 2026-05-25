@@ -143,15 +143,17 @@ class AaveV4Client(AsyncGraphqlAdapterClient):
         # and the @aave/client@next TypeScript SDK has the ready-made query strings.
         # For Python we issue raw GraphQL via httpx.
         _ = hub_address
+        msg = "TODO(scaffold): wire AaveKit GraphQL `reserves(hub: $hub)` query and map response → AaveV4Reserve list."
         raise NotImplementedError(
-            "TODO(scaffold): wire AaveKit GraphQL `reserves(hub: $hub)` query and map response → AaveV4Reserve list.",
+            msg,
         )
 
     async def get_user_health(self, hub_address: str, user_address: str) -> AaveV4UserHealth:
         """Fetch health-factor snapshot for one user under one Hub. Read-only."""
         _ = (hub_address, user_address)
+        msg = "TODO(scaffold): wire AaveKit GraphQL `userPosition` query and map response."
         raise NotImplementedError(
-            "TODO(scaffold): wire AaveKit GraphQL `userPosition` query and map response.",
+            msg,
         )
 
     async def query_swap(
@@ -169,9 +171,12 @@ class AaveV4Client(AsyncGraphqlAdapterClient):
         them through intent-policy review before any signing/submission."
         """
         _ = (src_asset, dst_asset, src_amount)
-        raise NotImplementedError(
+        msg = (
             "TODO(scaffold): wire AaveKit `useTokenSwap` planner equivalent. "
-            "Result is a quote only; signing/submission is solver-side.",
+            "Result is a quote only; signing/submission is solver-side."
+        )
+        raise NotImplementedError(
+            msg,
         )
 
     async def get_oracle_price(self, hub_address: str, asset: str) -> Decimal:
@@ -183,8 +188,9 @@ class AaveV4Client(AsyncGraphqlAdapterClient):
         method is for off-chain planning only.
         """
         _ = (hub_address, asset)
+        msg = "TODO(scaffold): GraphQL `reserve(hub:..., asset:...).oraclePrice` read."
         raise NotImplementedError(
-            "TODO(scaffold): GraphQL `reserve(hub:..., asset:...).oraclePrice` read.",
+            msg,
         )
 
 

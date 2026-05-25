@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Literal, Self
 
 import httpx
 import structlog
@@ -114,7 +114,7 @@ class AggregatorPathValidator:
             slippage_tolerance_bps=slippage_tolerance_bps,
         )
 
-    async def __aenter__(self) -> AggregatorPathValidator:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -255,7 +255,11 @@ class AggregatorPathValidator:
         """
         if degenbot_amount == 0:
             return 0
-        delta_bps = (Decimal(agg_amount) - Decimal(degenbot_amount)) * Decimal(10_000) / Decimal(degenbot_amount)
+        delta_bps = (
+            (Decimal(agg_amount) - Decimal(degenbot_amount))
+            * Decimal(10_000)
+            / Decimal(degenbot_amount)
+        )
         return int(delta_bps)
 
     def _verdict_from_slippage(self, slippage_bps: int, agg_amount: int) -> ValidationVerdict:

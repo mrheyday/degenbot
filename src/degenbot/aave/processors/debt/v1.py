@@ -29,9 +29,9 @@ class DebtV1Processor(DebtTokenProcessor):
     def process_mint_event(
         self,
         event_data: DebtMintEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
-        scaled_delta: int | None = None,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
+        scaled_delta: int | None = None,
     ) -> ScaledTokenMintResult:
         """
         Process a debt mint event.
@@ -119,8 +119,8 @@ class DebtV1Processor(DebtTokenProcessor):
     def process_burn_event(
         self,
         event_data: DebtBurnEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
         scaled_delta: int | None = None,
     ) -> ScaledTokenBurnResult:
         """

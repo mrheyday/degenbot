@@ -64,9 +64,15 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         strategy_name="Native arbitrage / Pick D3",
         status=WorkflowStatus.EXECUTABLE,
         decision_kinds=("native_arb",),
-        signal_sources=("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
+        signal_sources=(
+            "vendor/degenbot/rust/src/lib.rs",
+            "vendor/degenbot/src/degenbot/connection/ipc.py",
+        ),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/decision/engine.ts"),
-        planner_modules=("coordinator/src/strategies/native-arb.ts", "coordinator/src/router/encode.ts"),
+        planner_modules=(
+            "coordinator/src/strategies/native-arb.ts",
+            "coordinator/src/router/encode.ts",
+        ),
         calldata_builders=("coordinator/src/strategies/native-arb.ts",),
         submission_modules=("coordinator/src/submission/submitter.ts",),
         contract_entrypoints=("contracts/src/executors/Executor.sol::executeNativeArb",),
@@ -97,7 +103,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 1,
                 "Detect degenbot opportunity",
-                ("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
+                (
+                    "vendor/degenbot/rust/src/lib.rs",
+                    "vendor/degenbot/src/degenbot/connection/ipc.py",
+                ),
                 "Opportunity carries flashToken, flashAmount, route, and estimated profit.",
             ),
             WorkflowStep(
@@ -115,7 +124,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 4,
                 "Submit transaction",
-                ("coordinator/src/strategies/native-arb.ts", "coordinator/src/submission/submitter.ts"),
+                (
+                    "coordinator/src/strategies/native-arb.ts",
+                    "coordinator/src/submission/submitter.ts",
+                ),
                 "Submitter broadcasts a direct tx when MEV_EXECUTOR=ts; rust mode submits a Plan over IPC.",
             ),
             WorkflowStep(
@@ -131,10 +143,19 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         strategy_name="Internal match / Pick A",
         status=WorkflowStatus.EXECUTABLE,
         decision_kinds=("internal_match",),
-        signal_sources=("coordinator/src/feeds/index.ts", "coordinator/src/matching/unified-queue.ts"),
+        signal_sources=(
+            "coordinator/src/feeds/index.ts",
+            "coordinator/src/matching/unified-queue.ts",
+        ),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/decision/engine.ts"),
-        planner_modules=("coordinator/src/matching/internal-matcher.ts", "coordinator/src/matching/encoder.ts"),
-        calldata_builders=("coordinator/src/strategies/internal-match.ts", "coordinator/src/matching/encoder.ts"),
+        planner_modules=(
+            "coordinator/src/matching/internal-matcher.ts",
+            "coordinator/src/matching/encoder.ts",
+        ),
+        calldata_builders=(
+            "coordinator/src/strategies/internal-match.ts",
+            "coordinator/src/matching/encoder.ts",
+        ),
         submission_modules=("coordinator/src/submission/submitter.ts",),
         contract_entrypoints=("contracts/src/executors/Executor.sol::matchInternal",),
         callback_entrypoints=(
@@ -171,7 +192,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 2,
                 "Select best match",
-                ("coordinator/src/decision/engine.ts", "coordinator/src/matching/internal-matcher.ts"),
+                (
+                    "coordinator/src/decision/engine.ts",
+                    "coordinator/src/matching/internal-matcher.ts",
+                ),
                 "Internal match wins precedence when source orders and price compatibility are present.",
             ),
             WorkflowStep(
@@ -183,7 +207,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 4,
                 "Submit matchInternal",
-                ("coordinator/src/strategies/internal-match.ts", "coordinator/src/submission/submitter.ts"),
+                (
+                    "coordinator/src/strategies/internal-match.ts",
+                    "coordinator/src/submission/submitter.ts",
+                ),
                 "Wrapper calldata targets Executor.matchInternal with non-zero flash amount.",
             ),
             WorkflowStep(
@@ -202,7 +229,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         signal_sources=("vendor/degenbot/rust/src/lib.rs", "coordinator/src/feeds/index.ts"),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/decision/engine.ts"),
         planner_modules=("coordinator/src/strategies/four-leg.ts",),
-        calldata_builders=("coordinator/src/strategies/four-leg.ts", "coordinator/src/matching/encoder.ts"),
+        calldata_builders=(
+            "coordinator/src/strategies/four-leg.ts",
+            "coordinator/src/matching/encoder.ts",
+        ),
         submission_modules=("coordinator/src/submission/submitter.ts",),
         contract_entrypoints=("contracts/src/executors/Executor.sol::composeFourLeg",),
         callback_entrypoints=(
@@ -246,13 +276,19 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 3,
                 "Build ComposeParams",
-                ("coordinator/src/strategies/four-leg.ts", "coordinator/src/flash/source-router.ts"),
+                (
+                    "coordinator/src/strategies/four-leg.ts",
+                    "coordinator/src/flash/source-router.ts",
+                ),
                 "Flash route is direct Executor-compatible Aave/Morpho/ERC3156/UniV3.",
             ),
             WorkflowStep(
                 4,
                 "Submit composeFourLeg",
-                ("coordinator/src/strategies/four-leg.ts", "coordinator/src/submission/submitter.ts"),
+                (
+                    "coordinator/src/strategies/four-leg.ts",
+                    "coordinator/src/submission/submitter.ts",
+                ),
                 "Submitter sends one atomic transaction.",
             ),
             WorkflowStep(
@@ -270,7 +306,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         decision_kinds=(),
         signal_sources=("coordinator/src/feeds/uniswapx-orders.ts",),
         trigger_modules=("coordinator/src/index.ts",),
-        planner_modules=("coordinator/src/strategies/filler-bid.ts", "coordinator/src/quotes/index.ts"),
+        planner_modules=(
+            "coordinator/src/strategies/filler-bid.ts",
+            "coordinator/src/quotes/index.ts",
+        ),
         calldata_builders=("coordinator/src/strategies/filler-bid.ts",),
         submission_modules=("coordinator/src/submission/submitter.ts",),
         contract_entrypoints=("contracts/src/executors/Executor.sol::executeUniswapXFill",),
@@ -314,7 +353,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 4,
                 "Submit fill",
-                ("coordinator/src/strategies/filler-bid.ts", "coordinator/src/submission/submitter.ts"),
+                (
+                    "coordinator/src/strategies/filler-bid.ts",
+                    "coordinator/src/submission/submitter.ts",
+                ),
                 "Direct tx targets Executor.executeUniswapXFill.",
             ),
             WorkflowStep(
@@ -402,7 +444,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         status=WorkflowStatus.EXECUTABLE,
         decision_kinds=(),
         signal_sources=("engine/src/monitor/sequencer_feed.rs", "coordinator/src/signals/bus.ts"),
-        trigger_modules=("coordinator/src/index.ts", "coordinator/src/strategies/oracle-sandwich/orchestrator.ts"),
+        trigger_modules=(
+            "coordinator/src/index.ts",
+            "coordinator/src/strategies/oracle-sandwich/orchestrator.ts",
+        ),
         planner_modules=(
             "coordinator/src/strategies/oracle-sandwich/profit-estimator.ts",
             "coordinator/src/strategies/oracle-sandwich/leg-builder.ts",
@@ -472,7 +517,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         decision_kinds=(),
         signal_sources=("coordinator/src/feeds/cow-competition.ts",),
         trigger_modules=("contracts/src/executors/Executor.sol::triggerCoWFlashLoanRouter",),
-        planner_modules=("vendor/degenbot/src/degenbot/auction_build.py", "coordinator/src/strategies/cow-quoter.ts"),
+        planner_modules=(
+            "vendor/degenbot/src/degenbot/auction_build.py",
+            "coordinator/src/strategies/cow-quoter.ts",
+        ),
         calldata_builders=("contracts/src/interfaces/IExecutor.sol",),
         submission_modules=(),
         contract_entrypoints=("contracts/src/executors/Executor.sol::triggerCoWFlashLoanRouter",),
@@ -508,7 +556,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 2,
                 "Build quote/provenance view",
-                ("coordinator/src/strategies/cow-quoter.ts", "vendor/degenbot/src/degenbot/auction_build.py"),
+                (
+                    "coordinator/src/strategies/cow-quoter.ts",
+                    "vendor/degenbot/src/degenbot/auction_build.py",
+                ),
                 "TS prices eligible orders without signing a solver solution or posting capital.",
             ),
             WorkflowStep(
@@ -538,9 +589,15 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         decision_kinds=(),
         signal_sources=("coordinator/src/feeds/cow-competition.ts",),
         trigger_modules=("coordinator/src/index.ts", "coordinator/src/strategies/d3-filter.ts"),
-        planner_modules=("coordinator/src/strategies/d3-filter.ts", "coordinator/src/strategies/cow-quoter.ts"),
+        planner_modules=(
+            "coordinator/src/strategies/d3-filter.ts",
+            "coordinator/src/strategies/cow-quoter.ts",
+        ),
         calldata_builders=("vendor/degenbot/src/degenbot/auction_build.py",),
-        submission_modules=("coordinator/src/strategies/cow-quoter.ts", "vendor/degenbot/src/degenbot/server.py"),
+        submission_modules=(
+            "coordinator/src/strategies/cow-quoter.ts",
+            "vendor/degenbot/src/degenbot/server.py",
+        ),
         contract_entrypoints=(),
         callback_entrypoints=(),
         flash_callback_encoding="No direct on-chain callback; CoW posture is quote-only with no bonded solver tx.",
@@ -555,7 +612,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         happy_path_tests=(
             "coordinator/src/strategies/d3-filter.test.ts",
             "coordinator/src/strategies/cow-quoter.test.ts",
-            "solver/driver/tests/test_auction_build.py",
+            "vendor/degenbot/tests/solver_driver/test_auction_build.py",
         ),
         revert_guard_tests=("coordinator/src/strategies/d3-filter.test.ts",),
         steps=(
@@ -610,7 +667,9 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             "coordinator/src/submission/submitter.ts",
         ),
         contract_entrypoints=("contracts/src/executors/AtomicExecutor.sol::execute",),
-        callback_entrypoints=("contracts/src/executors/AtomicExecutor.sol::balancerV3UnlockCallback",),
+        callback_entrypoints=(
+            "contracts/src/executors/AtomicExecutor.sol::balancerV3UnlockCallback",
+        ),
         flash_callback_encoding=(
             "AtomicExecutor calldata encodes strategy 1, Balancer V3 flash source, loan-token flash amount, "
             "typed Morpho liquidate call, and SwapRouter02 exactInput call."
@@ -677,7 +736,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         status=WorkflowStatus.GATED_EXPLICIT,
         decision_kinds=(),
         signal_sources=("docs/architecture/jit-lp-strategy-design.md",),
-        trigger_modules=("solver/driver/adapters/laneadapters/lanes.py",),
+        trigger_modules=("vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",),
         planner_modules=("coordinator/src/strategies/v4-hooks.ts",),
         calldata_builders=(),
         submission_modules=(),
@@ -695,7 +754,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             "select it."
         ),
         happy_path_tests=("coordinator/src/strategies/v4-hooks.test.ts",),
-        revert_guard_tests=("solver/driver/tests/test_adapter_registry.py",),
+        revert_guard_tests=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
         steps=(
             WorkflowStep(
                 1,
@@ -706,7 +765,7 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             WorkflowStep(
                 2,
                 "Stop before submission",
-                ("solver/driver/adapters/laneadapters/lanes.py",),
+                ("vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",),
                 "No dispatcher owns this lane until executable JIT calldata builders land.",
             ),
         ),
@@ -716,8 +775,8 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         strategy_name="Universal liquidity mutation policy",
         status=WorkflowStatus.GATED_EXPLICIT,
         decision_kinds=(),
-        signal_sources=("solver/driver/adapters/liquidityadapters/venues.py",),
-        trigger_modules=("solver/driver/adapters/laneadapters/lanes.py",),
+        signal_sources=("vendor/degenbot/src/degenbot/adapters/liquidityadapters/venues.py",),
+        trigger_modules=("vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",),
         planner_modules=(
             "coordinator/src/strategies/liquidation/monitor.ts",
             "coordinator/src/strategies/v4-hooks.ts",
@@ -732,19 +791,19 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
             "The universal lane can rank and plan, but cannot emit executable LP mutation calldata without a "
             "lower lane; no dispatcher may select it directly."
         ),
-        happy_path_tests=("solver/driver/tests/test_adapter_registry.py",),
-        revert_guard_tests=("solver/driver/tests/test_adapter_registry.py",),
+        happy_path_tests=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
+        revert_guard_tests=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
         steps=(
             WorkflowStep(
                 1,
                 "Aggregate liquidity metadata",
-                ("solver/driver/adapters/liquidityadapters/venues.py",),
+                ("vendor/degenbot/src/degenbot/adapters/liquidityadapters/venues.py",),
                 "Adapters collect venue state and canonical address bindings.",
             ),
             WorkflowStep(
                 2,
                 "Require lower-lane ownership",
-                ("solver/driver/adapters/laneadapters/lanes.py",),
+                ("vendor/degenbot/src/degenbot/adapters/laneadapters/lanes.py",),
                 "Executable LP mutation requires allowlist, caps, unwind plan, and emergency exit.",
             ),
         ),
@@ -790,7 +849,10 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         flash_callback_encoding="Across is only executable as part of a complete composeFourLeg plan today.",
         profit_extraction="Standalone Across fill has no production profit extraction path.",
         no_silent_stop_policy="Feed sink and dispatch path log unsupported or gated Across decisions explicitly.",
-        happy_path_tests=("coordinator/src/decision/engine.test.ts", "coordinator/src/strategies/four-leg.test.ts"),
+        happy_path_tests=(
+            "coordinator/src/decision/engine.test.ts",
+            "coordinator/src/strategies/four-leg.test.ts",
+        ),
         revert_guard_tests=("coordinator/src/decision/engine.test.ts",),
         steps=(
             WorkflowStep(
@@ -822,8 +884,8 @@ EXECUTION_WORKFLOWS: tuple[StrategyExecutionWorkflow, ...] = (
         flash_callback_encoding="No production launch-sniper calldata is routed through Executor.",
         profit_extraction="None in this coordinator until a dedicated ADR and builder land.",
         no_silent_stop_policy="dispatchOpportunity logs launch_sniper as handled externally; no tx is emitted here.",
-        happy_path_tests=("solver/driver/tests/test_adapter_registry.py",),
-        revert_guard_tests=("solver/driver/tests/test_adapter_registry.py",),
+        happy_path_tests=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
+        revert_guard_tests=("vendor/degenbot/tests/solver_driver/test_adapter_registry.py",),
         steps=(
             WorkflowStep(
                 1,
@@ -844,9 +906,12 @@ def workflow_for_id(workflow_id: str) -> StrategyExecutionWorkflow:
     try:
         return _WORKFLOWS_BY_ID[workflow_id]
     except KeyError as exc:
-        raise KeyError(f"unknown execution workflow {workflow_id!r}") from exc
+        msg = f"unknown execution workflow {workflow_id!r}"
+        raise KeyError(msg) from exc
 
 
 def workflows_for_decision_kind(decision_kind: str) -> tuple[StrategyExecutionWorkflow, ...]:
     """Return all workflows that document one DecisionKind."""
-    return tuple(workflow for workflow in EXECUTION_WORKFLOWS if decision_kind in workflow.decision_kinds)
+    return tuple(
+        workflow for workflow in EXECUTION_WORKFLOWS if decision_kind in workflow.decision_kinds
+    )

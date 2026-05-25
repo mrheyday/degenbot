@@ -31,7 +31,7 @@ from degenbot.utils.bytes import HexBytesLike, to_bytes
 try:
     from degenbot.degenbot_rs import decode as rs_decode
     from degenbot.degenbot_rs import decode_single as rs_decode_single
-except BaseException as exc:  # noqa: BLE001 - PyO3 panics inherit outside Exception.
+except BaseException as exc:
     rs_decode = None
     rs_decode_single = None
     _RUST_ABI_IMPORT_ERROR: BaseException | None = exc
@@ -173,7 +173,7 @@ class AbiAdapter:
         self,
         types: Sequence[str],
         data: BytesLike,
-        checksum: bool,  # noqa: FBT001 - part of internal interface
+        checksum: bool,
     ) -> tuple[Any, ...]:
         """Decode using the Rust backend."""
         if rs_decode is None:
@@ -207,7 +207,7 @@ class AbiAdapter:
         data: BytesLike,
         *,
         checksum: bool = True,
-    ) -> Any:  # noqa: ANN401 - return type depends on abi_type
+    ) -> Any:
         """
         Decode a single ABI value.
 
@@ -233,8 +233,8 @@ class AbiAdapter:
         self,
         abi_type: str,
         data: BytesLike,
-        checksum: bool,  # noqa: FBT001 - part of internal interface
-    ) -> Any:  # noqa: ANN401 - return type depends on abi_type
+        checksum: bool,
+    ) -> Any:
         """Decode a single value using the Rust backend."""
         if rs_decode_single is None:
             return self._decode_single_eth_abi(abi_type, data)
@@ -250,7 +250,7 @@ class AbiAdapter:
             return self._decode_single_eth_abi(abi_type, data)
 
     @staticmethod
-    def _decode_single_eth_abi(abi_type: str, data: BytesLike) -> Any:  # noqa: ANN401
+    def _decode_single_eth_abi(abi_type: str, data: BytesLike) -> Any:
         """Decode a single value using the eth_abi backend."""
         # eth_abi requires plain bytes
         data_bytes = _ensure_bytes(data)
@@ -283,10 +283,7 @@ class AbiAdapter:
         if "fixed" in abi_type.lower():
             return self._backend == AbiBackend.ETH_ABI
 
-        if self._backend == AbiBackend.RUST and _RUST_ABI_IMPORT_ERROR is not None:
-            return False
-
-        return True
+        return not (self._backend == AbiBackend.RUST and _RUST_ABI_IMPORT_ERROR is not None)
 
 
 # Module-level convenience functions using the default adapter
@@ -390,7 +387,7 @@ def decode_single(
     *,
     backend: AbiBackend | None = None,
     checksum: bool = True,
-) -> Any:  # noqa: ANN401 - return type depends on abi_type
+) -> Any:
     """
     Decode a single ABI value.
 

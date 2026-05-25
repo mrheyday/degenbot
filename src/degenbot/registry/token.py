@@ -22,7 +22,7 @@ class TokenRegistry:
     def __init__(self) -> None:
         if self.__class__.instance is not None:
             raise RegistryAlreadyInitialized(
-                message="A registry has already been initialized. Access it using the get_instance() class method"  # noqa:E501
+                message="A registry has already been initialized. Access it using the get_instance() class method"
             )
         self.__class__.instance = self
 

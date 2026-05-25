@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from degenbot.decision.types import MatchCandidate
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from degenbot.decision.types import MatchCandidate
 
 SCALE = 1_000_000_000_000_000_000
 
@@ -10,14 +13,16 @@ SCALE = 1_000_000_000_000_000_000
 def outbound_min_price(o: MatchCandidate) -> int:
     """Outbound min-price (token-buy per unit token-sell, scaled 1e18)."""
     if o.amount_sell == 0:
-        raise ValueError("outbound_min_price: amount_sell cannot be zero")
+        msg = "outbound_min_price: amount_sell cannot be zero"
+        raise ValueError(msg)
     return (o.amount_buy_min * SCALE) // o.amount_sell
 
 
 def counter_max_price(c: MatchCandidate) -> int:
     """Counter (inbound / uniswapx) max-price (token-sell per unit token-buy_min, scaled 1e18)."""
     if c.amount_buy_min == 0:
-        raise ValueError("counter_max_price: amount_buy_min cannot be zero")
+        msg = "counter_max_price: amount_buy_min cannot be zero"
+        raise ValueError(msg)
     return (c.amount_sell * SCALE) // c.amount_buy_min
 
 

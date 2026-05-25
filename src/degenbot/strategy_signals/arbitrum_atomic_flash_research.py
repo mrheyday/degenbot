@@ -43,10 +43,10 @@ class AtomicFlashTarget:
 
 
 _COMMON_CODE_REFS = (
-    "degenbot/src/degenbot/strategy_signals/arbitrum_atomic_flash_research.py",
+    "vendor/degenbot/src/degenbot/strategy_signals/arbitrum_atomic_flash_research.py",
 )
 _COMMON_PROOF_REFS = (
-    "degenbot/tests/strategy_signals/test_arbitrum_atomic_flash_research.py",
+    "vendor/degenbot/tests/solver_driver/test_arbitrum_atomic_flash_research.py",
 )
 
 

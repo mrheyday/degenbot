@@ -87,7 +87,7 @@ def _normalize_amount(value: int | bytes | str) -> str:
     return str(int.from_bytes(to_bytes(value), byteorder="big"))
 
 
-def compose_dispatch_envelope(  # noqa: PLR0917
+def compose_dispatch_envelope(
     plan: Mapping[str, Any],
     policy: Mapping[str, Any],
     sources: Sequence[Mapping[str, Any]],

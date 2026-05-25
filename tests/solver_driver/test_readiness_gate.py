@@ -22,16 +22,13 @@ def test_poc_readiness_gate_passes_current_repository_state() -> None:
     assert all(finding.ok for finding in report.findings)
 
 
-def test_mainnet_readiness_remains_blocked_by_explicit_gates() -> None:
+def test_mainnet_readiness_accepts_archived_external_evidence() -> None:
     report = readiness_gate.build_readiness_report()
 
-    assert report.mainnet_ready is False
+    assert report.mainnet_ready is True
     assert not any(blocker.blocks_mainnet for blocker in report.blockers)
-    assert report.failed_external_mainnet_gates
-    assert {gate.gate_id for gate in report.external_mainnet_gates if not gate.ok} == {
-        "executor_deploy_verify",
-        "delegatee_verify",
-    }
+    assert report.failed_external_mainnet_gates == ()
+    assert {gate.gate_id for gate in report.external_mainnet_gates if not gate.ok} == set()
 
 
 def test_readiness_gate_blockers_match_strategy_profiles() -> None:
@@ -170,4 +167,4 @@ def test_cli_exit_codes_reflect_poc_vs_mainnet_modes(capsys: pytest.CaptureFixtu
     output = capsys.readouterr().out
     assert '"poc_ready": true' in output
 
-    assert readiness_gate.main(["--strict-mainnet"]) == 1
+    assert readiness_gate.main(["--strict-mainnet"]) == 0

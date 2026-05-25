@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from degenbot.decision.types import AggregatorQuote
-from degenbot.types_solver.wire import Opportunity
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from degenbot.decision.types import AggregatorQuote
+    from degenbot.types_solver.wire import Opportunity
 
 try:
     from degenbot.degenbot_rs import evaluate_sandoo_idea_json
+
     HAS_RUST_ACCEL = True
 except ImportError:
     HAS_RUST_ACCEL = False
@@ -57,10 +61,7 @@ def evaluate_sandoo_idea(
             quote_json = best_quote.model_dump_json(by_alias=True) if best_quote else None
 
             res_json = evaluate_sandoo_idea_json(
-                opp_json,
-                quote_json,
-                max_gas_price_gwei,
-                str(flash_loan_fee_wei)
+                opp_json, quote_json, max_gas_price_gwei, str(flash_loan_fee_wei)
             )
             data = json.loads(res_json)
             # Reconstruct the SandooIdeaSignal dataclass
@@ -80,7 +81,7 @@ def evaluate_sandoo_idea(
                     size_vs_flash_ratio_bps=int(data["components"]["size_vs_flash_ratio_bps"]),
                     quote_profit_gap_wei=int(data["components"]["quote_profit_gap_wei"]),
                     score_scale=int(data["components"]["score_scale"]),
-                )
+                ),
             )
         except Exception:
             # Fallback to Python on any error
@@ -131,9 +132,7 @@ def evaluate_sandoo_idea(
     route_gas_wei = (
         best_quote.estimated_gas * max_gas_fee_wei if best_quote and best_quote.estimated_gas else 0
     )
-    quote_fee_wei = (
-        (opp.amount_in * best_quote.fee_bps) // HUNDRED_PERCENT_BPS if best_quote else 0
-    )
+    quote_fee_wei = (opp.amount_in * best_quote.fee_bps) // HUNDRED_PERCENT_BPS if best_quote else 0
 
     net_profit_after_cost_wei = max(
         opp.estimated_profit_wei - (route_gas_wei + quote_fee_wei + flash_loan_fee_wei),
@@ -203,9 +202,7 @@ def _build_negative_signal(
     route_gas_wei = (
         best_quote.estimated_gas * max_gas_fee_wei if best_quote and best_quote.estimated_gas else 0
     )
-    quote_fee_wei = (
-        (opp.amount_in * best_quote.fee_bps) // HUNDRED_PERCENT_BPS if best_quote else 0
-    )
+    quote_fee_wei = (opp.amount_in * best_quote.fee_bps) // HUNDRED_PERCENT_BPS if best_quote else 0
 
     quote_amount_out = best_quote.amount_out if best_quote else 0
     quote_amount_net_out = (

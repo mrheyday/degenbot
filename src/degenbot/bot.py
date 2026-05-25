@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from fractions import Fraction
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from degenbot.arbitrage.uniswap_curve_cycle import UniswapCurveCycle
 from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
@@ -13,7 +11,12 @@ from degenbot.exceptions.base import DegenbotError
 from degenbot.logging import logger
 from degenbot.pathfinding import find_paths
 from degenbot.registry import pool_registry
-from degenbot.types.aliases import BlockNumber, ChainId
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from fractions import Fraction
+
+    from degenbot.types.aliases import BlockNumber, ChainId
 
 
 class ArbitrageStrategy(Protocol):
@@ -108,9 +111,7 @@ class DegenbotBot:
         if isinstance(input_token, Erc20Token):
             token = input_token
         elif hasattr(input_token, "address"):
-            token = token_manager.get_erc20token(
-                get_checksum_address(input_token.address)
-            )
+            token = token_manager.get_erc20token(get_checksum_address(input_token.address))
         else:
             token = token_manager.get_erc20token(get_checksum_address(input_token))
 

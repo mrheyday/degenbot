@@ -144,8 +144,12 @@ class Order(BaseModel):
     partially_fillable: bool = Field(alias="partiallyFillable")
     pre_interactions: list[dict[str, Any]] = Field(default_factory=list, alias="preInteractions")
     post_interactions: list[dict[str, Any]] = Field(default_factory=list, alias="postInteractions")
-    sell_token_source: SellTokenBalance = Field(default=SellTokenBalance.ERC20, alias="sellTokenSource")
-    buy_token_destination: BuyTokenBalance = Field(default=BuyTokenBalance.ERC20, alias="buyTokenDestination")
+    sell_token_source: SellTokenBalance = Field(
+        default=SellTokenBalance.ERC20, alias="sellTokenSource"
+    )
+    buy_token_destination: BuyTokenBalance = Field(
+        default=BuyTokenBalance.ERC20, alias="buyTokenDestination"
+    )
     order_class: OrderClass = Field(alias="class")
     app_data: str = Field(alias="appData")
     flashloan_hint: dict[str, Any] | None = Field(default=None, alias="flashloanHint")
@@ -275,7 +279,7 @@ class SolveResponse(BaseModel):
         return wire
 
 
-def _to_wire(value: Any) -> Any:  # noqa: ANN401 -- recursive Any
+def _to_wire(value: Any) -> Any:
     """Recursively coerce `int` outside of small enum-like fields to str.
 
     CoW wire convention: token amounts, prices, gas — all decimal strings.

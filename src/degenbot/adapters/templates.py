@@ -12,7 +12,9 @@ from enum import StrEnum
 ARBITRUM_ONE_CHAIN_ID = 42161
 COORDINATOR_REGISTRY_SOURCE = "coordinator/src/router/registry.ts"
 DEFILLAMA_DIMENSION_ADAPTERS_REPO = "DefiLlama/dimension-adapters"
-DEFILLAMA_DIMENSION_ADAPTERS_BASE_URL = "https://github.com/DefiLlama/dimension-adapters/blob/master"
+DEFILLAMA_DIMENSION_ADAPTERS_BASE_URL = (
+    "https://github.com/DefiLlama/dimension-adapters/blob/master"
+)
 SOURCIFY_SERVER = "https://sourcify.dev/server"
 
 
@@ -159,7 +161,8 @@ class AdapterTemplate:
         for binding in self.contracts:
             if binding.export_name == export_name:
                 return binding
-        raise KeyError(f"{self.venue} adapter has no contract binding {export_name!r}")
+        msg = f"{self.venue} adapter has no contract binding {export_name!r}"
+        raise KeyError(msg)
 
 
 @dataclass(frozen=True, slots=True)

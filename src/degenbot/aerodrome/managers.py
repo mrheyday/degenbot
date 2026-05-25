@@ -118,7 +118,7 @@ class AerodromeV2PoolManager(
 
         if (chain_id, factory_address) in self.instances:
             raise ManagerAlreadyInitialized(
-                message="A manager has already been initialized for this address. Access it using the get_instance() class method"  # noqa:E501
+                message="A manager has already been initialized for this address. Access it using the get_instance() class method"
             )
         self.instances[chain_id, factory_address] = self
 

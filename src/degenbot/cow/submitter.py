@@ -165,7 +165,7 @@ class CompetitionSubmitter:
         }
 
     @classmethod
-    def _build_trade(cls, trade: Any) -> dict[str, Any]:  # noqa: ANN401
+    def _build_trade(cls, trade: Any) -> dict[str, Any]:
         return {
             "sellTokenIndex": cls._field(trade, "sell_token_index", "sellTokenIndex", default=0),
             "buyTokenIndex": cls._field(trade, "buy_token_index", "buyTokenIndex", default=0),
@@ -181,7 +181,7 @@ class CompetitionSubmitter:
         }
 
     @classmethod
-    def _build_interactions(cls, interactions: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    def _build_interactions(cls, interactions: Any) -> list[dict[str, Any]]:
         if interactions is None:
             return []
         return [
@@ -194,7 +194,7 @@ class CompetitionSubmitter:
         ]
 
     @staticmethod
-    def _field(obj: Any, *names: str, default: Any) -> Any:  # noqa: ANN401
+    def _field(obj: Any, *names: str, default: Any) -> Any:
         if isinstance(obj, Mapping):
             for name in names:
                 if name in obj:

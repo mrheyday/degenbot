@@ -171,16 +171,21 @@ class DodoPmmPool(PublisherMixin, AbstractLiquidityPool):
             ValueError: on degenerate inputs.
         """
         if lp_fee_bps_wad < 0 or lp_fee_bps_wad >= _FEE_DENOMINATOR_WAD:
+            msg = f"lp_fee_bps_wad must be in [0, {_FEE_DENOMINATOR_WAD}), got {lp_fee_bps_wad}"
             raise ValueError(
-                f"lp_fee_bps_wad must be in [0, {_FEE_DENOMINATOR_WAD}), got {lp_fee_bps_wad}",
+                msg,
             )
         if maintainer_fee_bps_wad < 0 or maintainer_fee_bps_wad >= _FEE_DENOMINATOR_WAD:
-            raise ValueError(
+            msg = (
                 f"maintainer_fee_bps_wad must be in [0, {_FEE_DENOMINATOR_WAD}), "
-                f"got {maintainer_fee_bps_wad}",
+                f"got {maintainer_fee_bps_wad}"
+            )
+            raise ValueError(
+                msg,
             )
         if lp_fee_bps_wad + maintainer_fee_bps_wad >= _FEE_DENOMINATOR_WAD:
-            raise ValueError("combined fees exceed 100%")
+            msg = "combined fees exceed 100%"
+            raise ValueError(msg)
 
         self.address = to_checksum_address(address)
         self.token0 = to_checksum_address(base_token)
@@ -250,7 +255,8 @@ class DodoPmmPool(PublisherMixin, AbstractLiquidityPool):
                 invalid state (e.g., target reserve mismatch).
         """
         if token_in_quantity <= 0:
-            raise ValueError(f"token_in_quantity must be positive, got {token_in_quantity}")
+            msg = f"token_in_quantity must be positive, got {token_in_quantity}"
+            raise ValueError(msg)
 
         token_in_cs = to_checksum_address(token_in)
         s = override_state if override_state is not None else self._state
@@ -261,9 +267,12 @@ class DodoPmmPool(PublisherMixin, AbstractLiquidityPool):
         elif token_in_cs == self.quote_token:
             gross_out, _new_r = sell_quote_token(pmm, token_in_quantity)
         else:
-            raise ValueError(
+            msg = (
                 f"token_in {token_in_cs} matches neither pool token "
-                f"({self.base_token}, {self.quote_token})",
+                f"({self.base_token}, {self.quote_token})"
+            )
+            raise ValueError(
+                msg,
             )
 
         # Apply LP + maintainer fees on the receive side. The on-chain DODO
@@ -284,8 +293,9 @@ class DodoPmmPool(PublisherMixin, AbstractLiquidityPool):
         """Apply a fresh PMM snapshot (typically after a `getPMMState()` poll
         or a `RChange` / `LpFeeRateChange` event)."""
         if block < (self._state.block or 0):
+            msg = f"update for block {block} predates current state block {self._state.block}"
             raise ValueError(
-                f"update for block {block} predates current state block {self._state.block}",
+                msg,
             )
 
         new_state = DodoPmmPoolState(

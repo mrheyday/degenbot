@@ -205,7 +205,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         ]:  # pragma: no cover
             if key in kwargs:
                 logger.warning(
-                    f"Ignoring keyword argument {key}={kwargs[key]} in favor of value in exchange deployment."  # noqa: E501
+                    f"Ignoring keyword argument {key}={kwargs[key]} in favor of value in exchange deployment."
                 )
                 kwargs.pop(key)
 
@@ -325,7 +325,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         if verify_address and self.address != self._verified_address():  # pragma: no branch
             raise AddressMismatch
 
-        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, {100 * self.fee / self.FEE_DENOMINATOR:.2f}%)"  # noqa: E501
+        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, {100 * self.fee / self.FEE_DENOMINATOR:.2f}%)"
 
         if (tick_bitmap is not None) != (tick_data is not None):
             raise DegenbotValueError(message="Provide both tick_bitmap and tick_data.")
@@ -426,7 +426,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         self.__dict__ = state
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%, tick spacing={self.tick_spacing})"  # noqa:E501
+        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%, tick spacing={self.tick_spacing})"
 
     def __str__(self) -> str:
         return self.name
@@ -967,6 +967,24 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
     def state(self) -> PoolState:
         return self._state_cache[-1]
 
+    def to_v3_snapshot_json(self, state_override: PoolState | None = None) -> str:
+        """
+        Serialize the pool state to a JSON format compatible with the Rust V3Snapshot.
+        """
+        import json
+
+        s = state_override or self.state
+        snapshot = {
+            "sqrtPriceX96": str(s.sqrt_price_x96),
+            "liquidity": str(s.liquidity),
+            "tick": s.tick,
+            "feeBps": self.fee_bps,
+            "tickSpacing": self.tick_spacing,
+            "tickBitmap": {str(k): str(v.bitmap) for k, v in s.tick_bitmap.items()},
+            "tickNetLiquidity": {str(k): str(v.liquidity_net) for k, v in s.tick_data.items()},
+        }
+        return json.dumps(snapshot)
+
     @property
     def tick(self) -> int:
         return self.state.tick
@@ -1298,7 +1316,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             working_liquidity = self.liquidity
 
             assert working_liquidity >= 0, (
-                f"Starting liquidity violates invariant: pool {self.address} {self.tick=} {self.liquidity=}"  # noqa: E501
+                f"Starting liquidity violates invariant: pool {self.address} {self.tick=} {self.liquidity=}"
             )
 
             # Adjust in-range liquidity if the modified region includes the active tick.
@@ -1313,7 +1331,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             ):
                 working_liquidity += update.liquidity
                 assert working_liquidity >= 0, (
-                    f"In-range liquidity adjustment violated invariant: pool {self.address} {self.tick=} {self.liquidity=} {self.update_block=} {update=}"  # noqa: E501
+                    f"In-range liquidity adjustment violated invariant: pool {self.address} {self.tick=} {self.liquidity=} {self.update_block=} {update=}"
                 )
 
             for tick in (update.tick_lower, update.tick_upper):

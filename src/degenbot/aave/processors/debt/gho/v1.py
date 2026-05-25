@@ -30,7 +30,7 @@ class GhoV1Processor(GhoDebtTokenProcessor):
         """Get the math libraries for this revision."""
         return self._math_libs
 
-    def supports_discount(self) -> bool:  # noqa: PLR6301
+    def supports_discount(self) -> bool:
         """Revision 1 supports discount mechanism."""
         return True
 

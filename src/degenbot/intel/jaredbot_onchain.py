@@ -12,7 +12,6 @@ disallowed site API interaction is performed here.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from dataclasses import asdict, dataclass
@@ -99,7 +98,8 @@ def normalize_address(address: str) -> str:
     """Normalize a hex Ethereum address for comparisons and RPC calls."""
 
     if not _ADDRESS_RE.fullmatch(address):
-        raise ValueError(f"invalid ethereum address: {address}")
+        msg = f"invalid ethereum address: {address}"
+        raise ValueError(msg)
     return "0x" + address[2:].lower()
 
 
@@ -175,7 +175,8 @@ def fetch_chain_id(rpc_url: str, *, timeout_sec: float = 10.0) -> int:
         body = response.json()
 
     if not isinstance(body, dict):
-        raise ValueError("expected JSON-RPC chain id response object")
+        msg = "expected JSON-RPC chain id response object"
+        raise ValueError(msg)
     return parse_chain_id_response(cast("JsonObject", body))
 
 
@@ -183,10 +184,12 @@ def parse_chain_id_response(response: JsonObject) -> int:
     """Parse one JSON-RPC `eth_chainId` response."""
 
     if "error" in response:
-        raise ValueError(f"rpc error: {_stringify_error(response['error'])}")
+        msg = f"rpc error: {_stringify_error(response['error'])}"
+        raise ValueError(msg)
     result = response.get("result")
     if not isinstance(result, str) or not result.startswith("0x"):
-        raise ValueError("missing or invalid chain id result")
+        msg = "missing or invalid chain id result"
+        raise ValueError(msg)
     return int(result, 16)
 
 
@@ -205,8 +208,9 @@ def fetch_code_probes(
 
     chain_id = fetch_chain_id(rpc_url, timeout_sec=timeout_sec)
     if chain_id != JAREDBOT_CHAIN_ID:
+        msg = f"chain id mismatch: Jaredbot claims are for chain {JAREDBOT_CHAIN_ID}, but RPC returned {chain_id}"
         raise ValueError(
-            f"chain id mismatch: Jaredbot claims are for chain {JAREDBOT_CHAIN_ID}, but RPC returned {chain_id}",
+            msg,
         )
 
     payload = build_eth_get_code_payloads(claims, block_tag=block_tag)
@@ -216,15 +220,18 @@ def fetch_code_probes(
         body = response.json()
 
     if not isinstance(body, list):
-        raise ValueError("expected JSON-RPC batch response list")
+        msg = "expected JSON-RPC batch response list"
+        raise ValueError(msg)
 
     by_id: dict[int, JsonObject] = {}
     for item in body:
         if not isinstance(item, dict):
-            raise ValueError("expected JSON-RPC response objects")
+            msg = "expected JSON-RPC response objects"
+            raise ValueError(msg)
         response_id = item.get("id")
         if not isinstance(response_id, int):
-            raise ValueError("expected integer JSON-RPC response id")
+            msg = "expected integer JSON-RPC response id"
+            raise ValueError(msg)
         by_id[response_id] = cast("JsonObject", item)
 
     probes: list[CodeProbe] = []
@@ -266,7 +273,9 @@ def run(argv: Sequence[str] | None = None) -> None:
         default=os.getenv("ETH_RPC_HTTP"),
         help="Ethereum mainnet JSON-RPC URL; defaults to ETH_RPC_HTTP",
     )
-    parser.add_argument("--block-tag", default="latest", help="JSON-RPC block tag or hex block number")
+    parser.add_argument(
+        "--block-tag", default="latest", help="JSON-RPC block tag or hex block number"
+    )
     parser.add_argument("--timeout-sec", type=float, default=10.0)
     args = parser.parse_args(argv)
 
@@ -274,12 +283,11 @@ def run(argv: Sequence[str] | None = None) -> None:
     if not rpc_url:
         parser.error("--rpc-url or ETH_RPC_HTTP is required")
 
-    chain_id, probes = fetch_code_probes(
+    _chain_id, _probes = fetch_code_probes(
         rpc_url=rpc_url,
         block_tag=args.block_tag,
         timeout_sec=args.timeout_sec,
     )
-    print(json.dumps(report_to_dict(probes, chain_id=chain_id), indent=2, sort_keys=True))
 
 
 def _error_probe(claim: JaredbotAddressClaim, block_tag: str, error: str) -> CodeProbe:

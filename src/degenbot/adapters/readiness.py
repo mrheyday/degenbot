@@ -195,7 +195,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
         ),
         tests=(
             "coordinator/src/strategies/v4-hooks.test.ts",
-            "solver/driver/tests/test_adapter_registry.py",
+            "vendor/degenbot/tests/solver_driver/test_adapter_registry.py",
         ),
         policy_gates=(
             "strategy-specific LP mutation allowlist",
@@ -229,7 +229,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
         solver_modules=("driver.execution.degenbot_ipc",),
         tests=(
             "coordinator/src/strategies/v4-hooks.test.ts",
-            "solver/driver/tests/test_adapter_registry.py",
+            "vendor/degenbot/tests/solver_driver/test_adapter_registry.py",
         ),
         policy_gates=(
             "self-controlled or solver-owned trigger source",
@@ -268,7 +268,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
             "coordinator/src/strategies/oracle-sandwich/orchestrator.test.ts",
             "coordinator/src/strategies/oracle-sandwich/leg-builder.test.ts",
             "coordinator/src/signals/actions/dispatch-oracle-sandwich.test.ts",
-            "solver/driver/tests/test_adapter_registry.py",
+            "vendor/degenbot/tests/solver_driver/test_adapter_registry.py",
         ),
         policy_gates=(
             "offensive variant enable map defaults on",
@@ -289,10 +289,13 @@ def readiness_evidence_for_id(evidence_id: str) -> ReadinessEvidence:
     try:
         return _EVIDENCE_BY_ID[evidence_id]
     except KeyError as exc:
-        raise KeyError(f"unknown readiness evidence {evidence_id!r}") from exc
+        msg = f"unknown readiness evidence {evidence_id!r}"
+        raise KeyError(msg) from exc
 
 
-def evidence_for_adapter(category: AdapterCategory | str, venue: str) -> tuple[ReadinessEvidence, ...]:
+def evidence_for_adapter(
+    category: AdapterCategory | str, venue: str
+) -> tuple[ReadinessEvidence, ...]:
     """Return readiness evidence records that mention an adapter."""
     key = adapter_key(AdapterCategory(category), venue)
     return tuple(evidence for evidence in READINESS_EVIDENCE if key in evidence.adapters)

@@ -219,8 +219,8 @@ class TokenMathFactory:
             TokenMath instance with appropriate rounding
         """
 
-        if token_revision <= 3:  # noqa:PLR2004
+        if token_revision <= 3:
             return cls.get_token_math(1)
-        if token_revision == 4:  # noqa:PLR2004
+        if token_revision == 4:
             return cls.get_token_math(4)
         return cls.get_token_math(5)

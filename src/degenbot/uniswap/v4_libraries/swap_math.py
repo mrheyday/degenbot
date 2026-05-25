@@ -63,7 +63,7 @@ def compute_swap_step(
             # `amountIn` is capped by the target price
             sqrt_price_next_x96 = sqrt_ratio_x96_target
             fee_amount = (
-                amount_in  # amountIn is always 0 here, as amountRemainingLessFee == 0 and amountRemainingLessFee >= amountIn # noqa
+                amount_in  # amountIn is always 0 here, as amountRemainingLessFee == 0 and amountRemainingLessFee >= amountIn
                 if fee_pips == MAX_SWAP_FEE
                 else full_math.muldiv_rounding_up(amount_in, fee_pips, MAX_SWAP_FEE - fee_pips)
             )

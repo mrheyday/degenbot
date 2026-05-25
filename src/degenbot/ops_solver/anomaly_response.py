@@ -80,9 +80,11 @@ def require_address(value: object, label: str) -> str:
     """Validate a nonzero EVM address string."""
 
     if not isinstance(value, str) or not ADDRESS_RE.fullmatch(value):
-        raise ValueError(f"{label} must be a 20-byte hex address")
+        msg = f"{label} must be a 20-byte hex address"
+        raise ValueError(msg)
     if value.lower() == ZERO_ADDRESS:
-        raise ValueError(f"{label} must not be the zero address")
+        msg = f"{label} must not be the zero address"
+        raise ValueError(msg)
     return value
 
 
@@ -100,7 +102,8 @@ def parse_chain_id(raw: str | None) -> int:
 
     chain_id = int(raw, 10)
     if chain_id <= 0:
-        raise ValueError("CHAIN_ID must be positive")
+        msg = "CHAIN_ID must be positive"
+        raise ValueError(msg)
     return chain_id
 
 
@@ -173,9 +176,9 @@ def write_payload(payload: dict[str, Any], output_path: str | None) -> None:
     """Emit the JSON payload to stdout and optionally persist it."""
 
     text = json.dumps(payload, indent=2, sort_keys=True)
-    print(text)
+    sys.stdout.write(f"{text}\n")
     if output_path:
-        Path(output_path).write_text(f"{text}\n")
+        Path(output_path).write_text(f"{text}\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -183,23 +186,18 @@ def main() -> None:
 
     # Lazy import so the solver hot path never imports Ape.
     import ape_arbitrum  # noqa: F401  # pylint: disable=import-outside-toplevel,import-error,unused-import
-    from ape import Contract, networks  # pylint: disable=import-outside-toplevel,import-error
+    from ape import Contract  # pylint: disable=import-outside-toplevel,import-error
 
     try:
         executor_address = require_address(os.environ.get("EXECUTOR_ADDRESS"), "EXECUTOR_ADDRESS")
         safe_address = require_address(os.environ.get("SAFE_ADDRESS"), "SAFE_ADDRESS")
         chain_id = parse_chain_id(os.environ.get("CHAIN_ID"))
-    except ValueError as exc:
-        print(f"[anomaly-response] {exc}", file=sys.stderr)
+    except ValueError:
         sys.exit(2)
 
     reason = os.environ.get("ANOMALY_REASON", "operator-requested pause")
     incident_id = os.environ.get("INCIDENT_ID", "manual")
     created_at = datetime.now(UTC).isoformat()
-
-    print(f"[anomaly-response] network: {networks.active_provider.name}", file=sys.stderr)
-    print(f"[anomaly-response] executor: {executor_address}", file=sys.stderr)
-    print(f"[anomaly-response] safe:     {safe_address}", file=sys.stderr)
 
     contract = Contract(executor_address, abi=list(EXECUTOR_GUARD_ABI))
     readiness = PauseReadiness(

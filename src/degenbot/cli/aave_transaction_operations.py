@@ -243,7 +243,7 @@ class TransactionValidationError(Exception):  # pragma: no cover
 
         # Add data
         data_str = event["data"].hex()
-        if len(data_str) > 60:  # noqa:PLR2004
+        if len(data_str) > 60:
             data_str = data_str[:30] + "..." + data_str[-30:]
         lines.extend((f"    Data: {data_str}", ""))
 

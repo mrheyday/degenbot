@@ -1,3 +1,4 @@
+import contextlib
 import time
 import warnings
 from collections.abc import Mapping, Sequence
@@ -1529,6 +1530,18 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
             # - profit = WETH_out - WETH_in
 
             start = time.perf_counter()
+
+            from degenbot import (
+                optimal_input_2pool_v3 as rust_optimal_input_v3,
+            )
+
+            if rust_optimal_input_v3 is not None and isinstance(v2_pool, UniswapV2Pool):
+                with contextlib.suppress(Exception):
+                    # Note: V2 -> V3 case.
+                    # Rust optimal_input_2pool_v3 expects V3 as the first pool.
+                    # We skip acceleration for this specific direction until
+                    # a symmetric Rust optimizer is implemented.
+                    pass
 
             v2_pool_max_output = (
                 v2_pool.reserves_token0 - 1

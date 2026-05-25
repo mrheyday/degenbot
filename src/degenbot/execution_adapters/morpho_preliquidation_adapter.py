@@ -231,7 +231,10 @@ class MorphoPreLiquidationAuthorization:
 
     def matches(self, *, borrower: str, contract: str) -> bool:
         """Return true when `borrower` authorized `contract`."""
-        return self.authorizer.lower() == borrower.lower() and self.authorizee.lower() == contract.lower()
+        return (
+            self.authorizer.lower() == borrower.lower()
+            and self.authorizee.lower() == contract.lower()
+        )
 
 
 @dataclass(frozen=True)
@@ -334,9 +337,12 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
         if not market_ids:
             return []
         if page_size <= 0:
-            raise ValueError("page_size must be positive")
+            msg = "page_size must be positive"
+            raise ValueError(msg)
 
-        indexed_market_ids = [ensure_hyperindex_market_id(chain_id, market_id) for market_id in market_ids]
+        indexed_market_ids = [
+            ensure_hyperindex_market_id(chain_id, market_id) for market_id in market_ids
+        ]
         positions: list[MorphoPreLiquidationIndexedPosition] = []
         offset = 0
         while True:
@@ -346,7 +352,8 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
             )
             rows = data.get("Position", [])
             if not isinstance(rows, list):
-                raise ValueError("Position response must be a list")
+                msg = "Position response must be a list"
+                raise ValueError(msg)
             positions.extend(pre_liquidation_position_from_graphql(row) for row in rows)
             if len(rows) < page_size:
                 return positions
@@ -362,14 +369,17 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
         if not market_ids:
             return []
 
-        indexed_market_ids = [ensure_hyperindex_market_id(chain_id, market_id) for market_id in market_ids]
+        indexed_market_ids = [
+            ensure_hyperindex_market_id(chain_id, market_id) for market_id in market_ids
+        ]
         data = await self._query(
             PRELIQUIDATION_CONTRACTS_QUERY,
             {"marketIds": indexed_market_ids},
         )
         rows = data.get("PreLiquidationContract", [])
         if not isinstance(rows, list):
-            raise ValueError("PreLiquidationContract response must be a list")
+            msg = "PreLiquidationContract response must be a list"
+            raise ValueError(msg)
         return [pre_liquidation_contract_from_graphql(row) for row in rows]
 
     async def list_authorizations(
@@ -389,7 +399,8 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
         )
         rows = data.get("Authorization", [])
         if not isinstance(rows, list):
-            raise ValueError("Authorization response must be a list")
+            msg = "Authorization response must be a list"
+            raise ValueError(msg)
         return [pre_liquidation_authorization_from_graphql(row, chain_id=chain_id) for row in rows]
 
     async def list_live_candidates(
@@ -418,7 +429,11 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
             chain_id=chain_id,
         )
         authorized_pairs = {
-            (authorization.authorizer.lower(), authorization.authorizee.lower(), authorization.chain_id)
+            (
+                authorization.authorizer.lower(),
+                authorization.authorizee.lower(),
+                authorization.chain_id,
+            )
             for authorization in authorizations
         }
         contracts_by_market: dict[str, list[MorphoPreLiquidationContract]] = {}
@@ -433,7 +448,9 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
                 auth_key = (position.borrower.lower(), contract.address.lower(), contract.chain_id)
                 if auth_key not in authorized_pairs:
                     continue
-                market_lltv, snapshot = self.read_onchain_position_snapshot(contract, position.borrower)
+                market_lltv, snapshot = self.read_onchain_position_snapshot(
+                    contract, position.borrower
+                )
                 eligibility = evaluate_pre_liquidation_eligibility(
                     contract,
                     market_lltv=market_lltv,
@@ -460,9 +477,11 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
     ) -> tuple[int, MorphoPreLiquidationPositionSnapshot]:
         """Read Morpho Blue position/market and pre-liquidation oracle price."""
         if self._rpc_url is None or self._morpho_blue_address is None:
-            raise ValueError("rpc_url and morpho_blue_address are required for live pre-liquidation reads")
+            msg = "rpc_url and morpho_blue_address are required for live pre-liquidation reads"
+            raise ValueError(msg)
         if not is_address(borrower) or borrower.lower() == ZERO_ADDRESS:
-            raise ValueError("borrower must be a non-zero address")
+            msg = "borrower must be a non-zero address"
+            raise ValueError(msg)
 
         morpho = cast("_MorphoBlueContract", self._morpho_contract())
         market_id_bytes = bytes.fromhex(contract.market_id.removeprefix("0x"))
@@ -478,18 +497,28 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
             lltv=int(lltv),
         )
         if onchain_market_id.lower() != contract.market_id.lower():
-            raise ValueError("on-chain MarketParams do not match pre-liquidation market id")
+            msg = "on-chain MarketParams do not match pre-liquidation market id"
+            raise ValueError(msg)
 
         _supply_shares, borrow_shares, collateral = cast(
             "tuple[int, int, int]",
             morpho.functions.position(market_id_bytes, Web3.to_checksum_address(borrower)).call(),
         )
-        _total_supply_assets, _total_supply_shares, total_borrow_assets, total_borrow_shares, _last_update, _fee = cast(
+        (
+            _total_supply_assets,
+            _total_supply_shares,
+            total_borrow_assets,
+            total_borrow_shares,
+            _last_update,
+            _fee,
+        ) = cast(
             "tuple[int, int, int, int, int, int]",
             morpho.functions.market(market_id_bytes).call(),
         )
         price_oracle = (
-            oracle if contract.pre_liquidation_oracle.lower() == ZERO_ADDRESS else contract.pre_liquidation_oracle
+            oracle
+            if contract.pre_liquidation_oracle.lower() == ZERO_ADDRESS
+            else contract.pre_liquidation_oracle
         )
         collateral_price = self._oracle_price(price_oracle)
 
@@ -509,7 +538,8 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
 
     def _morpho_contract(self) -> object:
         if self._rpc_url is None or self._morpho_blue_address is None:
-            raise ValueError("rpc_url and morpho_blue_address are required for live pre-liquidation reads")
+            msg = "rpc_url and morpho_blue_address are required for live pre-liquidation reads"
+            raise ValueError(msg)
         if self._web3 is None:
             self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
         return self._web3.eth.contract(
@@ -519,7 +549,8 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
 
     def _oracle_price(self, oracle_address: str) -> int:
         if self._rpc_url is None:
-            raise ValueError("rpc_url is required for Morpho pre-liquidation oracle reads")
+            msg = "rpc_url is required for Morpho pre-liquidation oracle reads"
+            raise ValueError(msg)
         if self._web3 is None:
             self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
         oracle = self._web3.eth.contract(
@@ -533,7 +564,8 @@ class MorphoPreLiquidationClient(AsyncGraphqlAdapterClient):
 def hyperindex_market_id(chain_id: int, market_id: str) -> str:
     """Return official HyperIndex market id format."""
     if not is_bytes32(market_id):
-        raise ValueError("market_id must be a bytes32 hex string")
+        msg = "market_id must be a bytes32 hex string"
+        raise ValueError(msg)
     return f"{chain_id}-{market_id.lower()}"
 
 
@@ -542,7 +574,8 @@ def ensure_hyperindex_market_id(chain_id: int, market_id: str) -> str:
     if "-" in market_id:
         prefix, raw_market_id = market_id.split("-", 1)
         if int(prefix) != chain_id:
-            raise ValueError(f"market id chain {prefix} does not match requested chain {chain_id}")
+            msg = f"market id chain {prefix} does not match requested chain {chain_id}"
+            raise ValueError(msg)
         return hyperindex_market_id(chain_id, raw_market_id)
     return hyperindex_market_id(chain_id, market_id)
 
@@ -550,7 +583,8 @@ def ensure_hyperindex_market_id(chain_id: int, market_id: str) -> str:
 def pre_liquidation_contract_from_graphql(row: object) -> MorphoPreLiquidationContract:
     """Map official HyperIndex row shape to a typed contract config."""
     if not isinstance(row, dict):
-        raise ValueError("PreLiquidationContract row must be an object")
+        msg = "PreLiquidationContract row must be an object"
+        raise ValueError(msg)
     raw = cast("dict[str, object]", row)
     chain_id, market_id = split_hyperindex_market_id(_require_str(raw, "market_id"))
     return MorphoPreLiquidationContract(
@@ -573,14 +607,17 @@ def pre_liquidation_authorization_from_graphql(
 ) -> MorphoPreLiquidationAuthorization:
     """Map official HyperIndex Authorization row shape to a typed record."""
     if not isinstance(row, dict):
-        raise ValueError("Authorization row must be an object")
+        msg = "Authorization row must be an object"
+        raise ValueError(msg)
     raw = cast("dict[str, object]", row)
     authorizer = _require_str(raw, "authorizer")
     authorizee = _require_str(raw, "authorizee")
     if not is_address(authorizer) or authorizer.lower() == ZERO_ADDRESS:
-        raise ValueError("authorizer must be a non-zero address")
+        msg = "authorizer must be a non-zero address"
+        raise ValueError(msg)
     if not is_address(authorizee) or authorizee.lower() == ZERO_ADDRESS:
-        raise ValueError("authorizee must be a non-zero address")
+        msg = "authorizee must be a non-zero address"
+        raise ValueError(msg)
     return MorphoPreLiquidationAuthorization(
         chain_id=chain_id,
         authorizer=authorizer,
@@ -591,12 +628,14 @@ def pre_liquidation_authorization_from_graphql(
 def pre_liquidation_position_from_graphql(row: object) -> MorphoPreLiquidationIndexedPosition:
     """Map official HyperIndex Position row shape to a typed borrowing row."""
     if not isinstance(row, dict):
-        raise ValueError("Position row must be an object")
+        msg = "Position row must be an object"
+        raise ValueError(msg)
     raw = cast("dict[str, object]", row)
     chain_id, market_id = split_hyperindex_market_id(_require_str(raw, "market_id"))
     borrower = _require_str(raw, "user")
     if not is_address(borrower) or borrower.lower() == ZERO_ADDRESS:
-        raise ValueError("position user must be a non-zero address")
+        msg = "position user must be a non-zero address"
+        raise ValueError(msg)
     return MorphoPreLiquidationIndexedPosition(
         chain_id=chain_id,
         market_id=market_id,
@@ -614,7 +653,8 @@ def authorized_contracts_for_borrower(
 ) -> list[MorphoPreLiquidationContract]:
     """Return pre-liquidation contracts authorized by `borrower`."""
     if not is_address(borrower) or borrower.lower() == ZERO_ADDRESS:
-        raise ValueError("borrower must be a non-zero address")
+        msg = "borrower must be a non-zero address"
+        raise ValueError(msg)
 
     authorized_addresses = {
         authorization.authorizee.lower()
@@ -741,9 +781,11 @@ def select_pre_liquidation_candidates(
     candidates: list[MorphoPreLiquidationCandidate] = []
     for position in positions:
         if not is_bytes32(position.market_id):
-            raise ValueError("position market_id must be a bytes32 hex string")
+            msg = "position market_id must be a bytes32 hex string"
+            raise ValueError(msg)
         if not is_address(position.borrower) or position.borrower.lower() == ZERO_ADDRESS:
-            raise ValueError("position borrower must be a non-zero address")
+            msg = "position borrower must be a non-zero address"
+            raise ValueError(msg)
 
         market_id = position.market_id.lower()
         market_lltv = market_lltv_by_id.get(market_id)
@@ -803,12 +845,15 @@ def _dedupe_pre_liquidation_candidates(
 def split_hyperindex_market_id(indexed_market_id: str) -> tuple[int, str]:
     """Split `<chainId>-<marketId>` into `(chain_id, market_id)`."""
     if "-" not in indexed_market_id:
-        raise ValueError("indexed market_id must be '<chainId>-<bytes32>'")
+        msg = "indexed market_id must be '<chainId>-<bytes32>'"
+        raise ValueError(msg)
     chain_id_raw, market_id = indexed_market_id.split("-", 1)
     if not chain_id_raw.isdecimal():
-        raise ValueError("indexed market_id chain id must be decimal")
+        msg = "indexed market_id chain id must be decimal"
+        raise ValueError(msg)
     if not is_bytes32(market_id):
-        raise ValueError("indexed market_id must contain a bytes32 market id")
+        msg = "indexed market_id must contain a bytes32 market id"
+        raise ValueError(msg)
     return int(chain_id_raw), market_id.lower()
 
 
@@ -825,7 +870,8 @@ def is_bytes32(value: str) -> bool:
 def normalize_address(value: str) -> str:
     """Normalize an address to lowercase hex after shape validation."""
     if not is_address(value):
-        raise ValueError("address must be a 20-byte hex string")
+        msg = "address must be a 20-byte hex string"
+        raise ValueError(msg)
     return value.lower()
 
 
@@ -852,7 +898,8 @@ def mul_div_down(a: int, b: int, denominator: int) -> int:
 def to_assets_up(shares: int, total_assets: int, total_shares: int) -> int:
     """Morpho SharesMathLib `toAssetsUp` with virtual shares/assets."""
     if shares < 0 or total_assets < 0 or total_shares < 0:
-        raise ValueError("shares and totals must be non-negative")
+        msg = "shares and totals must be non-negative"
+        raise ValueError(msg)
     denominator = total_shares + 10**6
     return (shares * (total_assets + 1) + denominator - 1) // denominator
 
@@ -865,41 +912,44 @@ def _derive_morpho_market_id(
     irm: str,
     lltv: int,
 ) -> str:
-    encoded = b"".join(
-        (
-            _encode_address(loan_token),
-            _encode_address(collateral_token),
-            _encode_address(oracle),
-            _encode_address(irm),
-            int(lltv).to_bytes(32, "big"),
-        )
-    )
+    encoded = b"".join((
+        _encode_address(loan_token),
+        _encode_address(collateral_token),
+        _encode_address(oracle),
+        _encode_address(irm),
+        int(lltv).to_bytes(32, "big"),
+    ))
     return Web3.to_hex(Web3.keccak(encoded))
 
 
 def _encode_address(address: str) -> bytes:
     if not is_address(address) or address.lower() == ZERO_ADDRESS:
-        raise ValueError(f"expected non-zero 20-byte address, got {address!r}")
+        msg = f"expected non-zero 20-byte address, got {address!r}"
+        raise ValueError(msg)
     return bytes.fromhex(address.removeprefix("0x")).rjust(32, b"\x00")
 
 
 def _require_str(row: dict[str, object], field: str) -> str:
     value = row.get(field)
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be a string")
+        msg = f"{field} must be a string"
+        raise ValueError(msg)
     return value
 
 
 def _parse_uint(value: object, field: str) -> int:
     if isinstance(value, bool):
-        raise ValueError(f"{field} must be an unsigned integer")
+        msg = f"{field} must be an unsigned integer"
+        raise ValueError(msg)
     if isinstance(value, int):
         if value < 0:
-            raise ValueError(f"{field} must be an unsigned integer")
+            msg = f"{field} must be an unsigned integer"
+            raise ValueError(msg)
         return value
     if isinstance(value, str) and value.isdecimal():
         return int(value)
-    raise ValueError(f"{field} must be an unsigned integer")
+    msg = f"{field} must be an unsigned integer"
+    raise ValueError(msg)
 
 
 def main() -> None:

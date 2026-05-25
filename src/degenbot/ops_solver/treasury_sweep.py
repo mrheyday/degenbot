@@ -25,7 +25,8 @@ def main() -> None:
     # TODO(scaffold): propose all rescue calls as a single SafeTx
     #                 (multiSend) so signers approve one bundle.
     # TODO(scaffold): structured-log proposed SafeTxHash + per-token amounts.
-    raise NotImplementedError("TODO(scaffold): implement treasury sweep proposer")
+    msg = "TODO(scaffold): implement treasury sweep proposer"
+    raise NotImplementedError(msg)
 
 
 if __name__ == "__main__":

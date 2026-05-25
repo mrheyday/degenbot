@@ -128,10 +128,6 @@ class SolutionBuilder:
             if isinstance(quote, BaseException):
                 continue
 
-            # Compute margin: (our_quote - user_limit) * size
-            # Margin = quote.buy_amount - order.buy_amount
-            # (Note: this assumes SELL order kind; BUY kind is symmetric)
-
             margin_wei = int(quote.buy_amount) - int(order.buy_amount)
 
             # Estimate profit in USD using buy_token's reference_price

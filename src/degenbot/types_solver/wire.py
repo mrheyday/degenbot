@@ -22,8 +22,7 @@ Spec
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +35,30 @@ from degenbot.types_solver.executor import (
     SwapStep,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+
+class MorphoMarketParams(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    loan_token: str = Field(alias="loanToken")
+    collateral_token: str = Field(alias="collateralToken")
+    oracle: str
+    irm: str
+    lltv: int
+
+
+class MorphoLiquidationOpportunityPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    market_id: str = Field(alias="marketId")
+    market_params: MorphoMarketParams = Field(alias="marketParams")
+    borrower: str
+    repaid_shares: int = Field(alias="repaidShares")
+    expected_seized_assets: int = Field(alias="expectedSeizedAssets")
+    ranking_score_bps: int = Field(alias="rankingScoreBps")
+    risk_cost_wei: int = Field(alias="riskCostWei")
+    bad_debt_mode: str = Field(alias="badDebtMode")
+
 
 class Opportunity(BaseModel):
     """Coordinator/engine opportunity envelope consumed by strategy routing.
@@ -44,6 +67,7 @@ class Opportunity(BaseModel):
     the fields currently used by the migrated TypeScript decision and native
     arbitrage strategy modules while preserving raw integer amounts.
     """
+
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     id: str
@@ -57,6 +81,9 @@ class Opportunity(BaseModel):
     path: Sequence[SwapStep] = Field(default_factory=list)
     detected_at_ns: int = Field(default=0, alias="detectedAtNs")
     pool_addresses: Sequence[str] = Field(default_factory=list, alias="poolAddresses")
+    morpho_liquidation: MorphoLiquidationOpportunityPayload | None = Field(
+        default=None, alias="morphoLiquidation"
+    )
 
 
 def from_wire_json(s: str) -> dict[str, Any]:

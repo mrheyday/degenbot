@@ -78,8 +78,12 @@ def _div_round(numerator: int, denominator: int) -> int:
 
 
 FEE_DENSITY_SNAPSHOT: tuple[ProtocolFeeSnapshot, ...] = (
-    ProtocolFeeSnapshot("gmx", 193_160_000, 1_971_600, 48_700, 18_000, 1_220, 57_500_000, 88_800_000),
-    ProtocolFeeSnapshot("Ostium", 48_300_000, 2_419_400, 31_200, 5_600, 6_010, 31_300_000, 98_500_000),
+    ProtocolFeeSnapshot(
+        "gmx", 193_160_000, 1_971_600, 48_700, 18_000, 1_220, 57_500_000, 88_800_000
+    ),
+    ProtocolFeeSnapshot(
+        "Ostium", 48_300_000, 2_419_400, 31_200, 5_600, 6_010, 31_300_000, 98_500_000
+    ),
     ProtocolFeeSnapshot("aave", 468_960_000, 7_647_100, 29_300, 3_600, 1_960, None, None),
     ProtocolFeeSnapshot("fluid", 132_280_000, 505_200, 19_800, 2_500, 460, None, None),
     ProtocolFeeSnapshot("morpho", 55_510_000, 167_100, 4_700, 0, 360, None, None),
@@ -117,7 +121,7 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         ),
         proof_refs=(
             "contracts/test/fork/LiquidationExecutor.morpho.fork.t.sol",
-            "solver/driver/tests/test_arbitrum_mev_market_map.py",
+            "vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",
         ),
     ),
     StrategyPriority(
@@ -165,11 +169,11 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         code_refs=(
             "contracts/src/executors/AtomicExecutor.sol",
             "coordinator/src/integration/native-arb-e2e.test.ts",
-            "solver/driver/execution/uniswap_addresses.py",
+            "vendor/degenbot/src/degenbot/execution_adapters/uniswap_addresses.py",
         ),
         proof_refs=(
             "contracts/test/unit/AtomicExecutor.t.sol",
-            "solver/driver/tests/test_arbitrum_mev_market_map.py",
+            "vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",
         ),
     ),
     StrategyPriority(
@@ -197,7 +201,7 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         ),
         proof_refs=(
             "coordinator/src/integration/native-arb-e2e.test.ts",
-            "solver/driver/tests/test_arbitrum_mev_market_map.py",
+            "vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",
         ),
     ),
     StrategyPriority(
@@ -243,9 +247,9 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         code_refs=(
             ".agents/skills/jaredbot-mev-jit-v4/SKILL.md",
             "coordinator/src/strategies/v4-hooks.ts",
-            "solver/driver/execution/uniswap_addresses.py",
+            "vendor/degenbot/src/degenbot/execution_adapters/uniswap_addresses.py",
         ),
-        proof_refs=("solver/driver/tests/test_arbitrum_mev_market_map.py",),
+        proof_refs=("vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",),
     ),
     StrategyPriority(
         rank=7,
@@ -259,8 +263,8 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         ),
         immediate_action="Decode Boros settlement events and compare execution price against spot references.",
         execution_gate="No Boros adapter, oracle model, or settlement simulator exists yet; ranking only.",
-        code_refs=("solver/driver/tests/test_jaredbot_onchain_intel.py",),
-        proof_refs=("solver/driver/tests/test_arbitrum_mev_market_map.py",),
+        code_refs=("vendor/degenbot/tests/solver_driver/test_jaredbot_onchain_intel.py",),
+        proof_refs=("vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",),
     ),
     StrategyPriority(
         rank=8,
@@ -297,7 +301,7 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
         immediate_action="Do not build S-1 as framed; reopen only with new verified permissionless settlement hooks.",
         execution_gate="Requires a verified Variational event/call surface with externally capturable value.",
         code_refs=("docs/research/2026-05-17-variational-s1-recon.md",),
-        proof_refs=("solver/driver/tests/test_arbitrum_mev_market_map.py",),
+        proof_refs=("vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",),
     ),
     StrategyPriority(
         rank=99,
@@ -310,8 +314,8 @@ STRATEGY_PRIORITIES: tuple[StrategyPriority, ...] = (
             "Do not allocate implementation priority before Morpho, UniswapX, cyclic arb, Atlas, or Boros work."
         ),
         execution_gate="Requires fresh evidence that expected EV exceeds higher-ranked lanes.",
-        code_refs=("solver/driver/strategies/arbitrum_mev_market_map.py",),
-        proof_refs=("solver/driver/tests/test_arbitrum_mev_market_map.py",),
+        code_refs=("vendor/degenbot/src/degenbot/strategies_solver/arbitrum_mev_market_map.py",),
+        proof_refs=("vendor/degenbot/tests/solver_driver/test_arbitrum_mev_market_map.py",),
     ),
 )
 
@@ -325,7 +329,8 @@ def protocol_snapshot(protocol: str) -> ProtocolFeeSnapshot:
     try:
         return _SNAPSHOT_BY_PROTOCOL[protocol.lower()]
     except KeyError as exc:
-        raise KeyError(f"unknown protocol in Arbitrum MEV snapshot: {protocol}") from exc
+        msg = f"unknown protocol in Arbitrum MEV snapshot: {protocol}"
+        raise KeyError(msg) from exc
 
 
 def strategy_priority(strategy_id: str) -> StrategyPriority:
@@ -333,7 +338,8 @@ def strategy_priority(strategy_id: str) -> StrategyPriority:
     try:
         return _PRIORITY_BY_ID[strategy_id]
     except KeyError as exc:
-        raise KeyError(f"unknown Arbitrum strategy priority: {strategy_id}") from exc
+        msg = f"unknown Arbitrum strategy priority: {strategy_id}"
+        raise KeyError(msg) from exc
 
 
 def ranked_strategy_priorities(
@@ -344,7 +350,9 @@ def ranked_strategy_priorities(
     priorities = (
         STRATEGY_PRIORITIES
         if include_deprioritized
-        else tuple(p for p in STRATEGY_PRIORITIES if p.status is not StrategyPocStatus.DEPRIORITIZED)
+        else tuple(
+            p for p in STRATEGY_PRIORITIES if p.status is not StrategyPocStatus.DEPRIORITIZED
+        )
     )
     return tuple(sorted(priorities, key=lambda p: p.rank))
 
@@ -361,7 +369,9 @@ def highest_open_interest_protocol() -> ProtocolFeeSnapshot:
     return max(rows, key=lambda row: row.oi_usd or 0)
 
 
-def snapshot_density_matches_table(row: ProtocolFeeSnapshot, *, abs_tolerance_bps: int = 15) -> bool:
+def snapshot_density_matches_table(
+    row: ProtocolFeeSnapshot, *, abs_tolerance_bps: int = 15
+) -> bool:
     """True when recomputed annualised density matches supplied table value."""
     if row.fee_density_bps is None:
         return row.annualized_fee_density_bps is None

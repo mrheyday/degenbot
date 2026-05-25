@@ -348,7 +348,7 @@ class SolverEngineApp:
             # Strategy produced something we can't ship — refuse rather
             # than risk submitting malformed work.
             SOLVE_REQUESTS.labels(outcome="invalid_outbound").inc()
-            log.error(
+            log.exception(
                 "solve_invalid_outbound",
                 auction_id=auction.id,
                 errors=err.errors(),

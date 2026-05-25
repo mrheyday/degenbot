@@ -5,6 +5,7 @@ use crate::bit_math;
 pub const WAD_UINT: U256 = U256::from_limbs([1_000_000_000_000_000_000, 0, 0, 0]);
 pub const Q96: U256 = U256::from_limbs([0, 0x0000_0001_0000_0000, 0, 0]);
 pub const Q128: U256 = U256::from_limbs([0, 0, 1, 0]);
+pub const V2_FEE_DENOMINATOR_BPS: U256 = U256::from_limbs([10_000, 0, 0, 0]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathError {
@@ -15,6 +16,28 @@ pub enum MathError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerOfTwoError {
     Overflow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum V2OptimizationError {
+    EmptyPath,
+    InvalidReserves,
+    InvalidFeeBps(U256),
+    Overflow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct V2PoolHop {
+    pub reserve_in: U256,
+    pub reserve_out: U256,
+    pub fee_bps: U256,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct V2CycleQuote {
+    pub amount_in: U256,
+    pub amount_out: U256,
+    pub profit: U256,
 }
 
 pub fn clz256(x: U256) -> U256 {
@@ -299,4 +322,144 @@ pub fn first_non_zero_byte_offset(x: U256) -> U256 {
 
 pub fn leading_zero_bytes(x: U256) -> U256 {
     clz256(x) >> 3
+}
+
+pub fn v2_amount_out(hop: V2PoolHop, amount_in: U256) -> Result<U256, V2OptimizationError> {
+    validate_v2_hop(hop)?;
+    if amount_in == U256::ZERO {
+        return Ok(U256::ZERO);
+    }
+
+    let fee_multiplier = V2_FEE_DENOMINATOR_BPS - hop.fee_bps;
+    let amount_in_after_fee = checked_mul_u512(U512::from(amount_in), U512::from(fee_multiplier))?;
+    let numerator = checked_mul_u512(amount_in_after_fee, U512::from(hop.reserve_out))?;
+    let denominator = checked_add_u512(
+        checked_mul_u512(
+            U512::from(hop.reserve_in),
+            U512::from(V2_FEE_DENOMINATOR_BPS),
+        )?,
+        amount_in_after_fee,
+    )?;
+    narrow_u512_to_v2(numerator / denominator)
+}
+
+pub fn v2_route_output(hops: &[V2PoolHop], amount_in: U256) -> Result<U256, V2OptimizationError> {
+    if hops.is_empty() {
+        return Err(V2OptimizationError::EmptyPath);
+    }
+
+    let mut amount = amount_in;
+    for hop in hops {
+        amount = v2_amount_out(*hop, amount)?;
+    }
+    Ok(amount)
+}
+
+pub fn optimal_v2_cycle_input(hops: &[V2PoolHop]) -> Result<U256, V2OptimizationError> {
+    let (k, m, n) = v2_route_mobius_coefficients(hops)?;
+    if k <= n || m == U512::ZERO {
+        return Ok(U256::ZERO);
+    }
+
+    let target = checked_mul_u512(k, n)?;
+    let root = sqrt_u512(target);
+    if root <= n {
+        return Ok(U256::ZERO);
+    }
+
+    narrow_u512_to_v2((root - n) / m)
+}
+
+pub fn optimal_v2_cycle_quote(hops: &[V2PoolHop]) -> Result<V2CycleQuote, V2OptimizationError> {
+    let amount_in = optimal_v2_cycle_input(hops)?;
+    if amount_in == U256::ZERO {
+        return Ok(V2CycleQuote {
+            amount_in,
+            amount_out: U256::ZERO,
+            profit: U256::ZERO,
+        });
+    }
+
+    let amount_out = v2_route_output(hops, amount_in)?;
+    Ok(V2CycleQuote {
+        amount_in,
+        amount_out,
+        profit: amount_out.saturating_sub(amount_in),
+    })
+}
+
+fn v2_route_mobius_coefficients(
+    hops: &[V2PoolHop],
+) -> Result<(U512, U512, U512), V2OptimizationError> {
+    let Some(first) = hops.first().copied() else {
+        return Err(V2OptimizationError::EmptyPath);
+    };
+    validate_v2_hop(first)?;
+
+    let denominator = U512::from(V2_FEE_DENOMINATOR_BPS);
+    let mut fee_multiplier = U512::from(V2_FEE_DENOMINATOR_BPS - first.fee_bps);
+    let mut k = checked_mul_u512(fee_multiplier, U512::from(first.reserve_out))?;
+    let mut m = fee_multiplier;
+    let mut n = checked_mul_u512(denominator, U512::from(first.reserve_in))?;
+
+    for hop in &hops[1..] {
+        validate_v2_hop(*hop)?;
+        fee_multiplier = U512::from(V2_FEE_DENOMINATOR_BPS - hop.fee_bps);
+        let reserve_in_term = checked_mul_u512(denominator, U512::from(hop.reserve_in))?;
+        let next_k = checked_mul_u512(
+            checked_mul_u512(fee_multiplier, U512::from(hop.reserve_out))?,
+            k,
+        )?;
+        let next_m = checked_add_u512(
+            checked_mul_u512(fee_multiplier, k)?,
+            checked_mul_u512(reserve_in_term, m)?,
+        )?;
+        let next_n = checked_mul_u512(reserve_in_term, n)?;
+        k = next_k;
+        m = next_m;
+        n = next_n;
+    }
+
+    Ok((k, m, n))
+}
+
+fn validate_v2_hop(hop: V2PoolHop) -> Result<(), V2OptimizationError> {
+    if hop.reserve_in == U256::ZERO || hop.reserve_out == U256::ZERO {
+        return Err(V2OptimizationError::InvalidReserves);
+    }
+    if hop.fee_bps >= V2_FEE_DENOMINATOR_BPS {
+        return Err(V2OptimizationError::InvalidFeeBps(hop.fee_bps));
+    }
+    Ok(())
+}
+
+fn sqrt_u512(x: U512) -> U512 {
+    if x <= U512::from(1) {
+        return x;
+    }
+
+    let mut z = x;
+    loop {
+        let y = (z + x / z) >> 1;
+        if y >= z {
+            return z;
+        }
+        z = y;
+    }
+}
+
+fn narrow_u512_to_v2(value: U512) -> Result<U256, V2OptimizationError> {
+    if value > U512::from(U256::MAX) {
+        Err(V2OptimizationError::Overflow)
+    } else {
+        Ok(U256::from(value))
+    }
+}
+
+fn checked_add_u512(a: U512, b: U512) -> Result<U512, V2OptimizationError> {
+    a.checked_add(b).ok_or(V2OptimizationError::Overflow)
+}
+
+fn checked_mul_u512(a: U512, b: U512) -> Result<U512, V2OptimizationError> {
+    a.checked_mul(b).ok_or(V2OptimizationError::Overflow)
 }

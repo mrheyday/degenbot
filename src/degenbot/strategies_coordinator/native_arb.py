@@ -16,11 +16,11 @@ from degenbot.strategies_coordinator.types import (
 from degenbot.strategies_coordinator.types import (
     SwapStep as ContractSwapStep,
 )
-from degenbot.types_solver.wire import Opportunity
-from degenbot.types_solver.wire import SwapStep as EngineSwapStep
 
 if TYPE_CHECKING:
     from degenbot.adapters.config import Settings
+    from degenbot.types_solver.wire import Opportunity
+    from degenbot.types_solver.wire import SwapStep as EngineSwapStep
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,8 @@ class NativeArbStrategy:
     def build_params(self, opp: Opportunity) -> NativeArbParams:
         """Build NativeArbParams from an engine Opportunity."""
         if opp.flash_amount <= 0:
-            raise ValueError("NativeArbStrategy: flashAmount must be > 0")
+            msg = "NativeArbStrategy: flashAmount must be > 0"
+            raise ValueError(msg)
 
         recipient = self._settings.executor_address
         min_profit = (opp.estimated_profit_wei * MIN_PROFIT_BPS_OF_ESTIMATE) // BPS_DENOMINATOR
@@ -59,10 +60,7 @@ class NativeArbStrategy:
 
         deadline = int(time.time()) + DEFAULT_DEADLINE_BUFFER_S
 
-        swaps = [
-            self._map_engine_swap_to_contract(step, recipient, deadline)
-            for step in opp.path
-        ]
+        swaps = [self._map_engine_swap_to_contract(step, recipient, deadline) for step in opp.path]
 
         return NativeArbParams(
             flash_lender=flash_route.lender,

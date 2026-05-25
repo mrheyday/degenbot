@@ -65,26 +65,45 @@ class TestMorphoFlashLoanBuilderValidation:
 
 
 class TestMorphoFlashLoanBuilderEncode:
-    def test_encode_default_strategy_raises_not_implemented(self) -> None:
-        b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
-        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"\x00")
-        with pytest.raises(NotImplementedError, match="eth_abi"):
-            b.encode_executor_calldata(req)
+    @pytest.fixture
+    def mock_swaps(self) -> list[dict]:
+        return [
+            {
+                "dex_kind": "UniswapV2",
+                "router": _EXECUTOR,
+                "call_data": b"\xde\xad\xbe\xef",
+                "token_in": _USDC,
+                "token_out": _USDC,
+                "amount_in": 1_000_000,
+                "amount_out_min": 0,
+            }
+        ]
 
-    def test_encode_match_internal_strategy_raises_not_implemented(self) -> None:
+    def test_encode_native_arb_strategy_succeeds(self, mock_swaps: list[dict]) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
-        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"\x00")
-        with pytest.raises(NotImplementedError):
-            b.encode_executor_calldata(req, strategy="match_internal")
+        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
+        calldata = b.encode_executor_calldata(
+            req, strategy="native_arb", swaps=mock_swaps, min_profit=1, deadline=999999
+        )
+        assert isinstance(calldata, bytes)
+        assert len(calldata) > 4
+        # executeNativeArb selector
+        assert calldata.hex().startswith("f6f6add1")
 
-    def test_encode_compose_four_leg_strategy_raises_not_implemented(self) -> None:
+    def test_encode_match_internal_strategy_raises_not_implemented(self, mock_swaps: list[dict]) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
-        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"\x00")
-        with pytest.raises(NotImplementedError):
-            b.encode_executor_calldata(req, strategy="compose_four_leg")
+        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
+        with pytest.raises(NotImplementedError, match="not yet implemented"):
+            b.encode_executor_calldata(req, strategy="match_internal", swaps=mock_swaps)
+
+    def test_encode_compose_four_leg_strategy_raises_not_implemented(self, mock_swaps: list[dict]) -> None:
+        b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
+        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
+        with pytest.raises(NotImplementedError, match="not yet implemented"):
+            b.encode_executor_calldata(req, strategy="compose_four_leg", swaps=mock_swaps)
 
     def test_encode_unknown_strategy_rejected(self) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
-        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"\x00")
+        req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
         with pytest.raises(ValueError, match="Unsupported strategy"):
             b.encode_executor_calldata(req, strategy="not_a_real_strategy")

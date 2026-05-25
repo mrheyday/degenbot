@@ -11,6 +11,7 @@ from degenbot.matching.price_compat import clearing_price, fill_amount, is_price
 
 try:
     from degenbot.degenbot_rs import find_best_match_json
+
     HAS_RUST_ACCEL = True
 except ImportError:
     HAS_RUST_ACCEL = False
@@ -52,7 +53,7 @@ def find_best_match(
 
             res_json = find_best_match_json(
                 json.dumps([o.model_dump(by_alias=True) for o in outbound_list]),
-                json.dumps([c.model_dump(by_alias=True) for c in counters_list])
+                json.dumps([c.model_dump(by_alias=True) for c in counters_list]),
             )
             if res_json:
                 data = json.loads(res_json)

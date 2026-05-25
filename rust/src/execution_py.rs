@@ -257,7 +257,12 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
     Ok(PyBytes::new(py, calldata.as_ref()))
 }
 
+use crate::simulation::curve::CurveSnapshot;
+use crate::simulation::curve_optimize::optimal_input_2pool_curve;
 use crate::simulation::v2_optimize::optimal_input_2pool;
+use crate::simulation::v3::V3Snapshot;
+use crate::simulation::v3_optimize::optimal_input_2pool_v3;
+use alloy::primitives::U256;
 
 /// Calculate the optimal input amount for a 2-pool Uniswap V2 arbitrage cycle.
 #[pyfunction]
@@ -282,12 +287,77 @@ pub fn optimal_input_2pool_py(
     Ok(result.to_string())
 }
 
+/// Calculate the optimal input amount for a 2-pool V3 arbitrage cycle.
+#[pyfunction]
+#[pyo3(name = "optimal_input_2pool_v3")]
+pub fn optimal_input_2pool_v3_py(
+    pool1_v3_json: String,
+    pool1_zero_for_one: bool,
+    pool2_v3_json: Option<String>,
+    pool2_v2_data: Option<(String, String, u32)>,
+) -> PyResult<String> {
+    let p1: V3Snapshot = serde_json::from_str(&pool1_v3_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid p1 json: {e}")))?;
+
+    let p2v3: Option<V3Snapshot> = if let Some(json) = pool2_v3_json {
+        Some(serde_json::from_str(&json)
+            .map_err(|e| PyValueError::new_err(format!("invalid p2 json: {e}")))?)
+    } else {
+        None
+    };
+
+    let p2v2: Option<(U256, U256, u32)> = if let Some(data) = pool2_v2_data {
+        Some((
+            U256::from_str_radix(&data.0, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
+            U256::from_str_radix(&data.1, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
+            data.2
+        ))
+    } else {
+        None
+    };
+
+    let result = optimal_input_2pool_v3(&p1, pool1_zero_for_one, p2v3.as_ref(), p2v2)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    Ok(result.to_string())
+}
+
+/// Calculate the optimal input amount for a 2-pool Curve arbitrage cycle.
+#[pyfunction]
+#[pyo3(name = "optimal_input_2pool_curve")]
+pub fn optimal_input_2pool_curve_py(
+    pool_curve_json: String,
+    i: usize,
+    j: usize,
+    pool2_v2_data: Option<(String, String, u32)>,
+) -> PyResult<String> {
+    let p_curve: CurveSnapshot = serde_json::from_str(&pool_curve_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid curve json: {e}")))?;
+
+    let p2v2: Option<(U256, U256, u32)> = if let Some(data) = pool2_v2_data {
+        Some((
+            U256::from_str_radix(&data.0, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
+            U256::from_str_radix(&data.1, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
+            data.2
+        ))
+    } else {
+        None
+    };
+
+    let result = optimal_input_2pool_curve(&p_curve, i, j, p2v2)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    Ok(result.to_string())
+}
+
 /// Add executor module to Python module.
 pub fn add_execution_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_native_arb_calldata_py, m)?)?;
     m.add_function(wrap_pyfunction!(encode_match_internal_calldata_py, m)?)?;
     m.add_function(wrap_pyfunction!(encode_compose_four_leg_calldata_py, m)?)?;
     m.add_function(wrap_pyfunction!(optimal_input_2pool_py, m)?)?;
+    m.add_function(wrap_pyfunction!(optimal_input_2pool_v3_py, m)?)?;
+    m.add_function(wrap_pyfunction!(optimal_input_2pool_curve_py, m)?)?;
     Ok(())
 }
 

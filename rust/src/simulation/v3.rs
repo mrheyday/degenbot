@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use alloy::primitives::{I256, U256};
+use serde::{Deserialize, Serialize};
 use eyre::{eyre, Result};
 
 use super::uniswap_v3_math::liquidity_math::add_delta;
@@ -25,7 +26,7 @@ use super::uniswap_v3_math::tick_provider::TickProvider;
 
 /// Compact V3 pool state needed for simulation. Mirrors the relevant
 /// `Reserves::V3` fields plus the active-tick liquidity ladder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct V3Snapshot {
     pub sqrt_price_x96: U256,
     pub liquidity: u128,

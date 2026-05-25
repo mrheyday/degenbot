@@ -17,6 +17,7 @@ Run
 from __future__ import annotations
 
 import json
+import operator
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,9 @@ from degenbot.types_solver.wire import (
 # sibling top-level workspaces, so the relative jump is stable.
 # ---------------------------------------------------------------------------
 
-_FIXTURES_PATH: Path = Path(__file__).resolve().parents[3] / "coordinator" / "src" / "types" / "fixtures.json"
+_FIXTURES_PATH: Path = (
+    Path(__file__).resolve().parents[3] / "coordinator" / "src" / "types" / "fixtures.json"
+)
 
 
 def _load_fixtures() -> list[dict[str, Any]]:
@@ -179,7 +182,9 @@ def test_dex_kind_ordinals() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("fixture", _fixtures_for("executeNativeArb"), ids=lambda f: f["name"])
+@pytest.mark.parametrize(
+    "fixture", _fixtures_for("executeNativeArb"), ids=operator.itemgetter("name")
+)
 def test_native_arb_fixtures_lock(fixture: dict[str, Any]) -> None:
     """Each NativeArbParams fixture must round-trip through wire+encode unchanged."""
     params = native_arb_from_wire(fixture["params"])
@@ -189,7 +194,7 @@ def test_native_arb_fixtures_lock(fixture: dict[str, Any]) -> None:
     )
 
 
-@pytest.mark.parametrize("fixture", _fixtures_for("matchInternal"), ids=lambda f: f["name"])
+@pytest.mark.parametrize("fixture", _fixtures_for("matchInternal"), ids=operator.itemgetter("name"))
 def test_match_internal_fixtures_lock(fixture: dict[str, Any]) -> None:
     """Each MatchParams fixture must round-trip through wire+encode unchanged."""
     params = match_params_from_wire(fixture["params"])
@@ -199,7 +204,9 @@ def test_match_internal_fixtures_lock(fixture: dict[str, Any]) -> None:
     )
 
 
-@pytest.mark.parametrize("fixture", _fixtures_for("composeFourLeg"), ids=lambda f: f["name"])
+@pytest.mark.parametrize(
+    "fixture", _fixtures_for("composeFourLeg"), ids=operator.itemgetter("name")
+)
 def test_compose_four_leg_fixtures_lock(fixture: dict[str, Any]) -> None:
     """Each ComposeParams fixture must round-trip through wire+encode unchanged."""
     params = compose_params_from_wire(fixture["params"])

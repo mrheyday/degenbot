@@ -14,6 +14,14 @@ fn m(value: u64) -> U256 {
     U256::from(value) * U256::from(SCALE)
 }
 
+fn usdc(value: u64) -> U256 {
+    U256::from(value) * U256::from(1_000_000u64)
+}
+
+fn abs_diff(a: U256, b: U256) -> U256 {
+    if a > b { a - b } else { b - a }
+}
+
 fn id(label: &str) -> FixedBytes<32> {
     keccak256(label.as_bytes())
 }
@@ -279,6 +287,73 @@ fn mega_mev_power_sqrt_and_fixed_point_helpers_match_solidity() {
         mega_mev_optimization::mul_div_up(U256::from(10), U256::from(10), U256::from(3))
     );
     assert_eq!(Ok(m(2)), mega_mev_optimization::mul_wad_down(m(1), m(2)));
+}
+
+#[test]
+fn mega_mev_v2_closed_form_cycle_optimizer_matches_degencode_worked_example() {
+    let hops = [
+        mega_mev_optimization::V2PoolHop {
+            reserve_in: usdc(1_960_000),
+            reserve_out: m(1_000),
+            fee_bps: U256::from(30),
+        },
+        mega_mev_optimization::V2PoolHop {
+            reserve_in: m(1_000),
+            reserve_out: usdc(2_000_000),
+            fee_bps: U256::from(30),
+        },
+    ];
+
+    let quote = mega_mev_optimization::optimal_v2_cycle_quote(&hops).unwrap();
+
+    assert!(abs_diff(quote.amount_in, U256::from(7_011_164_978u64)) <= usdc(2));
+    assert!(abs_diff(quote.profit, U256::from(49_934_100u64)) <= usdc(2));
+    assert_eq!(
+        Ok(quote.amount_out),
+        mega_mev_optimization::v2_route_output(&hops, quote.amount_in)
+    );
+    assert_eq!(quote.amount_out - quote.amount_in, quote.profit);
+
+    let lower_amount = quote.amount_in - usdc(100);
+    let upper_amount = quote.amount_in + usdc(100);
+    let lower_profit =
+        mega_mev_optimization::v2_route_output(&hops, lower_amount).unwrap() - lower_amount;
+    let upper_profit =
+        mega_mev_optimization::v2_route_output(&hops, upper_amount).unwrap() - upper_amount;
+    assert!(quote.profit >= lower_profit);
+    assert!(quote.profit >= upper_profit);
+}
+
+#[test]
+fn mega_mev_v2_closed_form_cycle_optimizer_fails_closed() {
+    let flat = [
+        mega_mev_optimization::V2PoolHop {
+            reserve_in: usdc(2_000_000),
+            reserve_out: m(1_000),
+            fee_bps: U256::from(30),
+        },
+        mega_mev_optimization::V2PoolHop {
+            reserve_in: m(1_000),
+            reserve_out: usdc(2_000_000),
+            fee_bps: U256::from(30),
+        },
+    ];
+    assert_eq!(
+        Ok(U256::ZERO),
+        mega_mev_optimization::optimal_v2_cycle_input(&flat)
+    );
+
+    let invalid_fee = [mega_mev_optimization::V2PoolHop {
+        reserve_in: usdc(1),
+        reserve_out: m(1),
+        fee_bps: U256::from(10_000),
+    }];
+    assert_eq!(
+        Err(mega_mev_optimization::V2OptimizationError::InvalidFeeBps(
+            U256::from(10_000)
+        )),
+        mega_mev_optimization::optimal_v2_cycle_input(&invalid_fee)
+    );
 }
 
 #[test]

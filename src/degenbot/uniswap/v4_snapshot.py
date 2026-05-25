@@ -99,7 +99,7 @@ class MonolithicJsonFileSnapshot:
 
     def get_liquidity_map(
         self,
-        pool_manager: ChecksumAddress,  # noqa: ARG002
+        pool_manager: ChecksumAddress,
         pool_id: bytes | str,
     ) -> LiquidityMap | None:
         pool_id = HexBytes(pool_id).to_0x_hex()
@@ -156,7 +156,7 @@ class DatabaseSnapshot:
 
     def get_liquidity_map(
         self,
-        pool_manager: ChecksumAddress,  # noqa: ARG002
+        pool_manager: ChecksumAddress,
         pool_id: bytes | str,
     ) -> LiquidityMap | None:
         pool_in_db = self.session.scalar(

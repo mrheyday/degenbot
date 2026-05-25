@@ -20,6 +20,8 @@ def sub(a: int, b: int) -> int:
 
 def mul_down(a: int, b: int) -> int:
     product = a * b
+    if product > MAX_UINT256:
+        raise EVMRevertError(error="MUL_OVERFLOW")
     if not (a == 0 or product // a == b):
         raise EVMRevertError(error="MUL_OVERFLOW")
     return product // ONE

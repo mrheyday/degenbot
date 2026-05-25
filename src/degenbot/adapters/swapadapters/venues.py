@@ -255,7 +255,9 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         venue="Solidly",
         category=AdapterCategory.SWAP,
         status=AdapterStatus.ENABLED,
-        contracts=bindings(("RAMSES_ROUTER_V2", "ramses_router"), ("RAMSES_UNIVERSAL_ROUTER", "ramses_ur")),
+        contracts=bindings(
+            ("RAMSES_ROUTER_V2", "ramses_router"), ("RAMSES_UNIVERSAL_ROUTER", "ramses_ur")
+        ),
         registry_keys=(RegistryKey.ROUTER,),
         execution_module="driver.execution.solidly_adapter",
         ipc_address_keyed_kinds=("Solidly",),

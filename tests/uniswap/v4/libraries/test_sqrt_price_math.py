@@ -64,7 +64,7 @@ def test_get_next_sqrt_price_from_input_any_input_amount_cannot_underflow_the_pr
     assert sqrt_q == 1
 
 
-def test_get_next_sqrt_price_from_input_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_true():  # noqa: E501
+def test_get_next_sqrt_price_from_input_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_true():
     price = SQRT_PRICE_1_1
     liquidity = 1
     assert (
@@ -78,7 +78,7 @@ def test_get_next_sqrt_price_from_input_returns_input_price_if_amount_in_is_zero
     )
 
 
-def test_get_next_sqrt_price_from_input_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_false():  # noqa: E501
+def test_get_next_sqrt_price_from_input_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_false():
     price = SQRT_PRICE_1_1
     liquidity = 1
     assert (
@@ -129,7 +129,7 @@ def test_get_next_sqrt_price_from_input_input_amount_of0_1_currency0():
     assert sqrt_q == 72025602285694852357767227579
 
 
-def test_get_next_sqrt_price_from_input_amount_in_greater_than_type_uint96_max_and_zero_for_one_equals_true():  # noqa: E501
+def test_get_next_sqrt_price_from_input_amount_in_greater_than_type_uint96_max_and_zero_for_one_equals_true():
     sqrt_p = SQRT_PRICE_1_1
     sqrt_q = get_next_sqrt_price_from_input(
         sqrt_price_x96=sqrt_p,
@@ -143,7 +143,7 @@ def test_get_next_sqrt_price_from_input_amount_in_greater_than_type_uint96_max_a
     assert sqrt_q == 624999999995069620
 
 
-def test_get_next_sqrt_price_from_input_can_return1_with_enough_amount_in_and_zero_for_one_equals_true():  # noqa: E501
+def test_get_next_sqrt_price_from_input_can_return1_with_enough_amount_in_and_zero_for_one_equals_true():
     sqrt_p = SQRT_PRICE_1_1
     sqrt_q = get_next_sqrt_price_from_input(
         sqrt_price_x96=sqrt_p,
@@ -177,7 +177,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_liquidity_is_zero():
         )
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the_virtual_reserves_of_currency0():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the_virtual_reserves_of_currency0():
     price = 20282409603651670423947251286016
     liquidity = 1024
     amount_out = 4
@@ -190,7 +190,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the
         )
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_than_the_virtual_reserves_of_currency0():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_than_the_virtual_reserves_of_currency0():
     price = 20282409603651670423947251286016
     liquidity = 1024
     amount_out = 5
@@ -203,7 +203,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_tha
         )
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_than_the_virtual_reserves_of_currency1():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_than_the_virtual_reserves_of_currency1():
     price = 20282409603651670423947251286016
     liquidity = 1024
     amount_out = 262145
@@ -216,7 +216,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_greater_tha
         )
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the_virtual_reserves_of_currency1():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the_virtual_reserves_of_currency1():
     price = 20282409603651670423947251286016
     liquidity = 1024
     amount_out = 262144
@@ -229,7 +229,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_output_amount_is_exactly_the
         )
 
 
-def test_get_next_sqrt_price_from_output_succeeds_if_output_amount_is_just_less_than_the_virtual_reserves_of_currency1():  # noqa: E501
+def test_get_next_sqrt_price_from_output_succeeds_if_output_amount_is_just_less_than_the_virtual_reserves_of_currency1():
     price = 20282409603651670423947251286016
     liquidity = 1024
     amount_out = 262143
@@ -255,7 +255,7 @@ def test_get_next_sqrt_price_from_output_puzzling_echidna_test():
         )
 
 
-def test_get_next_sqrt_price_from_output_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_true():  # noqa: E501
+def test_get_next_sqrt_price_from_output_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_true():
     sqrt_p = SQRT_PRICE_1_1
     sqrt_q = get_next_sqrt_price_from_output(
         sqrt_price_x96=sqrt_p,
@@ -266,7 +266,7 @@ def test_get_next_sqrt_price_from_output_returns_input_price_if_amount_in_is_zer
     assert sqrt_p == sqrt_q
 
 
-def test_get_next_sqrt_price_from_output_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_false():  # noqa: E501
+def test_get_next_sqrt_price_from_output_returns_input_price_if_amount_in_is_zero_and_zero_for_one_equals_false():
     sqrt_p = SQRT_PRICE_1_1
     sqrt_q = get_next_sqrt_price_from_output(
         sqrt_price_x96=sqrt_p,
@@ -299,7 +299,7 @@ def test_get_nextsqrt_price_from_output_output_amount_of0_1_currency0():
     assert sqrt_q == 71305346262837903834189555302
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_amount_out_is_impossible_in_zero_for_one_direction():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_amount_out_is_impossible_in_zero_for_one_direction():
     with pytest.raises(EVMRevertError, match="product > MAX_UINT256"):
         get_next_sqrt_price_from_output(
             sqrt_price_x96=SQRT_PRICE_1_1,
@@ -309,7 +309,7 @@ def test_get_next_sqrt_price_from_output_reverts_if_amount_out_is_impossible_in_
         )
 
 
-def test_get_next_sqrt_price_from_output_reverts_if_amount_out_is_impossible_in_one_for_zero_direction():  # noqa: E501
+def test_get_next_sqrt_price_from_output_reverts_if_amount_out_is_impossible_in_one_for_zero_direction():
     with pytest.raises(EVMRevertError, match="PriceOverflow"):
         get_next_sqrt_price_from_output(
             sqrt_price_x96=SQRT_PRICE_1_1,

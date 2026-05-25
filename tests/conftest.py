@@ -66,15 +66,9 @@ BASE_FULL_NODE_WS_URI: str = _rpc_env("BASE_FULL_NODE_WS_URI", "wss://base-rpc.p
 ETHEREUM_ARCHIVE_NODE_HTTP_URI: str = _rpc_env(
     "ETHEREUM_ARCHIVE_NODE_HTTP_URI", "https://eth.drpc.org"
 )
-ETHEREUM_ARCHIVE_NODE_WS_URI: str = _rpc_env(
-    "ETHEREUM_ARCHIVE_NODE_WS_URI", "wss://eth.drpc.org"
-)
-ETHEREUM_FULL_NODE_HTTP_URI: str = _rpc_env(
-    "ETHEREUM_FULL_NODE_HTTP_URI", "https://eth.drpc.org"
-)
-ETHEREUM_FULL_NODE_WS_URI: str = _rpc_env(
-    "ETHEREUM_FULL_NODE_WS_URI", "wss://eth.drpc.org"
-)
+ETHEREUM_ARCHIVE_NODE_WS_URI: str = _rpc_env("ETHEREUM_ARCHIVE_NODE_WS_URI", "wss://eth.drpc.org")
+ETHEREUM_FULL_NODE_HTTP_URI: str = _rpc_env("ETHEREUM_FULL_NODE_HTTP_URI", "https://eth.drpc.org")
+ETHEREUM_FULL_NODE_WS_URI: str = _rpc_env("ETHEREUM_FULL_NODE_WS_URI", "wss://eth.drpc.org")
 
 
 def pytest_addoption(parser: Parser):

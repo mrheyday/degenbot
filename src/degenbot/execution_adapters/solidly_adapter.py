@@ -171,11 +171,14 @@ class SolidlyV1Pool(PublisherMixin, AbstractLiquidityPool):
             ValueError: on degenerate inputs (zero reserves, etc.).
         """
         if reserves_token0 < 0 or reserves_token1 < 0:
-            raise ValueError("reserves must be non-negative")
+            msg = "reserves must be non-negative"
+            raise ValueError(msg)
         if decimals_token0 <= 0 or decimals_token1 <= 0:
-            raise ValueError("decimals scalars must be positive")
+            msg = "decimals scalars must be positive"
+            raise ValueError(msg)
         if fee < 0 or fee >= 1:
-            raise ValueError(f"fee must be in [0, 1), got {fee}")
+            msg = f"fee must be in [0, 1), got {fee}"
+            raise ValueError(msg)
 
         self.address = to_checksum_address(address)
         self.token0 = to_checksum_address(token0)
@@ -211,9 +214,7 @@ class SolidlyV1Pool(PublisherMixin, AbstractLiquidityPool):
             pool_registry.add(pool=self, chain_id=chain_id, pool_address=self.address)
 
         variant = "stable" if stable else "volatile"
-        fee_bps = (
-            100.0 * float(fee.numerator) / float(fee.denominator) if fee.denominator else 0.0
-        )
+        fee_bps = 100.0 * float(fee.numerator) / float(fee.denominator) if fee.denominator else 0.0
         self.name = (
             f"{self.token0[:8]}…/{self.token1[:8]}… "  # pylint: disable=unsubscriptable-object
             f"(SolidlyV1Pool, {variant}, {fee_bps:.4f}%)"
@@ -268,7 +269,8 @@ class SolidlyV1Pool(PublisherMixin, AbstractLiquidityPool):
                 converge (rare; only on degenerate pool states).
         """
         if token_in_quantity <= 0:
-            raise ValueError(f"token_in_quantity must be positive, got {token_in_quantity}")
+            msg = f"token_in_quantity must be positive, got {token_in_quantity}"
+            raise ValueError(msg)
 
         token_in_cs = to_checksum_address(token_in)
         if token_in_cs == self.token0:
@@ -276,9 +278,11 @@ class SolidlyV1Pool(PublisherMixin, AbstractLiquidityPool):
         elif token_in_cs == self.token1:
             token_idx = 1
         else:
+            msg = (
+                f"token_in {token_in_cs} matches neither pool token ({self.token0}, {self.token1})"
+            )
             raise ValueError(
-                f"token_in {token_in_cs} matches neither pool token "
-                f"({self.token0}, {self.token1})",
+                msg,
             )
 
         state = override_state if override_state is not None else self._state
@@ -323,8 +327,9 @@ class SolidlyV1Pool(PublisherMixin, AbstractLiquidityPool):
         the upstream `Subscriber` protocol surface lands in this adapter.
         """
         if block < (self._state.block or 0):
+            msg = f"update for block {block} predates current state block {self._state.block}"
             raise ValueError(
-                f"update for block {block} predates current state block {self._state.block}",
+                msg,
             )
 
         new_state = SolidlyV1PoolState(
@@ -377,12 +382,15 @@ def _solidly_get_y(
             if dy == 0:
                 if k == xy:
                     return y
-                if general_calc_k(
-                    balance_0=x0,
-                    balance_1=y + 1,
-                    decimals_0=decimals0,
-                    decimals_1=decimals1,
-                ) > xy:
+                if (
+                    general_calc_k(
+                        balance_0=x0,
+                        balance_1=y + 1,
+                        decimals_0=decimals0,
+                        decimals_1=decimals1,
+                    )
+                    > xy
+                ):
                     return y + 1
                 dy = 1
             y += dy

@@ -96,7 +96,7 @@ class PoolRegistry(AbstractRegistry):
     def __init__(self) -> None:
         if type(self).instance is not None:
             raise RegistryAlreadyInitialized(
-                message="A registry has already been initialized. Access it using the pool_registry.get_instance() class method"  # noqa:E501
+                message="A registry has already been initialized. Access it using the pool_registry.get_instance() class method"
             )
         type(self).instance = self
 

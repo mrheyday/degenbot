@@ -10,12 +10,13 @@
 //! so cold cryptopool cycles must route through REVM.
 
 use alloy::primitives::U256;
+use serde::{Deserialize, Serialize};
 use eyre::{eyre, Result};
 
 use crate::utils::u256::mul_div;
 
 #[allow(non_snake_case)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurveSnapshot {
     pub balances: Vec<U256>,
     /// Amplification coefficient. Field name follows whitepaper convention.

@@ -45,9 +45,7 @@ FLASH_ADAPTERS: tuple[AdapterTemplate, ...] = (
         status=AdapterStatus.ENABLED,
         contracts=bindings(("BALANCER_V3_VAULT", "vault")),
         registry_keys=(RegistryKey.VAULT,),
-        notes=(
-            "Universal flash source via MevSafe.flashCollateralizeV3 transient-unlock plans."
-        ),
+        notes=("Universal flash source via MevSafe.flashCollateralizeV3 transient-unlock plans."),
     ),
     AdapterTemplate(
         venue="CowFlashLoanRouter",

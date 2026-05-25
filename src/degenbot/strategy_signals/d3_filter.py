@@ -79,7 +79,8 @@ def _normalize_order(order: object) -> _NormalizedOrder:
     sell_amount = _read_int(order, "sell_amount", "sellAmount")
     buy_amount = _read_int(order, "buy_amount", "buyAmount")
     if sell_amount <= 0 or buy_amount <= 0:
-        raise OrderShapeError("D3 order amounts must be positive")
+        msg = "D3 order amounts must be positive"
+        raise OrderShapeError(msg)
     return _NormalizedOrder(
         uid=uid,
         sell_token=sell_token,
@@ -100,7 +101,8 @@ def _prices_overlap(order: _NormalizedOrder, peer: _NormalizedOrder) -> bool:
 def _read_string(order: object, snake_key: str, camel_key: str | None = None) -> str:
     value = _read_value(order, snake_key, camel_key)
     if not isinstance(value, str) or value == "":
-        raise OrderShapeError(f"missing string field {snake_key}")
+        msg = f"missing string field {snake_key}"
+        raise OrderShapeError(msg)
     return value
 
 
@@ -112,8 +114,10 @@ def _read_int(order: object, snake_key: str, camel_key: str | None = None) -> in
         try:
             return int(value, 16) if value.startswith(("0x", "0X")) else int(value, 10)
         except ValueError as exc:
-            raise OrderShapeError(f"invalid integer field {snake_key}") from exc
-    raise OrderShapeError(f"missing integer field {snake_key}")
+            msg = f"invalid integer field {snake_key}"
+            raise OrderShapeError(msg) from exc
+    msg = f"missing integer field {snake_key}"
+    raise OrderShapeError(msg)
 
 
 def _read_value(order: object, snake_key: str, camel_key: str | None) -> object:
@@ -127,4 +131,5 @@ def _read_value(order: object, snake_key: str, camel_key: str | None) -> object:
         value = getattr(order, key, None)
         if value is not None:
             return value
-    raise OrderShapeError(f"missing field {snake_key}")
+    msg = f"missing field {snake_key}"
+    raise OrderShapeError(msg)

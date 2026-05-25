@@ -167,13 +167,17 @@ class CurveNGPool(PublisherMixin, AbstractLiquidityPool):
             ValueError: on degenerate inputs.
         """
         if any(b < 0 for b in balances):
-            raise ValueError("balances must be non-negative")
+            msg = "balances must be non-negative"
+            raise ValueError(msg)
         if any(r <= 0 for r in rates):
-            raise ValueError("rates must be positive")
+            msg = "rates must be positive"
+            raise ValueError(msg)
         if amp <= 0:
-            raise ValueError(f"amp must be positive, got {amp}")
+            msg = f"amp must be positive, got {amp}"
+            raise ValueError(msg)
         if fee_bps < 0 or fee_bps >= _FEE_DENOMINATOR:
-            raise ValueError(f"fee_bps must be in [0, {_FEE_DENOMINATOR}), got {fee_bps}")
+            msg = f"fee_bps must be in [0, {_FEE_DENOMINATOR}), got {fee_bps}"
+            raise ValueError(msg)
 
         self.address = to_checksum_address(address)
         self.token0 = to_checksum_address(token0)
@@ -239,7 +243,8 @@ class CurveNGPool(PublisherMixin, AbstractLiquidityPool):
             EVMRevertError: if `_get_y` fails to converge.
         """
         if token_in_quantity <= 0:
-            raise ValueError(f"token_in_quantity must be positive, got {token_in_quantity}")
+            msg = f"token_in_quantity must be positive, got {token_in_quantity}"
+            raise ValueError(msg)
 
         token_in_cs = to_checksum_address(token_in)
         if token_in_cs == self.token0:
@@ -247,9 +252,11 @@ class CurveNGPool(PublisherMixin, AbstractLiquidityPool):
         elif token_in_cs == self.token1:
             i, j = 1, 0
         else:
+            msg = (
+                f"token_in {token_in_cs} matches neither pool token ({self.token0}, {self.token1})"
+            )
             raise ValueError(
-                f"token_in {token_in_cs} matches neither pool token "
-                f"({self.token0}, {self.token1})",
+                msg,
             )
 
         s = override_state if override_state is not None else self._state
@@ -292,8 +299,9 @@ class CurveNGPool(PublisherMixin, AbstractLiquidityPool):
     ) -> CurveNGPoolState:
         """Apply a fresh snapshot. Carry-forward semantics for unsupplied fields."""
         if block < (self._state.block or 0):
+            msg = f"update for block {block} predates current state block {self._state.block}"
             raise ValueError(
-                f"update for block {block} predates current state block {self._state.block}",
+                msg,
             )
 
         new_state = CurveNGPoolState(
@@ -366,10 +374,12 @@ def _curve_ng_get_y(i: int, j: int, x: int, xp: tuple[int, int], amp: int) -> in
     https://github.com/curvefi/stableswap-ng/blob/main/contracts/main/CurveStableSwapNG.vy
     """
     if i == j:
-        raise ValueError("i and j must differ")
+        msg = "i and j must differ"
+        raise ValueError(msg)
     n = len(xp)
     if not (0 <= i < n) or not (0 <= j < n):
-        raise ValueError("i / j out of range for 2-token pool")
+        msg = "i / j out of range for 2-token pool"
+        raise ValueError(msg)
 
     d = _curve_ng_get_d(xp, amp)
     ann: int = amp * (n**n)

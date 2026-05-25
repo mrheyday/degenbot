@@ -138,7 +138,7 @@ class ScaledEventEnricher:
                         # The Pool calculates scaledAmount = debtToCover.rayDivFloor(index)
                         # and passes it to vToken.burn(). We must calculate this ourselves.
                         # See debug/aave/0044 for details
-                        if self.pool_revision >= 9:  # noqa: PLR2004
+                        if self.pool_revision >= 9:
                             # Calculate scaled amount from debtToCover using the index
                             # from the burn event: scaledAmount = debtToCover / index
                             # (floor division)

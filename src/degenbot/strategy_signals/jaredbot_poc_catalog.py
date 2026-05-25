@@ -16,7 +16,6 @@ POC status semantics:
 
 from __future__ import annotations
 
-# ruff: noqa: E501
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -118,8 +117,8 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             "solver/driver/ops/readiness_gate.py",
         ),
         proof_refs=(
-            "solver/driver/tests/test_anomaly_response.py",
-            "solver/driver/tests/test_readiness_gate.py",
+            "vendor/degenbot/tests/solver_driver/test_anomaly_response.py",
+            "vendor/degenbot/tests/solver_driver/test_readiness_gate.py",
         ),
         stages=(
             _stage(
@@ -149,7 +148,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 5,
                 "Verify incident response",
-                ("solver/driver/tests/test_anomaly_response.py",),
+                ("vendor/degenbot/tests/solver_driver/test_anomaly_response.py",),
                 "Anomaly response remains test-backed.",
             ),
         ),
@@ -183,7 +182,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
         ),
         proof_refs=(
             "coordinator/src/submission/submitter.test.ts",
-            "solver/driver/tests/test_readiness_gate.py",
+            "vendor/degenbot/tests/solver_driver/test_readiness_gate.py",
         ),
         stages=(
             _stage(
@@ -207,7 +206,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 4,
                 "Prove readiness gate",
-                ("solver/driver/tests/test_readiness_gate.py",),
+                ("vendor/degenbot/tests/solver_driver/test_readiness_gate.py",),
                 "Operational readiness is test-backed.",
             ),
         ),
@@ -294,13 +293,16 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
         ),
         proof_refs=(
             "coordinator/src/integration/native-arb-e2e.test.ts",
-            "solver/driver/tests/test_degenbot_ipc_integration.py",
+            "vendor/degenbot/tests/solver_driver/test_degenbot_ipc_integration.py",
         ),
         stages=(
             _stage(
                 1,
                 "Emit opportunity",
-                ("vendor/degenbot/rust/src/lib.rs", "vendor/degenbot/src/degenbot/connection/ipc.py"),
+                (
+                    "vendor/degenbot/rust/src/lib.rs",
+                    "vendor/degenbot/src/degenbot/connection/ipc.py",
+                ),
                 "Engine/Python adapter emits typed opportunities.",
             ),
             _stage(
@@ -516,7 +518,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             "execution path awaits dedicated executor workflow",
         ),
         code_refs=("coordinator/src/strategies/launch-sniper.ts",),
-        proof_refs=("solver/driver/tests/test_jaredbot_poc_catalog.py",),
+        proof_refs=("vendor/degenbot/tests/solver_driver/test_jaredbot_poc_catalog.py",),
         stages=(
             _stage(
                 1,
@@ -539,7 +541,7 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 4,
                 "Verify workflow-required catalog",
-                ("solver/driver/tests/test_jaredbot_poc_catalog.py",),
+                ("vendor/degenbot/tests/solver_driver/test_jaredbot_poc_catalog.py",),
                 "Catalog asserts the sniper POC needs a dedicated workflow.",
             ),
         ),
@@ -648,7 +650,10 @@ JAREDBOT_POCS: tuple[JaredBotPoc, ...] = (
             _stage(
                 1,
                 "Consume feed/timing",
-                ("vendor/degenbot/rust/src/lib.rs", "coordinator/src/signals/detectors/timeboost-round.ts"),
+                (
+                    "vendor/degenbot/rust/src/lib.rs",
+                    "coordinator/src/signals/detectors/timeboost-round.ts",
+                ),
                 "Feed and round state are typed inputs.",
             ),
             _stage(

@@ -48,7 +48,6 @@ def compose_dispatch_envelope(
     simulation: Mapping[str, Any],
     now_ms: int,
 ) -> DispatchEnvelopeDict: ...
-
 async def submit_dispatch_envelope(
     envelope: DispatchEnvelopeDict,
     adapter: DispatchAdapter,

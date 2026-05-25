@@ -4,7 +4,7 @@ import contextlib
 import pathlib
 import shutil
 import socket
-import subprocess  # noqa: S404
+import subprocess
 import tempfile
 from collections.abc import AsyncIterator, Iterable
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -325,7 +325,7 @@ class AnvilFork:
 
             if block_number is not None:
                 logger.warning(
-                    f"Forking from transaction hash {transaction_hash}, ignoring provided block number."  # noqa:E501
+                    f"Forking from transaction hash {transaction_hash}, ignoring provided block number."
                 )
 
             # Sanitize the command by stripping options that may conflict

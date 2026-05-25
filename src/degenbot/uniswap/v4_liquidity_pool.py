@@ -338,7 +338,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
         )
 
         self._pool_id: Final[HexBytes] = pool_id
-        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, id={self.pool_id.to_0x_hex()})"  # noqa:E501
+        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, id={self.pool_id.to_0x_hex()})"
 
         try:
             working_slot0, working_liquidity = self._get_state_values(
@@ -367,7 +367,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
                 )
             )
         ), (
-            f"Supplied pool ID {self.pool_id.to_0x_hex()} does not match calculated ID {calculated_id.to_0x_hex()}, {self.pool_key=}"  # noqa
+            f"Supplied pool ID {self.pool_id.to_0x_hex()} does not match calculated ID {calculated_id.to_0x_hex()}, {self.pool_key=}"
         )
 
         # If liquidity info was not provided, treat the mapping as sparse
@@ -482,7 +482,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
         self.__dict__ = state
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}(pool_id={self.pool_id.to_0x_hex()},  token0={self.token0}, token1={self.token1}, fee={self.fee}, tick spacing={self.tick_spacing})"  # noqa:E501
+        return f"{self.__class__.__name__}(pool_id={self.pool_id.to_0x_hex()},  token0={self.token0}, token1={self.token1}, fee={self.fee}, tick spacing={self.tick_spacing})"
 
     def __str__(self) -> str:
         return self.name
@@ -1197,7 +1197,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
 
         if update.block_number < self.update_block:
             raise ExternalUpdateError(
-                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"  # noqa:E501
+                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"
             )
 
         if (
@@ -1256,7 +1256,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
             working_liquidity = self.liquidity
 
             assert working_liquidity >= 0, (
-                f"Starting liquidity violates invariant: pool {self.address} {self.tick=} {self.liquidity=}"  # noqa: E501
+                f"Starting liquidity violates invariant: pool {self.address} {self.tick=} {self.liquidity=}"
             )
 
             # Adjust in-range liquidity if the modified region includes the active tick.
@@ -1271,7 +1271,7 @@ class UniswapV4Pool(PublisherMixin, AbstractLiquidityPool):
             ):
                 working_liquidity += update.liquidity
                 assert working_liquidity >= 0, (
-                    f"In-range liquidity adjustment violated invariant: pool {self.address} {self.tick=} {self.liquidity=} {self.update_block=} {update=}"  # noqa: E501
+                    f"In-range liquidity adjustment violated invariant: pool {self.address} {self.tick=} {self.liquidity=} {self.update_block=} {update=}"
                 )
 
             for tick in (update.tick_lower, update.tick_upper):

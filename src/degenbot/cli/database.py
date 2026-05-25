@@ -56,7 +56,7 @@ def database_reset(*, force: bool) -> None:
     """
 
     if force or click.confirm(
-        f"The existing database at {settings.database.path} will be removed and a new, empty database will be created and initialized using the schema included in {__package__} version {__version__}. Do you want to proceed?",  # noqa: E501
+        f"The existing database at {settings.database.path} will be removed and a new, empty database will be created and initialized using the schema included in {__package__} version {__version__}. Do you want to proceed?",
         default=False,
     ):
         settings.database.path.unlink(missing_ok=True)
@@ -79,7 +79,7 @@ def database_upgrade(*, force: bool) -> None:
     """
 
     if force or click.confirm(
-        f"The database at {settings.database.path} will be upgraded from version {current_database_version} to {latest_database_version}. Do you want to proceed?",  # noqa:E501
+        f"The database at {settings.database.path} will be upgraded from version {current_database_version} to {latest_database_version}. Do you want to proceed?",
         default=False,
     ):
         upgrade_existing_sqlite_database()

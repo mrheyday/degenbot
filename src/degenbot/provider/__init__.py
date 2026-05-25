@@ -286,7 +286,7 @@ class AlloyProvider:
         """Close connection pool and release resources."""
         self._provider.close()
 
-    def is_connected(self) -> bool:  # noqa: PLR6301
+    def is_connected(self) -> bool:
         """Check if the provider is connected.
 
         For AlloyProvider, we assume connection is valid if the provider was created.

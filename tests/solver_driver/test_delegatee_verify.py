@@ -30,6 +30,26 @@ def test_parse_delegatee_csv_requires_valid_delegatees() -> None:
         verifier.parse_delegatee_csv("not-an-address")
 
 
+def test_delegatee_csv_from_env_accepts_deploy_script_alias() -> None:
+    explicit = "0x000000000000000000000000000000000000dEaD"
+    deploy_script = "0x000000000000000000000000000000000000bEEF"
+
+    assert verifier.delegatee_csv_from_env({"DELEGATEES_INITIAL": deploy_script}) == (
+        deploy_script,
+        "DELEGATEES_INITIAL",
+    )
+    assert verifier.delegatee_csv_from_env(
+        {
+            "DELEGATEE_ADDRESSES": explicit,
+            "DELEGATEES_INITIAL": deploy_script,
+        }
+    ) == (explicit, "DELEGATEE_ADDRESSES")
+
+    raw, label = verifier.delegatee_csv_from_env({"DELEGATEES_INITIAL": "not-an-address"})
+    with pytest.raises(ValueError, match="DELEGATEES_INITIAL"):
+        verifier.parse_delegatee_csv(raw, label=label)
+
+
 def test_collect_delegatee_findings_checks_both_contracts() -> None:
     delegatee = "0x000000000000000000000000000000000000dEaD"
     findings = verifier.collect_delegatee_findings(

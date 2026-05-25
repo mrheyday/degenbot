@@ -44,7 +44,8 @@ def adapter_for(category: AdapterCategory | str, venue: str) -> AdapterTemplate:
     try:
         return _ADAPTERS_BY_KEY[key]
     except KeyError as exc:
-        raise KeyError(f"unknown adapter {key[0].value}:{venue}") from exc
+        msg = f"unknown adapter {key[0].value}:{venue}"
+        raise KeyError(msg) from exc
 
 
 def lanes_by_status(status: AdapterStatus | str) -> tuple[ExecutionLaneTemplate, ...]:
@@ -59,4 +60,5 @@ def lane_for(lane: ExecutionLane | str) -> ExecutionLaneTemplate:
     try:
         return _LANES_BY_KEY[key]
     except KeyError as exc:
-        raise KeyError(f"unknown execution lane {key.value}") from exc
+        msg = f"unknown execution lane {key.value}"
+        raise KeyError(msg) from exc

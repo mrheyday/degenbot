@@ -108,7 +108,7 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
         if verify_address and self.address != self._verified_address():  # pragma: no cover
             raise AddressMismatch
 
-        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, {100 * self.fee.numerator / self.fee.denominator:.2f}%)"  # noqa:E501
+        self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, {100 * self.fee.numerator / self.fee.denominator:.2f}%)"
 
         self._state_cache = deque(maxlen=max(1, state_cache_depth))
         self._state_cache.append(initial_state)
@@ -138,7 +138,7 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
             }
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1}, stable={self.stable})"  # noqa:E501
+        return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1}, stable={self.stable})"
 
     def _notify_subscribers(self: Publisher, message: AbstractPublisherMessage) -> None:
         for subscriber in self._subscribers:
@@ -292,13 +292,13 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
 
         else:  # pragma: no cover
             raise DegenbotValueError(
-                message=f"Could not identify token_out: {token_out}! This pool holds: {self.token0} {self.token1}"  # noqa:E501
+                message=f"Could not identify token_out: {token_out}! This pool holds: {self.token0} {self.token1}"
             )
 
         # last token becomes infinitely expensive, so largest possible swap out is reserves - 1
         if token_out_quantity > reserves_out - 1:
             raise LiquidityPoolError(
-                message=f"Requested amount out ({token_out_quantity}) >= pool reserves ({reserves_out})"  # noqa:E501
+                message=f"Requested amount out ({token_out_quantity}) >= pool reserves ({reserves_out})"
             )
 
         if self.stable:
@@ -361,7 +361,7 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
     ) -> None:
         if update.block_number < self.update_block:
             raise ExternalUpdateError(
-                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"  # noqa:E501
+                message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}"
             )
 
         with self._state_lock:

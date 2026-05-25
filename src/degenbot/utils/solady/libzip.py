@@ -126,7 +126,7 @@ def flz_compress(uncompressed_data: str | bytes) -> HexBytes:
             match_length -= MAX_MATCH_LENGTH
 
         # Encode the remaining chunk
-        if match_length < 7:  # noqa: PLR2004
+        if match_length < 7:
             # SHORT MATCH instruction - 2 byte opcode
             opcode_0 = (match_length << 5) + (distance_to_last_seen_chunk >> 8)
             opcode_1 = distance_to_last_seen_chunk & 0b11111111

@@ -38,7 +38,7 @@ class GhoV4Processor(GhoDebtTokenProcessor):
         """Get the math libraries for this revision."""
         return self._math_libs
 
-    def supports_discount(self) -> bool:  # noqa: PLR6301
+    def supports_discount(self) -> bool:
         """Revision 4+ does not support discount mechanism."""
         return False
 
@@ -70,7 +70,7 @@ class GhoV4Processor(GhoDebtTokenProcessor):
         event_data: DebtMintEvent,
         previous_balance: int,
         previous_index: int,
-        previous_discount: int,  # noqa: ARG002
+        previous_discount: int,
         actual_repay_amount: int | None = None,
     ) -> GhoScaledTokenMintResult:
         """Process a GHO debt mint event without discount.
@@ -163,9 +163,9 @@ class GhoV4Processor(GhoDebtTokenProcessor):
     def process_burn_event(
         self,
         event_data: DebtBurnEvent,
-        previous_balance: int,  # noqa: ARG002
-        previous_index: int,  # noqa: ARG002
-        previous_discount: int,  # noqa: ARG002
+        previous_balance: int,
+        previous_index: int,
+        previous_discount: int,
     ) -> GhoScaledTokenBurnResult:
         """Process a GHO debt burn event without discount.
 
@@ -205,9 +205,9 @@ class GhoV4Processor(GhoDebtTokenProcessor):
     def get_discounted_balance(
         self,
         scaled_balance: int,
-        previous_index: int,  # noqa: ARG002
+        previous_index: int,
         current_index: int,
-        discount_percent: int,  # noqa: ARG002
+        discount_percent: int,
     ) -> int:
         """Calculate balance without discount.
 

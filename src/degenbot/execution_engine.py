@@ -8,13 +8,15 @@ all admission logic to `degenbot_rs.compose_engine_job_json`.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from hexbytes import HexBytes
 
 from degenbot.degenbot_rs import to_checksum_address
 from degenbot.utils.bytes import HexBytesLike, to_bytes
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 try:  # Prefer canonical export from a rebuilt extension.
     from degenbot.degenbot_rs import compose_engine_job_json as _compose_engine_job_json
@@ -186,10 +188,11 @@ def compose_engine_job(
     """
 
     if _compose_engine_job_json is None:
-        raise RuntimeError(
+        msg = (
             "degenbot_rs execution-engine bindings are unavailable; rebuild the "
             "Rust extension with maturin before composing execution jobs"
         )
+        raise RuntimeError(msg)
 
     report_json = _compose_engine_job_json(
         json.dumps(_normalize_plan(plan), sort_keys=True, separators=(",", ":")),

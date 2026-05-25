@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from degenbot.decision.precedence import DecisionKind
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from degenbot.decision.precedence import DecisionKind
 
 CapitalPolicyVerdict = Literal["allow", "deny", "observe"]
 CapitalFundingMode = Literal["zero_capital_atomic", "inventory_async", "observe"]
@@ -121,9 +123,11 @@ INVENTORY_ASYNC_CAPITAL_GATES = CapitalGateSet(
 )
 
 
-def _allow(id: CapitalStrategyId, label: str, required_path: str) -> CapitalStrategyPolicy:
+def _allow(
+    strategy_id: CapitalStrategyId, label: str, required_path: str
+) -> CapitalStrategyPolicy:
     return CapitalStrategyPolicy(
-        id=id,
+        id=strategy_id,
         label=label,
         verdict="allow",
         funding_mode="zero_capital_atomic",
@@ -135,10 +139,10 @@ def _allow(id: CapitalStrategyId, label: str, required_path: str) -> CapitalStra
 
 
 def _allow_inventory_async(
-    id: CapitalStrategyId, label: str, required_path: str, reason: str
+    strategy_id: CapitalStrategyId, label: str, required_path: str, reason: str
 ) -> CapitalStrategyPolicy:
     return CapitalStrategyPolicy(
-        id=id,
+        id=strategy_id,
         label=label,
         verdict="allow",
         funding_mode="inventory_async",
@@ -149,9 +153,9 @@ def _allow_inventory_async(
     )
 
 
-def _observe(id: CapitalStrategyId, label: str, reason: str) -> CapitalStrategyPolicy:
+def _observe(strategy_id: CapitalStrategyId, label: str, reason: str) -> CapitalStrategyPolicy:
     return CapitalStrategyPolicy(
-        id=id,
+        id=strategy_id,
         label=label,
         verdict="observe",
         funding_mode="observe",
@@ -189,8 +193,8 @@ CAPITAL_STRATEGY_POLICIES: Mapping[CapitalStrategyId, CapitalStrategyPolicy] = {
 }
 
 
-def review_capital_strategy(id: CapitalStrategyId) -> CapitalStrategyPolicy:
-    return CAPITAL_STRATEGY_POLICIES[id]
+def review_capital_strategy(strategy_id: CapitalStrategyId) -> CapitalStrategyPolicy:
+    return CAPITAL_STRATEGY_POLICIES[strategy_id]
 
 
 def capital_policy_for_decision(kind: DecisionKind) -> CapitalStrategyPolicy:
@@ -200,4 +204,5 @@ def capital_policy_for_decision(kind: DecisionKind) -> CapitalStrategyPolicy:
         return review_capital_strategy("morpho_liquidation_decision")
     if kind == "pass":
         return review_capital_strategy("pass")
-    raise ValueError(f"Unknown decision kind: {kind}")
+    msg = f"Unknown decision kind: {kind}"
+    raise ValueError(msg)

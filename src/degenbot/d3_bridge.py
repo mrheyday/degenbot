@@ -31,7 +31,9 @@ class D3OrderRef(BaseModel):
     valid_to: int = Field(alias="validTo", gt=0)
     kind: Literal["buy", "sell"]
     partially_fillable: bool = Field(alias="partiallyFillable")
-    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(alias="signingScheme")
+    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(
+        alias="signingScheme"
+    )
     signature: str = Field(pattern=HEX_PATTERN)
     app_data: str = Field(alias="appData", pattern=HEX_PATTERN)
 

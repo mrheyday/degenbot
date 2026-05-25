@@ -60,6 +60,10 @@ are split into activation-sized contracts such as `runtime_adapter/`,
   revert/false/malformed-return normalization -> deployable
   `lp_transfer_adapter/`
 - `libraries/MegaMEVOptimizationLib.sol` CLZ/CTZ, bit-length, power-of-two, sqrt, full-precision `fullMulDiv`/`fullMulDivUp`-style fixed-point helpers, and reserve-shape heuristics -> `core::mega_mev_optimization`
+- Degen Code closed-form V2 cyclic route sizing: integer-only K/M/N
+  Mobius composition, no-iteration optimal input, route output/profit quote,
+  fail-closed reserve/fee/overflow handling, and tests against the 2-pool
+  USDC/WETH worked example -> `core::mega_mev_optimization`
 - `libraries/RouterRegistry.sol` -> `core::router_registry`
 - `libraries/SingletonArrays.sol` -> `core::singleton_arrays`
 - `libraries/StepMerging.sol` pure route-merge algorithm -> `core::step_merging`
@@ -112,7 +116,9 @@ are split into activation-sized contracts such as `runtime_adapter/`,
 - remaining executor/callback host calls; dynamic executor calldata codecs now
   have a split deployable adapter, while host-level protocol calls remain
   contract-specific promotion work.
-- `libraries/FrontrunCalldata.sol` V3 approximate sizing and any above-tested-envelope arithmetic
+- `libraries/FrontrunCalldata.sol` V3 approximate sizing and any
+  above-tested-envelope arithmetic; V2 cyclic closed-form sizing is now covered
+  in `core::mega_mev_optimization`.
 - EIP-1153 `tload`/`tstore` host behavior behind `TransientStorage` and
   `TransientReentrancy`; slot constants and runtime proof semantics are covered,
   but actual Stylus host writes are not yet a replacement deployment.

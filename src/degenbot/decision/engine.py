@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from degenbot.decision.precedence import DecisionKind, compare_priority
 from degenbot.decision.sandoo_ideas import SandooIdeaSignal, evaluate_sandoo_idea
 from degenbot.decision.types import AggregatorQuote, DecisionContext, DecisionRoute
-from degenbot.types_solver.wire import Opportunity
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from degenbot.adapters.config import Settings
+    from degenbot.types_solver.wire import Opportunity
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,7 @@ class DecisionEngine:
         self._settings = settings
         self._queue = queue
 
-    async def route_opportunity(
-        self, opp: Opportunity, ctx: DecisionContext
-    ) -> RoutedDecision:
+    async def route_opportunity(self, opp: Opportunity, ctx: DecisionContext) -> RoutedDecision:
         candidates: list[RouteCandidate] = []
 
         if not self._settings.strategies_enabled:
@@ -71,24 +70,22 @@ class DecisionEngine:
             pass  # find_best_match logic goes here
 
         # 2. Pick B — four-leg composition (Stubbed)
-        if self._settings.strategy_four_leg_enabled:
-            pass
 
         # 3. Morpho standard liquidation
         if opp.kind.startswith("MorphoLiquidation"):
-             candidates.append(RouteCandidate(
-                kind="morpho_liquidation",
-                route=DecisionRoute(kind="morpho_liquidation", opportunity_id=opp.id),
-                score_wei=0,
-                ctx=ctx,
-                enrichment={"timeboost": timeboost_decision} if timeboost_decision else None
-            ))
+            candidates.append(
+                RouteCandidate(
+                    kind="morpho_liquidation",
+                    route=DecisionRoute(kind="morpho_liquidation", opportunity_id=opp.id),
+                    score_wei=0,
+                    ctx=ctx,
+                    enrichment={"timeboost": timeboost_decision} if timeboost_decision else None,
+                )
+            )
 
         # Quote enrichment + route scoring for native arb opportunities.
         best_q: AggregatorQuote | None = None
-        should_enrich_quote = (
-            self._settings.strategy_native_arb_enabled and opp.kind == "NativeArb"
-        )
+        should_enrich_quote = self._settings.strategy_native_arb_enabled and opp.kind == "NativeArb"
         sandoo_idea: SandooIdeaSignal | None = None
 
         if should_enrich_quote:
@@ -108,17 +105,22 @@ class DecisionEngine:
             profitable = self._evaluate_native_arb(opp, best_q, sandoo_idea, should_enrich_quote)
             if profitable:
                 enrichment = {}
-                if best_q: enrichment["best_quote"] = best_q
-                if timeboost_decision: enrichment["timeboost"] = timeboost_decision
-                if sandoo_idea: enrichment["sandoo_idea"] = sandoo_idea
+                if best_q:
+                    enrichment["best_quote"] = best_q
+                if timeboost_decision:
+                    enrichment["timeboost"] = timeboost_decision
+                if sandoo_idea:
+                    enrichment["sandoo_idea"] = sandoo_idea
 
-                candidates.append(RouteCandidate(
-                    kind="native_arb",
-                    route=DecisionRoute(kind="native_arb", opportunity_id=opp.id),
-                    ctx=ctx,
-                    score_wei=self._derive_native_arb_score(opp, best_q, sandoo_idea),
-                    enrichment=enrichment or None
-                ))
+                candidates.append(
+                    RouteCandidate(
+                        kind="native_arb",
+                        route=DecisionRoute(kind="native_arb", opportunity_id=opp.id),
+                        ctx=ctx,
+                        score_wei=self._derive_native_arb_score(opp, best_q, sandoo_idea),
+                        enrichment=enrichment or None,
+                    )
+                )
 
         # 8. Pass.
         if not candidates:
@@ -159,7 +161,9 @@ class DecisionEngine:
             if best_q is None:
                 return sandoo_idea.components.net_profit_after_cost_wei > 0
 
-            best_quote_net_out = best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+            best_quote_net_out = (
+                best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+            )
             return sandoo_idea.components.net_profit_after_cost_wei > best_quote_net_out
 
         if best_q is None:
@@ -171,7 +175,9 @@ class DecisionEngine:
         if opp.token_in.lower() != opp.token_out.lower():
             return True
 
-        best_quote_net_out = best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+        best_quote_net_out = (
+            best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+        )
         return opp.estimated_profit_wei > best_quote_net_out
 
     def _derive_native_arb_score(
@@ -184,7 +190,9 @@ class DecisionEngine:
             return sandoo_idea.components.net_profit_after_cost_wei
 
         if best_q and opp.token_in.lower() == opp.token_out.lower():
-            best_quote_net_out = best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+            best_quote_net_out = (
+                best_q.amount_out - opp.amount_in if best_q.amount_out > opp.amount_in else 0
+            )
             return opp.estimated_profit_wei - best_quote_net_out
 
         return opp.estimated_profit_wei
@@ -200,7 +208,7 @@ class DecisionEngine:
                 best = candidate
 
         if best is None:
-             return RouteCandidate(
+            return RouteCandidate(
                 kind="pass",
                 route=DecisionRoute(kind="pass", reason="no_profitable_route"),
                 score_wei=0,

@@ -6,13 +6,13 @@ from eth_typing import ChainId, ChecksumAddress
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.exceptions import DegenbotValueError
 from degenbot.uniswap.deployments import (
+    FACTORY_DEPLOYMENTS,
     ArbitrumCamelotV2,
     ArbitrumSushiswapV2,
     ArbitrumSushiswapV3,
     ArbitrumUniswapV2,
     ArbitrumUniswapV3,
     ArbitrumUniswapV4,
-    FACTORY_DEPLOYMENTS,
     UniswapFactoryDeployment,
     UniswapV2ExchangeDeployment,
     UniswapV3ExchangeDeployment,

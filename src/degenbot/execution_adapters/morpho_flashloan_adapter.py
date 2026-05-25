@@ -98,9 +98,11 @@ class MorphoFlashLoanBuilder:
             ValueError: `amount <= 0`, or `token` is the zero address.
         """
         if amount <= 0:
-            raise ValueError(f"Morpho flash-loan amount must be > 0, got {amount}")
+            msg = f"Morpho flash-loan amount must be > 0, got {amount}"
+            raise ValueError(msg)
         if not token or int(token, 16) == 0:
-            raise ValueError("Morpho flash-loan token must be non-zero address")
+            msg = "Morpho flash-loan token must be non-zero address"
+            raise ValueError(msg)
         return MorphoFlashLoanRequest(
             token=token,
             amount=amount,
@@ -111,24 +113,34 @@ class MorphoFlashLoanBuilder:
         self,
         req: MorphoFlashLoanRequest,
         strategy: str = "native_arb",
+        *,
+        swaps: Sequence[Mapping[str, Any]] | None = None,
+        min_profit: int = 0,
+        deadline: int = 0,
     ) -> bytes:
         """Encode the Executor function call that triggers Morpho.flashLoan.
 
         Maps `strategy` → one of `executeNativeArb` / `matchInternal` /
-        `composeFourLeg`. The selected function packs the FlashProtocol
-        kind = 1 (Morpho) plus `req.token` / `req.amount` / `req.callback_data`
-        into the strategy-specific param struct.
+        `composeFourLeg`.
 
-        TODO(scaffold): wire `eth_abi` to encode the chosen Executor
-        function's calldata once the final ABI lands. The on-chain Morpho
-        callback signature DOES NOT include the borrowed token, so
-        `req.token` must be packed into the callback params struct that
-        ends up as `data` on the wire.
+        The on-chain Morpho callback signature DOES NOT include the borrowed
+        token, so the `Executor` implementation handles the single-token
+        case by reusing the `flashToken` field.
         """
+        from degenbot.execution import encode_native_arb_calldata
+
         validate_executor_strategy(strategy)
-        _ = req
-        raise NotImplementedError(
-            "TODO(scaffold): wire eth_abi to encode Executor calldata once final "
-            "ABI lands. Note: pack `token` into callback params — Morpho's on-chain "
-            "callback signature does not pass it.",
-        )
+
+        if strategy == "native_arb":
+            return encode_native_arb_calldata(
+                flash_lender=self._morpho_blue_address,
+                flash_protocol="Morpho",
+                flash_token=req.token,
+                flash_amount=req.amount,
+                swaps=swaps or [],
+                min_profit=min_profit,
+                deadline=deadline,
+            )
+
+        msg = f"Morpho adapter: strategy {strategy!r} encoding not yet implemented"
+        raise NotImplementedError(msg)

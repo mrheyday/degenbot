@@ -78,10 +78,10 @@ COMPOSE_FOUR_LEG_SIGNATURE: str = (
 # function name stripped. Field order matches the canonical signatures.
 # ---------------------------------------------------------------------------
 
-_NATIVE_ARB_TUPLE_TYPE: str = (
-    "(address,uint8,address,uint256,(uint8,address,bytes,address,address,uint256,uint256)[],uint256,uint256)"
+_NATIVE_ARB_TUPLE_TYPE: str = "(address,uint8,address,uint256,(uint8,address,bytes,address,address,uint256,uint256)[],uint256,uint256)"
+_MATCH_PARAMS_TUPLE_TYPE: str = (
+    "(bytes,bytes,address[],uint256[],address,uint8,address,uint256,uint256,uint256)"
 )
-_MATCH_PARAMS_TUPLE_TYPE: str = "(bytes,bytes,address[],uint256[],address,uint8,address,uint256,uint256,uint256)"
 _COMPOSE_PARAMS_TUPLE_TYPE: str = (
     "(bytes,(uint8,address,bytes,address,address,uint256,uint256)[],"
     "bytes,bytes,address,uint8,address,uint256,uint256,uint256)"

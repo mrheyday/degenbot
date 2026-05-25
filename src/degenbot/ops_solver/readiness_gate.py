@@ -54,7 +54,7 @@ ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 EXECUTOR_VERIFY_REPORT = REPO_ROOT / "docs/runbooks/deployments/mainnet/executor-verification.json"
 LIQUIDATION_VERIFY_REPORT = REPO_ROOT / "docs/runbooks/deployments/mainnet/liquidation-executor-verification.json"
-DELEGATEE_VERIFY_REPORT = REPO_ROOT / "docs/runbooks/deployments/mainnet/delegatee-audit.json"
+DELEGATEE_VERIFY_REPORT = REPO_ROOT / "docs/runbooks/deployments/mainnet/delegatee-verification.json"
 ARBITRUM_CONFIG = REPO_ROOT / "contracts/script/config/arbitrum-one.json"
 
 
@@ -231,7 +231,10 @@ def _is_rpc_failover_wired() -> bool:
         return False
     env_text = env_example.read_text()
     config_text = config_ts.read_text()
-    return all(marker in env_text and marker in config_text for marker in ["ARB_RPC_HTTP", "ARB_RPC_HTTP_FAILOVER"])
+    return all(
+        marker in env_text and marker in config_text
+        for marker in ("ARB_RPC_HTTP", "ARB_RPC_HTTP_FALLBACK")
+    )
 
 
 def _build_external_mainnet_gates() -> tuple[ExternalMainnetGate, ...]:
@@ -313,7 +316,7 @@ def build_readiness_report() -> ReadinessReport:
 
     # 3. File existence checks for all workflows
     for workflow in EXECUTION_WORKFLOWS:
-        is_live = workflow.status == WorkflowStatus.EXECUTABLE
+        is_live = workflow.is_live
         refs = (
             workflow.signal_sources
             + workflow.trigger_modules
@@ -353,9 +356,10 @@ def build_readiness_report() -> ReadinessReport:
                 and len(workflow.planner_modules) > 0
                 and len(workflow.calldata_builders) > 0
                 and len(workflow.submission_modules) > 0
-                and len(workflow.contract_entrypoints) > 0
                 and len(workflow.happy_path_tests) > 0
             )
+            if workflow.status == WorkflowStatus.EXECUTABLE:
+                bottle_ok = bottle_ok and len(workflow.contract_entrypoints) > 0
             findings.append(
                 ReadinessFinding(
                     name=f"{workflow.workflow_id}.execution_bottle_complete",
@@ -462,7 +466,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report = build_readiness_report()
     if args.json:
-        pass
+        sys.stdout.write(f"{json.dumps(report_to_dict(report), indent=2, sort_keys=True)}\n")
     else:
         _print_text_report(report, verbose=args.verbose)
 

@@ -6,7 +6,7 @@ from eth_utils.address import to_checksum_address as py_to_checksum_address
 
 try:
     from degenbot.degenbot_rs import to_checksum_address as rs_to_checksum_address
-except BaseException:  # noqa: BLE001 - PyO3 panics inherit outside Exception.
+except BaseException:
     rs_to_checksum_address = None
 
 

@@ -154,7 +154,7 @@ def update_user_e_mode(
 
 
 def record_oracle_price(
-    session: Session,  # noqa: ARG001
+    session: Session,
     asset: AaveV3Asset,
     price: int,
     block_number: int,

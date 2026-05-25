@@ -14,8 +14,18 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from degenbot.adapters.config import DegenbotSettings
 from degenbot.logging import logger
 from degenbot.types.aliases import ChainId
+
+__all__ = (
+    "DatabaseSettings",
+    "DegenbotSettings",
+    "Settings",
+    "load_config_from_file",
+    "save_config_to_file",
+    "settings",
+)
 
 CONFIG_DIR = Path.home() / ".config" / "degenbot"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
@@ -72,8 +82,9 @@ def load_config_from_file(config_path: Path) -> Settings:
 def save_config_to_file(config: Settings) -> None:
     CONFIG_FILE.write_text(
         tomlkit.dumps(
-            config.model_dump(),
+            config.model_dump(mode="json", exclude_none=True),
         ),
+        encoding="utf-8",
     )
 
 

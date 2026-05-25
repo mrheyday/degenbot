@@ -50,7 +50,8 @@ class PmmState:
 def _check_uint256(*values: int) -> None:
     for value in values:
         if value < 0 or value > UINT256_MAX:
-            raise OverflowError(f"value {value} out of uint256 range")
+            msg = f"value {value} out of uint256 range"
+            raise OverflowError(msg)
 
 
 def _require(condition: bool, message: str) -> None:

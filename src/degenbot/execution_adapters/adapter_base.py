@@ -30,8 +30,9 @@ def configure_execution_logging(level: str) -> None:
 def validate_executor_strategy(strategy: str) -> None:
     """Reject strategies that are not routed by the Executor calldata builders."""
     if strategy not in SUPPORTED_EXECUTOR_STRATEGIES:
+        msg = f"Unsupported strategy {strategy!r}; expected one of {sorted(SUPPORTED_EXECUTOR_STRATEGIES)}"
         raise ValueError(
-            f"Unsupported strategy {strategy!r}; expected one of {sorted(SUPPORTED_EXECUTOR_STRATEGIES)}",
+            msg,
         )
 
 
@@ -133,6 +134,7 @@ class AsyncGraphqlAdapterClient(AsyncHttpAdapterClient):
         if body.get("errors"):
             if self._log is not None:
                 self._log.error(self._graphql_errors_event, errors=body["errors"])
-            raise RuntimeError(f"{self._graphql_error_prefix}: {body['errors']}")
+            msg = f"{self._graphql_error_prefix}: {body['errors']}"
+            raise RuntimeError(msg)
         data = body.get("data", {})
         return cast("dict[str, Any]", data)

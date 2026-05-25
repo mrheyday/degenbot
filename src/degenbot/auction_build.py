@@ -94,7 +94,8 @@ class AuctionBuildRequest(BaseModel):
     @classmethod
     def _auction_deadline_must_be_live(cls, auction: AuctionRef) -> AuctionRef:
         if auction.deadline_ms <= int(time.time() * 1000):
-            raise ValueError("auction deadline elapsed")
+            msg = "auction deadline elapsed"
+            raise ValueError(msg)
         return auction
 
 

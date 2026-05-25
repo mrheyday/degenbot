@@ -54,7 +54,9 @@ def test_operation_aware_event_matcher_repay_consumption_policy() -> None:
 
     class _Enricher:
         def enrich(self, *, scaled_event, operation):
-            return SimpleNamespace(raw_amount=scaled_event.amount, scaled_amount=scaled_event.amount)
+            return SimpleNamespace(
+                raw_amount=scaled_event.amount, scaled_amount=scaled_event.amount
+            )
 
     operation = Operation(
         operation_id=1,

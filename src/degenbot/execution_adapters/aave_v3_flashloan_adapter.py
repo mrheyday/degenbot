@@ -70,27 +70,35 @@ class AaveV3FlashLoanRequest:
     def __post_init__(self) -> None:
         n = len(self.assets)
         if n == 0:
-            raise ValueError("Aave V3 flash-loan request requires ≥1 asset")
+            msg = "Aave V3 flash-loan request requires ≥1 asset"
+            raise ValueError(msg)
         if len(self.amounts) != n:
+            msg = f"Aave V3 array length mismatch: assets={n} amounts={len(self.amounts)}"
             raise ValueError(
-                f"Aave V3 array length mismatch: assets={n} amounts={len(self.amounts)}",
+                msg,
             )
         if len(self.modes) != n:
+            msg = f"Aave V3 array length mismatch: assets={n} modes={len(self.modes)}"
             raise ValueError(
-                f"Aave V3 array length mismatch: assets={n} modes={len(self.modes)}",
+                msg,
             )
         for a in self.amounts:
             if a <= 0:
-                raise ValueError(f"Aave V3 flash-loan amounts must all be > 0, got {a}")
+                msg = f"Aave V3 flash-loan amounts must all be > 0, got {a}"
+                raise ValueError(msg)
         for m in self.modes:
             if m != 0:
                 # §07 §1.1 gotcha: non-zero modes open a debt position.
+                msg = f"Aave V3 interestRateModes must be all-zeros (got {m}); non-zero opens a debt position."
                 raise ValueError(
-                    f"Aave V3 interestRateModes must be all-zeros (got {m}); non-zero opens a debt position.",
+                    msg,
                 )
         if not 0 <= self.referral_code <= _UINT16_MAX:
+            msg = (
+                f"Aave V3 referralCode must be uint16 [0, {_UINT16_MAX}], got {self.referral_code}"
+            )
             raise ValueError(
-                f"Aave V3 referralCode must be uint16 [0, {_UINT16_MAX}], got {self.referral_code}",
+                msg,
             )
 
 
@@ -153,23 +161,40 @@ class AaveV3FlashLoanBuilder:
         self,
         req: AaveV3FlashLoanRequest,
         strategy: str = "native_arb",
+        *,
+        swaps: Sequence[Mapping[str, Any]] | None = None,
+        min_profit: int = 0,
+        deadline: int = 0,
     ) -> bytes:
         """Encode the Executor function call that triggers Pool.flashLoan.
 
         Maps `strategy` → one of `executeNativeArb` / `matchInternal` /
-        `composeFourLeg`. The selected function packs the FlashProtocol
-        kind = 0 (Aave V3) plus `req.assets` / `req.amounts` / `req.modes`
-        / `req.callback_data` / `req.referral_code` into the strategy-
-        specific param struct.
+        `composeFour_leg`.
 
-        TODO(scaffold): wire `eth_abi` to encode the chosen Executor
-        function's calldata once the final ABI lands.
+        Note: Executor.sol currently supports single-asset flash loans for
+        all strategy entry points.
         """
+        from degenbot.execution import encode_native_arb_calldata
+
         validate_executor_strategy(strategy)
-        _ = req
-        raise NotImplementedError(
-            "TODO(scaffold): wire eth_abi to encode Executor calldata once final ABI lands.",
-        )
+
+        if len(req.assets) != 1:
+            msg = f"Aave V3 Executor integration currently requires exactly 1 asset, got {len(req.assets)}"
+            raise ValueError(msg)
+
+        if strategy == "native_arb":
+            return encode_native_arb_calldata(
+                flash_lender=self._aave_pool_address,
+                flash_protocol="Aave",
+                flash_token=req.assets[0],
+                flash_amount=req.amounts[0],
+                swaps=swaps or [],
+                min_profit=min_profit,
+                deadline=deadline,
+            )
+
+        msg = f"Aave V3 adapter: strategy {strategy!r} encoding not yet implemented"
+        raise NotImplementedError(msg)
 
     @classmethod
     def compute_premium(cls, amount: int) -> int:

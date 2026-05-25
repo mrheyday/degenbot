@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 Address = str
 Hex = str
 Bytes32 = str
 ChainId = int
 
-# ... (Strategy and AggregatorSource literals remain same)
+AggregatorSource = str
 
 
 class PathfinderPath(BaseModel):
@@ -55,7 +57,9 @@ class CowOrderSummary(BaseModel):
     valid_to: int = Field(alias="validTo")
     kind: Literal["buy", "sell"]
     partially_fillable: bool = Field(alias="partiallyFillable")
-    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(alias="signingScheme")
+    signing_scheme: Literal["eip712", "ethsign", "presign", "eip1271"] = Field(
+        alias="signingScheme"
+    )
     signature: Hex
     app_data: Bytes32 = Field(alias="appData")
 
@@ -88,7 +92,9 @@ class MatchCandidate(BaseModel):
     amount_sell: int = Field(alias="amountSell")
     amount_buy_min: int = Field(alias="amountBuyMin")
     source_id: str = Field(alias="sourceId")
-    source_venue: Literal["native", "cow", "cow-competition", "uniswapx", "across", "eco"] = Field(alias="sourceVenue")
+    source_venue: Literal["native", "cow", "cow-competition", "uniswapx", "across", "eco"] = Field(
+        alias="sourceVenue"
+    )
     source_expires_at: int = Field(alias="sourceExpiresAt")
     received_at_ms: int = Field(alias="receivedAtMs")
     cow_order: CowOrderSummary | None = Field(default=None, alias="cowOrder")

@@ -119,7 +119,7 @@ def get_tick_at_sqrt_price(sqrt_price_x96: int) -> int:
 
     price = sqrt_price_x96 << 32
     msb = bit_math.most_significant_bit(price)
-    r = price >> msb - 127 if msb >= 128 else price << 127 - msb  # noqa: PLR2004
+    r = price >> msb - 127 if msb >= 128 else price << 127 - msb
     log_2 = (msb - 128) << 64
 
     for factor in (63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51):

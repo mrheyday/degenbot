@@ -66,7 +66,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
         self,
         input_token: Erc20Token,
         swap_pools: Iterable[CurveOrUniswapPool],
-        id: str,  # noqa:A002
+        id: str,
         max_input: int | None = None,
     ) -> None:
         for swap_pool in swap_pools:
@@ -285,7 +285,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                         )
                     case _:  # pragma: no cover
                         raise DegenbotValueError(
-                            message=f"Could not process pool {pool} and override {pool_state_override}"  # noqa:E501
+                            message=f"Could not process pool {pool} and override {pool_state_override}"
                         )
             except LiquidityPoolError as exc:  # pragma: no cover
                 raise ArbitrageError(message=str(exc)) from exc
@@ -376,7 +376,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                     profit_factor *= price * ((fee.denominator - fee.numerator) / fee.denominator)
                 case _:  # pragma: no cover
                     raise DegenbotValueError(
-                        message=f"Could not process pool {pool}, state {pool_state}, and vector {vector}"  # noqa:E501
+                        message=f"Could not process pool {pool}, state {pool_state}, and vector {vector}"
                     )
 
         if profit_factor < 1.0:
@@ -463,17 +463,51 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
             # negated profit
             return -float(token_out_quantity - token_in_quantity)
 
-        opt: OptimizeResult = minimize_scalar(
-            fun=arb_profit,
-            method="bounded",
-            bounds=bounds,
-            bracket=bracket,
-            options={"xatol": 1.0},
-        )
+        optimal_x: int | None = None
+        if len(self.swap_pools) == 2:
+            try:
+                p1, p2 = self.swap_pools
+                from degenbot import optimal_input_2pool_curve as rust_optimal_input_curve
 
-        # Negate the result to convert to a sensible value (positive profit)
-        best_profit = -int(opt.fun)
-        swap_amount = int(opt.x)
+                if (
+                    rust_optimal_input_curve is not None
+                    and isinstance(p1, CurveStableswapPool)
+                    and isinstance(p2, UniswapV2Pool)
+                ):
+                    p1_json = p1.to_curve_snapshot_json(state_overrides.get(p1.address))
+                    p2_state = state_overrides.get(p2.address) or p2.state
+                    r_in = (
+                        p2_state.reserves_token0
+                        if p2.token0 == self._swap_vectors[0].token_out
+                        else p2_state.reserves_token1
+                    )
+                    r_out = (
+                        p2_state.reserves_token1
+                        if p2.token0 == self._swap_vectors[0].token_out
+                        else p2_state.reserves_token0
+                    )
+
+                    # i=0 (input), j=1 (output)
+                    res_str = rust_optimal_input_curve(
+                        p1_json, 0, 1, (str(r_in), str(r_out), p2.fee_bps)
+                    )
+                    optimal_x = int(res_str)
+            except Exception:
+                pass
+
+        if optimal_x is None:
+            opt: OptimizeResult = minimize_scalar(
+                fun=arb_profit,
+                method="bounded",
+                bounds=bounds,
+                bracket=bracket,
+                options={"xatol": 1.0},
+            )
+            swap_amount = int(opt.x)
+            best_profit = -int(opt.fun)
+        else:
+            swap_amount = optimal_x
+            best_profit = -int(arb_profit(float(swap_amount)))
 
         best_amounts = self._build_swap_amounts(
             token_in_quantity=swap_amount,
@@ -554,7 +588,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
             pool.sparse_liquidity_map for pool in self.swap_pools if isinstance(pool, UniswapV3Pool)
         ):  # pragma: no cover
             raise DegenbotValueError(
-                message=f"Cannot calculate {self} with executor. One or more V3 pools has a sparse liquidity map."  # noqa: E501
+                message=f"Cannot calculate {self} with executor. One or more V3 pools has a sparse liquidity map."
             )
 
         curve_pool = self.swap_pools[1]
@@ -781,7 +815,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                         ))
 
                     logger.debug(
-                        f"PAYLOAD: exchange {amounts.amount_in} {amounts.token_in_index}->{amounts.token_out_index}, min out = {amounts.min_amount_out}"  # noqa: E501
+                        f"PAYLOAD: exchange {amounts.amount_in} {amounts.token_in_index}->{amounts.token_out_index}, min out = {amounts.min_amount_out}"
                     )
                     if amounts.underlying:
                         payloads.append((
@@ -821,7 +855,7 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                         ))
                     if isinstance(next_pool, UniswapV2Pool):
                         logger.debug(
-                            f"PAYLOAD: transferring {amounts.min_amount_out} {amounts.token_out} to V2 pool {next_pool}"  # noqa: E501
+                            f"PAYLOAD: transferring {amounts.min_amount_out} {amounts.token_out} to V2 pool {next_pool}"
                         )
                         payloads.append((
                             # address

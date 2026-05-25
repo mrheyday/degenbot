@@ -131,7 +131,7 @@ class DeterministicPipeline[EventT, PayloadT]:
         for strategy in self._strategies:
             try:
                 await strategy.sync_state()
-            except Exception as exc:  # noqa: BLE001 - strategy plugins are an isolation boundary.
+            except Exception as exc:
                 self._handle_fault(
                     counters,
                     PipelineFault("sync", strategy.name, None, str(exc)),
@@ -146,7 +146,7 @@ class DeterministicPipeline[EventT, PayloadT]:
                     await self._process_event(event, counters)
             except PipelineError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - collectors are external source adapters.
+            except Exception as exc:
                 self._handle_fault(
                     counters,
                     PipelineFault("collector", collector.name, None, str(exc)),
@@ -158,7 +158,7 @@ class DeterministicPipeline[EventT, PayloadT]:
         for strategy in self._strategies:
             try:
                 actions = await strategy.process_event(event)
-            except Exception as exc:  # noqa: BLE001 - strategy plugins are an isolation boundary.
+            except Exception as exc:
                 self._handle_fault(
                     counters,
                     PipelineFault("strategy", strategy.name, None, str(exc)),
@@ -173,7 +173,7 @@ class DeterministicPipeline[EventT, PayloadT]:
                 try:
                     await executor.execute(action)
                     counters.actions_executed += 1
-                except Exception as exc:  # noqa: BLE001 - executors are side-effect boundaries.
+                except Exception as exc:
                     self._handle_fault(
                         counters,
                         PipelineFault("executor", executor.name, action.trace_id, str(exc)),

@@ -127,3 +127,12 @@ def test_parse_delegatee_csv_validates_addresses() -> None:
 
     with pytest.raises(ValueError, match="DELEGATEE_ADDRESSES"):
         verifier.parse_delegatee_csv("not-an-address")
+
+
+def test_delegatee_csv_from_env_accepts_deploy_script_alias() -> None:
+    delegatee = "0x000000000000000000000000000000000000dEaD"
+
+    assert verifier.delegatee_csv_from_env({"DELEGATEES_INITIAL": delegatee}) == delegatee
+    assert verifier.parse_delegatee_csv(verifier.delegatee_csv_from_env({"DELEGATEES_INITIAL": delegatee})) == (
+        delegatee,
+    )
