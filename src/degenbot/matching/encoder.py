@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from eth_abi import encode as abi_encode
 
-from degenbot.matching.price_compat import PRICE_SCALE, is_opposing_pair
+from degenbot.matching.price_compat import is_opposing_pair, project_sell_to_buy
 
 if TYPE_CHECKING:
     from degenbot.decision.types import (
@@ -59,9 +59,9 @@ def encode_match_pair(
     _validate_orders(cow_order, cow_candidate, uniswapx_order, uniswapx_candidate)
 
     cow_settlement_calldata = _encode_cow_settle(
+        pair=pair,
         cow_order=cow_order,
         fill_amount=pair.fill_amount,
-        clearing_price=pair.clearing_price,
         executor_address=executor_address,
         cow_order_is_counter=(cow_candidate.id == pair.c.id),
     )
@@ -77,7 +77,7 @@ def encode_match_pair(
     token_a = pair.o.pair_sell
     token_b = pair.o.pair_buy
 
-    token_b_spot = (pair.fill_amount * pair.clearing_price) // PRICE_SCALE
+    token_b_spot = _project_o_sell_to_o_buy(pair, pair.fill_amount)
     token_a_floor = (pair.fill_amount * min_profit_bps) // BPS_DENOMINATOR
     token_b_floor = (token_b_spot * min_profit_bps) // BPS_DENOMINATOR
 
@@ -131,9 +131,9 @@ def _validate_orders(
 
 
 def _encode_cow_settle(
+    pair: MatchPair,
     cow_order: CowOrderSummary,
     fill_amount: int,
-    clearing_price: int,
     executor_address: Address,
     cow_order_is_counter: bool,
 ) -> Hex:
@@ -141,20 +141,14 @@ def _encode_cow_settle(
     clearing_prices = [cow_order.buy_amount, cow_order.sell_amount]
 
     def project_to_buy(fill: int) -> int:
-        if clearing_price == 0:
-            msg = "clearing_price is zero"
-            raise ValueError(msg)
         if cow_order_is_counter:
-            return (fill * PRICE_SCALE) // clearing_price
-        return (fill * clearing_price) // PRICE_SCALE
+            return fill
+        return _project_o_sell_to_o_buy(pair, fill)
 
     def project_to_sell(fill: int) -> int:
         if not cow_order_is_counter:
             return fill
-        if clearing_price == 0:
-            msg = "clearing_price is zero"
-            raise ValueError(msg)
-        return (fill * clearing_price) // PRICE_SCALE
+        return _project_o_sell_to_o_buy(pair, fill)
 
     if not cow_order.partially_fillable:
         executed_amount = (
@@ -192,18 +186,29 @@ def _encode_cow_settle(
         bytes.fromhex(cow_order.signature[2:]),
     )
 
-    # settle(address[],uint256[],tuple[],tuple[][3]) selector: 0x1700684f
-    # But wait, TS uses GPV2_SETTLE_ABI which might have a different selector or name
-    # Let's check GPV2_SETTLE_ABI in TS: function name is "settle"
-    # settle(address[],uint256[],(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)[],(address,uint256,bytes)[][3])
+    # GPv2 settle(address[],uint256[],(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)[],(address,uint256,bytes)[][3])
+    # Note: eth_abi requires explicitly naming the tuple components if using 'tuple' string,
+    # or using the full canonical type string.
+
+    trade_type = "(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)"
+    interaction_type = "(address,uint256,bytes)"
 
     interactions = [[], [interaction], []]
 
     calldata = b"\x17\x00\x68\x4f" + abi_encode(
-        ["address[]", "uint256[]", "tuple[]", "tuple[][3]"],
-        [tokens, clearing_prices, [trade], interactions],
+        ["address[]", "uint256[]", f"{trade_type}[]", f"{interaction_type}[][3]"],
+        [tokens, clearing_prices, [trade], interactions]
     )
     return "0x" + calldata.hex()
+
+
+def _project_o_sell_to_o_buy(pair: MatchPair, fill_amount: int) -> int:
+    return project_sell_to_buy(
+        amount_sell=fill_amount,
+        price=pair.clearing_price,
+        sell_decimals=pair.o.pair_sell_decimals,
+        buy_decimals=pair.o.pair_buy_decimals,
+    )
 
 
 def _pack_order_flags(order: CowOrderSummary) -> int:

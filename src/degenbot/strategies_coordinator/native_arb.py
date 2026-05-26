@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from degenbot.decision.types import Address, Hex
 from degenbot.flash.source_router import resolve_executor_flash_route
 from degenbot.strategies_coordinator.types import (
-    DEX_KIND,
     NativeArbParams,
 )
 from degenbot.strategies_coordinator.types import (
@@ -78,18 +77,8 @@ class NativeArbStrategy:
         """Translate one engine SwapStep into a contract SwapStep."""
         router = getattr(step, "pool", step.router)
 
-        dex_map = {
-            "UniswapV2": DEX_KIND.V2,
-            "UniswapV3": DEX_KIND.V3,
-            "UniswapV4": DEX_KIND.V4,
-            "Curve": DEX_KIND.CURVE,
-            "Algebra": DEX_KIND.ALGEBRA,
-            "Solidly": DEX_KIND.SOLIDLY,
-        }
-        dex_kind = dex_map.get(step.dex, DEX_KIND.V2)
-
         return ContractSwapStep(
-            dex_kind=dex_kind,
+            dex_kind=step.dex_kind,
             router=router,
             call_data=Hex("0x"),
             token_in=step.token_in,

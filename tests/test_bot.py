@@ -89,13 +89,6 @@ def test_bot_from_pathfinding_builds_strategies(monkeypatch) -> None:
     class _Token:
         address = "0x0000000000000000000000000000000000000001"
 
-    class _TokenManager:
-        def __init__(self, *, chain_id):
-            self.chain_id = chain_id
-
-        def get_erc20token(self, address):
-            return _Token()
-
     class _Strategy:
         def __init__(self, strategy_id: str):
             self.id = strategy_id
@@ -122,7 +115,7 @@ def test_bot_from_pathfinding_builds_strategies(monkeypatch) -> None:
         "degenbot.bot.pool_registry.get",
         lambda **kwargs: [other_pool, curve_pool][0 if kwargs["pool_address"] == "0x1" else 1],
     )
-    monkeypatch.setattr("degenbot.bot.Erc20TokenManager", _TokenManager)
+    monkeypatch.setattr("degenbot.bot.Erc20Token", _Token)
     monkeypatch.setattr(
         "degenbot.bot.UniswapCurveCycle",
         lambda **kwargs: _Strategy(kwargs["id"]),

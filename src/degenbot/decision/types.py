@@ -104,6 +104,8 @@ class MatchCandidate(BaseModel):
     side: Literal["outbound", "inbound", "uniswapx", "native"]
     pair_sell: Address = Field(alias="pairSell")
     pair_buy: Address = Field(alias="pairBuy")
+    pair_sell_decimals: int = Field(default=18, ge=0, le=255, alias="pairSellDecimals")
+    pair_buy_decimals: int = Field(default=18, ge=0, le=255, alias="pairBuyDecimals")
     amount_sell: int = Field(alias="amountSell")
     amount_buy_min: int = Field(alias="amountBuyMin")
     source_id: str = Field(alias="sourceId")
@@ -117,7 +119,7 @@ class MatchCandidate(BaseModel):
 
 
 class MatchPair(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
     o: MatchCandidate
     c: MatchCandidate
     fill_amount: int = Field(alias="fillAmount")

@@ -32,6 +32,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         registry_keys=(RegistryKey.FACTORY, RegistryKey.ROUTER),
         execution_module="degenbot.uniswap.v2_liquidity_pool",
         ipc_address_keyed_kinds=("UniswapV2",),
+        defillama=(dl("dexs/uniswap-v2.ts"),),
         notes="Degenbot-native V2 pool simulation; TS registry remains the address source.",
     ),
     AdapterTemplate(
@@ -46,6 +47,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         registry_keys=(RegistryKey.FACTORY, RegistryKey.ROUTER),
         execution_module="degenbot.uniswap.v3_liquidity_pool",
         ipc_address_keyed_kinds=("UniswapV3",),
+        defillama=(dl("dexs/uniswap-v3.ts"),),
         notes="Degenbot-native V3 pool simulation and canonical router/quoter bindings.",
     ),
     AdapterTemplate(
@@ -61,6 +63,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         registry_keys=(RegistryKey.POOL_ID, RegistryKey.ROUTER),
         execution_module="degenbot.uniswap.v4_liquidity_pool",
         ipc_pool_id_required_kinds=("UniswapV4",),
+        defillama=(dl("dexs/uniswap-v4.ts"),),
         notes="Pool-id keyed; IPC execution remains disabled until pool-id-aware wire support lands.",
     ),
     AdapterTemplate(
@@ -122,6 +125,10 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         registry_keys=(RegistryKey.FACTORY, RegistryKey.ROUTER),
         execution_module="degenbot.sushiswap.pools",
         ipc_address_keyed_kinds=("SushiSwapV2", "SushiSwapV3"),
+        defillama=(
+            dl("dexs/sushiswap-v3.ts"),
+            dl("aggregators/sushiswap-agg.ts", "aggregators"),
+        ),
         notes="Degenbot-native V2/V3 fork classes.",
     ),
     AdapterTemplate(
@@ -135,6 +142,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         registry_keys=(RegistryKey.ROUTER,),
         execution_module="degenbot.pancakeswap.pools",
         ipc_address_keyed_kinds=("PancakeSwapV2", "PancakeSwapV3"),
+        defillama=(dl("dexs/pancakeswap-v3.ts"),),
         notes="Degenbot-native Pancake V3 pool class with dedicated Arbitrum router bindings.",
     ),
     AdapterTemplate(
@@ -282,6 +290,11 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         execution_module="degenbot.execution_adapters.solidly_adapter",
         ipc_address_keyed_kinds=("Solidly",),
         ipc_recognized_kinds=("RamsesV2",),
+        defillama=(
+            dl("dexs/ramsesx-arb-legacy.ts"),
+            dl("dexs/ramsesx-arb-cl.ts"),
+            dl("dexs/solidly-v3/index.ts"),
+        ),
         notes="Project Solidly adapter covers Ramses/Chronos/Solidlizard-style pools.",
     ),
     AdapterTemplate(
@@ -298,7 +311,16 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         ),
         registry_keys=(RegistryKey.ROUTER,),
         ipc_recognized_kinds=("KyberElastic", "LFJLiquidityBook", "GMXV2", "Wombat"),
-        notes="Registry POC lanes require strategy-owned calldata synthesis before production routing.",
+        defillama=(
+            dl("aggregators/joe-agg/index.ts", "aggregators"),
+            dl("aggregators/kyberswap/index.ts", "aggregators"),
+            dl("dexs/gmx-v2-gmx-v2-swap.ts"),
+            dl("dexs/wombat-exchange/index.ts"),
+        ),
+        notes=(
+            "Registry POC lanes require strategy-owned calldata synthesis before production routing; "
+            "DefiLlama references pin the venue families for discovery and volume context."
+        ),
     ),
     AdapterTemplate(
         venue="RFQAndCrossChainAggregators",

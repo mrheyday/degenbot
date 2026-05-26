@@ -22,7 +22,8 @@ Spec
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence  # noqa: TC003 - Pydantic resolves this at model rebuild.
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,9 +35,6 @@ from degenbot.types_solver.executor import (
     NativeArbParams,
     SwapStep,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 
 class MorphoMarketParams(BaseModel):
@@ -85,6 +83,9 @@ class Opportunity(BaseModel):
     morpho_liquidation: MorphoLiquidationOpportunityPayload | None = Field(
         default=None, alias="morphoLiquidation"
     )
+
+
+Opportunity.model_rebuild()
 
 
 def from_wire_json(s: str) -> dict[str, Any]:

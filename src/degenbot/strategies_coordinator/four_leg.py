@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any
 from degenbot.decision.types import Address, Hex
 from degenbot.flash.source_router import resolve_executor_flash_route
 from degenbot.strategies_coordinator.types import (
-    DEX_KIND,
     ComposeParams,
     FlashProtocol,
     SwapStep,
@@ -127,18 +126,8 @@ class FourLegStrategy:
         )
 
     def _map_engine_swap_to_contract(self, step: Any) -> SwapStep:
-        dex_map = {
-            "UniswapV2": DEX_KIND.V2,
-            "UniswapV3": DEX_KIND.V3,
-            "UniswapV4": DEX_KIND.V4,
-            "Curve": DEX_KIND.CURVE,
-            "Algebra": DEX_KIND.ALGEBRA,
-            "Solidly": DEX_KIND.SOLIDLY,
-        }
-        dex_kind = dex_map.get(getattr(step, "dex", ""), DEX_KIND.V2)
-
         return SwapStep(
-            dex_kind=dex_kind,
+            dex_kind=step.dex_kind,
             router=getattr(step, "pool", getattr(step, "router", "")),
             call_data=Hex("0x"),
             token_in=step.token_in,

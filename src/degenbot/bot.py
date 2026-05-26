@@ -107,13 +107,14 @@ class DegenbotBot:
         and avoids mutating live state.
         """
 
-        token_manager = Erc20TokenManager(chain_id=chain_id)
         if isinstance(input_token, Erc20Token):
             token = input_token
-        elif hasattr(input_token, "address"):
-            token = token_manager.get_erc20token(get_checksum_address(input_token.address))
         else:
-            token = token_manager.get_erc20token(get_checksum_address(input_token))
+            token_manager = Erc20TokenManager(chain_id=chain_id)
+            if hasattr(input_token, "address"):
+                token = token_manager.get_erc20token(get_checksum_address(input_token.address))
+            else:
+                token = token_manager.get_erc20token(get_checksum_address(input_token))
 
         strategy_list: list[ArbitrageStrategy] = []
         seen: set[tuple[str, ...]] = set()

@@ -31,6 +31,7 @@ LIQUIDITY_ADAPTERS: tuple[AdapterTemplate, ...] = (
         ),
         registry_keys=(RegistryKey.FACTORY, RegistryKey.ADDRESS),
         execution_module="degenbot.uniswap.v3_liquidity_pool",
+        defillama=(dl("dexs/uniswap-v3.ts", "dexs"),),
         notes="Degenbot SQLite-backed V3 liquidity snapshots are the read surface.",
     ),
     AdapterTemplate(
@@ -44,6 +45,7 @@ LIQUIDITY_ADAPTERS: tuple[AdapterTemplate, ...] = (
         ),
         registry_keys=(RegistryKey.POOL_ID,),
         execution_module="degenbot.uniswap.v4_liquidity_pool",
+        defillama=(dl("dexs/uniswap-v4.ts", "dexs"),),
         notes="PoolManager/StateView reads feed policy-gated Uniswap V4 LP mutation planning.",
     ),
     AdapterTemplate(
@@ -92,6 +94,7 @@ LIQUIDITY_ADAPTERS: tuple[AdapterTemplate, ...] = (
         contracts=bindings(("MORPHO_SINGLETON", "singleton")),
         registry_keys=(RegistryKey.VAULT, RegistryKey.MARKET_ID),
         execution_module="degenbot.execution_adapters.metamorpho_v1_adapter",
+        defillama=(dl("fees/morpho/index.ts"),),
         notes="Vault allocation and risk reads for liquidity ranking.",
     ),
     AdapterTemplate(
