@@ -1,10 +1,7 @@
-use crate::monitor::{MatchCandidate, MatchPair};
 use crate::matching::price_compat::{clearing_price, fill_amount, is_price_compatible};
+use crate::monitor::{MatchCandidate, MatchPair};
 
-pub fn find_matches(
-    outbound: &[MatchCandidate],
-    counters: &[MatchCandidate],
-) -> Vec<MatchPair> {
+pub fn find_matches(outbound: &[MatchCandidate], counters: &[MatchCandidate]) -> Vec<MatchPair> {
     let mut matches = Vec::new();
     for o in outbound {
         for c in counters {

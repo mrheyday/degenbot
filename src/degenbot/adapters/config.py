@@ -128,6 +128,10 @@ class Settings(DegenbotSettings):
         default=True,
         description="Enable Pick A native arbitrage.",
     )
+    strategy_oracle_sandwich_enabled: bool = Field(
+        default=False,
+        description="Enable S-5 oracle-update sandwich strategy.",
+    )
     strategy_timeboost_enabled: bool = Field(
         default=False,
         description="Enable Timeboost express-lane bid economics.",

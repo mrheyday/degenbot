@@ -1222,7 +1222,9 @@ class RegistryBackedDegenbotSimulator:
         # Some coordinator fixtures historically used `pool` as a logical route id rather than the
         # V4 PoolManager address. Fall back to a unique PoolId scan so hydrated degenbot V4 pools
         # can still simulate while the wire remains backward-compatible.
-        raw_v4_pools = getattr(getattr(pool_registry, "_v4_pool_registry", None), "_all_v4_pools", None)
+        raw_v4_pools = getattr(
+            getattr(pool_registry, "_v4_pool_registry", None), "_all_v4_pools", None
+        )
         if not isinstance(raw_v4_pools, dict):
             return None
 

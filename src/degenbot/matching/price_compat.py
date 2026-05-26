@@ -95,10 +95,7 @@ def counter_max_price(c: MatchCandidate) -> int:
 
 def is_opposing_pair(o: MatchCandidate, c: MatchCandidate) -> bool:
     """Pair pre-condition: token directions oppose."""
-    return (
-        o.pair_sell.lower() == c.pair_buy.lower()
-        and o.pair_buy.lower() == c.pair_sell.lower()
-    )
+    return o.pair_sell.lower() == c.pair_buy.lower() and o.pair_buy.lower() == c.pair_sell.lower()
 
 
 def is_price_compatible(o: MatchCandidate, c: MatchCandidate) -> bool:

@@ -20,10 +20,12 @@ pub fn evaluate_sandoo_idea_json_py(
 ) -> PyResult<String> {
     let opp: Opportunity = serde_json::from_str(&opp_json)
         .map_err(|e| PyValueError::new_err(format!("invalid opp json: {e}")))?;
-    
+
     let best_quote: Option<AggregatorQuote> = if let Some(json) = best_quote_json {
-        Some(serde_json::from_str(&json)
-            .map_err(|e| PyValueError::new_err(format!("invalid quote json: {e}")))?)
+        Some(
+            serde_json::from_str(&json)
+                .map_err(|e| PyValueError::new_err(format!("invalid quote json: {e}")))?,
+        )
     } else {
         None
     };
@@ -54,17 +56,16 @@ pub fn find_best_match_json_py(
 ) -> PyResult<Option<String>> {
     let outbound: Vec<MatchCandidate> = serde_json::from_str(&outbound_json)
         .map_err(|e| PyValueError::new_err(format!("invalid outbound json: {e}")))?;
-    
+
     let counters: Vec<MatchCandidate> = serde_json::from_str(&counters_json)
         .map_err(|e| PyValueError::new_err(format!("invalid counters json: {e}")))?;
 
-    let best = py.detach(|| {
-        find_best_match(&outbound, &counters)
-    });
+    let best = py.detach(|| find_best_match(&outbound, &counters));
 
     if let Some(pair) = best {
-        Ok(Some(serde_json::to_string(&pair)
-            .map_err(|e| PyValueError::new_err(format!("failed to serialize pair: {e}")))?))
+        Ok(Some(serde_json::to_string(&pair).map_err(|e| {
+            PyValueError::new_err(format!("failed to serialize pair: {e}"))
+        })?))
     } else {
         Ok(None)
     }

@@ -1,4 +1,3 @@
-
 from collections import deque
 from fractions import Fraction
 from threading import Lock

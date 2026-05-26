@@ -90,13 +90,17 @@ class TestMorphoFlashLoanBuilderEncode:
         # executeNativeArb selector
         assert calldata.hex().startswith("f6f6add1")
 
-    def test_encode_match_internal_strategy_raises_not_implemented(self, mock_swaps: list[dict]) -> None:
+    def test_encode_match_internal_strategy_raises_not_implemented(
+        self, mock_swaps: list[dict]
+    ) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
         req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
         with pytest.raises(NotImplementedError, match="not yet implemented"):
             b.encode_executor_calldata(req, strategy="match_internal", swaps=mock_swaps)
 
-    def test_encode_compose_four_leg_strategy_raises_not_implemented(self, mock_swaps: list[dict]) -> None:
+    def test_encode_compose_four_leg_strategy_raises_not_implemented(
+        self, mock_swaps: list[dict]
+    ) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
         req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
         with pytest.raises(NotImplementedError, match="not yet implemented"):

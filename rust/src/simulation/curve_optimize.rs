@@ -1,10 +1,10 @@
 //! Numerical optimization for Curve StableSwap pools.
 //!
-//! Uses iterative refinement (ternary search) to find the optimal input 
+//! Uses iterative refinement (ternary search) to find the optimal input
 //! amount for cycles involving a Curve pool.
 
-use alloy::primitives::{U256, I256};
-use eyre::{Result};
+use alloy::primitives::{I256, U256};
+use eyre::{eyre, Result};
 
 use crate::simulation::curve::{amount_out as curve_amount_out, CurveSnapshot};
 
@@ -44,7 +44,7 @@ pub fn optimal_input_2pool_curve(
 
     let final_x = (low + high) / U256::from(2);
     let final_profit = calculate_curve_profit(pool_curve, i, j, pool2_v2, final_x)?;
-    
+
     if final_profit <= I256::ZERO {
         Ok(U256::ZERO)
     } else {
@@ -74,5 +74,9 @@ fn calculate_curve_profit(
         U256::ZERO
     };
 
-    Ok(I256::try_from(out2).unwrap() - I256::try_from(amount_in).unwrap())
+    let out2_i256 =
+        I256::try_from(out2).map_err(|_| eyre!("curve profit output overflows I256"))?;
+    let amount_in_i256 =
+        I256::try_from(amount_in).map_err(|_| eyre!("curve profit input overflows I256"))?;
+    Ok(out2_i256 - amount_in_i256)
 }

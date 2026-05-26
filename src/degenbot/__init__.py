@@ -21,6 +21,7 @@ from .connection import (
     set_web3,
 )
 from .degenbot_rs import (
+    apply_gap_to_price_x96,
     decode_return_data,
     encode_function_call,
     get_function_selector,
@@ -29,7 +30,13 @@ from .degenbot_rs import (
     optimal_input_2pool,
     optimal_input_2pool_curve,
     optimal_input_2pool_v3,
+    optimal_v2_frontrun_amount,
+    synthetic_victim_amount_in,
     to_checksum_address,
+    v2_mid_price_x96,
+    v2_optimal_sandwich_size,
+    v2_sandwich_max_size,
+    v3_mid_price_x96,
 )
 from .dispatch import (
     DispatchAdapter,
@@ -91,6 +98,7 @@ from .curve import (
 )
 from .decision.engine import DecisionEngine, RoutedDecision
 from .decision.precedence import DecisionKind, compare_priority
+from .decision.sandoo_ideas import SandooIdeaSignal
 from .decision.types import (
     AggregatorQuote,
     DecisionContext,
@@ -117,6 +125,10 @@ from .strategies_coordinator.internal_match import (
     InternalMatchStrategy,
 )
 from .strategies_coordinator.native_arb import NativeArbStrategy
+from .strategies_coordinator.oracle_sandwich import (
+    OracleSandwichPlan,
+    OracleSandwichStrategy,
+)
 from .strategies_coordinator.types import (
     DEX_KIND,
     FLASH_PROTOCOL,
@@ -126,6 +138,12 @@ from .strategies_coordinator.types import (
 )
 from .strategies_coordinator.types import (
     SwapStep as ContractSwapStep,
+)
+from .strategy_signals.bus import SignalBus
+from .strategy_signals.correlation import CorrelationWindow
+from .strategy_signals.ostium_oracle_gap import (
+    OstiumOracleGapPayload,
+    OstiumOracleGapSource,
 )
 from .sushiswap import (
     SushiswapV2Pool,
@@ -176,6 +194,7 @@ __all__ = (
     "CompetitionSubmitter",
     "ComposeParams",
     "ContractSwapStep",
+    "CorrelationWindow",
     "CowAuction",
     "CurveStableSwapPoolStateUpdated",
     "CurveStableSwapPoolSwapAmounts",
@@ -206,6 +225,10 @@ __all__ = (
     "MatchedTrade",
     "NativeArbParams",
     "NativeArbStrategy",
+    "OracleSandwichPlan",
+    "OracleSandwichStrategy",
+    "OstiumOracleGapPayload",
+    "OstiumOracleGapSource",
     "PancakeswapV2Pool",
     "PancakeswapV2PoolManager",
     "PancakeswapV3Pool",
@@ -220,6 +243,8 @@ __all__ = (
     "PipelineMetrics",
     "PipelineStrategy",
     "RoutedDecision",
+    "SandooIdeaSignal",
+    "SignalBus",
     "SushiswapV2Pool",
     "SushiswapV2PoolManager",
     "SushiswapV3Pool",
@@ -251,6 +276,7 @@ __all__ = (
     "abi_decode",
     "abi_decode_single",
     "abi_encode",
+    "apply_gap_to_price_x96",
     "async_connection_manager",
     "compare_priority",
     "compose_dispatch_envelope",
@@ -278,12 +304,18 @@ __all__ = (
     "optimal_input_2pool",
     "optimal_input_2pool_curve",
     "optimal_input_2pool_v3",
+    "optimal_v2_frontrun_amount",
     "pool_registry",
     "resolve_executor_flash_route",
     "set_async_web3",
     "set_web3",
     "settings",
     "submit_dispatch_envelope",
+    "synthetic_victim_amount_in",
     "to_checksum_address",
     "token_registry",
+    "v2_mid_price_x96",
+    "v2_optimal_sandwich_size",
+    "v2_sandwich_max_size",
+    "v3_mid_price_x96",
 )

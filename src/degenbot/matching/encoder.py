@@ -190,14 +190,16 @@ def _encode_cow_settle(
     # Note: eth_abi requires explicitly naming the tuple components if using 'tuple' string,
     # or using the full canonical type string.
 
-    trade_type = "(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)"
+    trade_type = (
+        "(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)"
+    )
     interaction_type = "(address,uint256,bytes)"
 
     interactions = [[], [interaction], []]
 
     calldata = b"\x17\x00\x68\x4f" + abi_encode(
         ["address[]", "uint256[]", f"{trade_type}[]", f"{interaction_type}[][3]"],
-        [tokens, clearing_prices, [trade], interactions]
+        [tokens, clearing_prices, [trade], interactions],
     )
     return "0x" + calldata.hex()
 

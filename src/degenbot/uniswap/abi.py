@@ -1,4 +1,3 @@
-
 import pydantic_core
 
 UNISWAP_UNIVERSAL_ROUTER_ABI = pydantic_core.from_json(

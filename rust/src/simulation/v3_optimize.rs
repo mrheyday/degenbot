@@ -1,13 +1,13 @@
 //! Piecewise optimization for Uniswap V3 / V4 concentrated liquidity.
 //!
-//! Uses a hybrid binary/Newton search across tick boundaries to find the 
+//! Uses a hybrid binary/Newton search across tick boundaries to find the
 //! optimal input amount for a 2-pool cycle involving at least one V3/V4 pool.
 
-use alloy::primitives::{U256, I256};
-use eyre::{Result};
+use alloy::primitives::{I256, U256};
+use eyre::{eyre, Result};
 
-use crate::simulation::v3::{V3Snapshot, amount_out as v3_amount_out};
-use crate::simulation::v2::{amount_out as v2_amount_out};
+use crate::simulation::v2::amount_out as v2_amount_out;
+use crate::simulation::v3::{amount_out as v3_amount_out, V3Snapshot};
 
 /// Find the optimal input amount for a 2-pool cycle.
 /// Supported combinations: V2-V3, V3-V3.
@@ -19,7 +19,7 @@ pub fn optimal_input_2pool_v3(
 ) -> Result<U256> {
     // Robust binary search across ticks as the baseline.
     // Concentrated liquidity profit curves are concave and piecewise-differentiable.
-    
+
     let mut low = U256::ZERO;
     let mut high = if let Some(v2) = pool2_v2 {
         v2.0
@@ -54,7 +54,7 @@ pub fn optimal_input_2pool_v3(
 
     let final_x = (low + high) / U256::from(2);
     let final_profit = calculate_profit(pool1_v3, pool1_zero_for_one, pool2_v3, pool2_v2, final_x)?;
-    
+
     if final_profit <= I256::ZERO {
         Ok(U256::ZERO)
     } else {
@@ -86,5 +86,8 @@ fn calculate_profit(
         U256::ZERO
     };
 
-    Ok(I256::try_from(out2).unwrap() - I256::try_from(amount_in).unwrap())
+    let out2_i256 = I256::try_from(out2).map_err(|_| eyre!("v3 profit output overflows I256"))?;
+    let amount_in_i256 =
+        I256::try_from(amount_in).map_err(|_| eyre!("v3 profit input overflows I256"))?;
+    Ok(out2_i256 - amount_in_i256)
 }

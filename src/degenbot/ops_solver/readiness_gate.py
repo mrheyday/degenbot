@@ -150,20 +150,18 @@ def _build_findings() -> tuple[ReadinessFinding, ...]:
     profile_by_id = _profile_by_id()
     profile_ids = tuple(profile_by_id)
 
-    findings.append(
+    findings.extend((
         ReadinessFinding(
             name="workflow_ids_unique",
             ok=len(workflow_ids) == len(set(workflow_ids)),
             detail=f"{len(workflow_ids)} workflow ids",
-        )
-    )
-    findings.append(
+        ),
         ReadinessFinding(
             name="strategy_profiles_cover_workflows",
             ok=set(workflow_ids) == set(profile_ids),
             detail=f"{len(profile_ids)} profiles for {len(workflow_ids)} workflows",
-        )
-    )
+        ),
+    ))
 
     for workflow in EXECUTION_WORKFLOWS:
         profile = profile_by_id.get(workflow.workflow_id)
@@ -178,31 +176,27 @@ def _build_findings() -> tuple[ReadinessFinding, ...]:
             continue
 
         if workflow.is_live:
-            findings.append(
+            findings.extend((
                 ReadinessFinding(
                     name=f"{workflow.workflow_id}.live_profile_ready",
                     ok=profile.production_ready,
                     detail="live workflow must have no explicit blocker",
-                )
-            )
-            findings.append(
+                ),
                 ReadinessFinding(
                     name=f"{workflow.workflow_id}.execution_bottle_complete",
-                    ok=all(
-                        (
-                            workflow.signal_sources,
-                            workflow.trigger_modules,
-                            workflow.planner_modules,
-                            workflow.calldata_builders,
-                            workflow.submission_modules,
-                            workflow.profit_extraction,
-                            workflow.happy_path_tests,
-                            workflow.revert_guard_tests,
-                        )
-                    ),
+                    ok=all((
+                        workflow.signal_sources,
+                        workflow.trigger_modules,
+                        workflow.planner_modules,
+                        workflow.calldata_builders,
+                        workflow.submission_modules,
+                        workflow.profit_extraction,
+                        workflow.happy_path_tests,
+                        workflow.revert_guard_tests,
+                    )),
                     detail="signal, trigger, planner, calldata, submission, profit, tests",
-                )
-            )
+                ),
+            ))
         else:
             findings.append(
                 ReadinessFinding(
@@ -372,11 +366,7 @@ def _safe_owner_configured() -> bool:
         return False
     owner = raw.get("owner")
     notes = str(raw.get("_owner_notes", "")).lower()
-    if (
-        not isinstance(owner, str)
-        or not owner.startswith("0x")
-        or len(owner) != ADDRESS_HEX_LENGTH
-    ):
+    if not isinstance(owner, str) or not owner.startswith("0x") or len(owner) != ADDRESS_HEX_LENGTH:
         return False
     return "single signing eoa" not in notes and "migrate to 1-of-3" not in notes
 
@@ -557,9 +547,7 @@ def _print_text_report(report: ReadinessReport, *, verbose: bool = False) -> Non
         sys.stdout.write(f"  remediation: {blocker.remediation}\n")
 
     sys.stdout.write("\nDeferred gated surfaces:\n")
-    deferred_blockers = tuple(
-        blocker for blocker in report.blockers if not blocker.blocks_mainnet
-    )
+    deferred_blockers = tuple(blocker for blocker in report.blockers if not blocker.blocks_mainnet)
     if not deferred_blockers:
         sys.stdout.write("- none\n")
     for blocker in deferred_blockers:

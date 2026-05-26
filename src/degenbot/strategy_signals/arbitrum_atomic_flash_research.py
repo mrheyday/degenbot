@@ -45,9 +45,7 @@ class AtomicFlashTarget:
 _COMMON_CODE_REFS = (
     "vendor/degenbot/src/degenbot/strategy_signals/arbitrum_atomic_flash_research.py",
 )
-_COMMON_PROOF_REFS = (
-    "vendor/degenbot/tests/solver_driver/test_arbitrum_atomic_flash_research.py",
-)
+_COMMON_PROOF_REFS = ("vendor/degenbot/tests/solver_driver/test_arbitrum_atomic_flash_research.py",)
 
 
 ATOMIC_FLASH_TARGETS: tuple[AtomicFlashTarget, ...] = (

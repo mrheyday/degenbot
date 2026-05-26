@@ -180,7 +180,9 @@ def test_registry_poc_dex_lanes_have_defillama_discovery_refs() -> None:
         "dexs/gmx-v2-gmx-v2-swap.ts",
         "dexs/wombat-exchange/index.ts",
     } <= paths
-    assert all(ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama)
+    assert all(
+        ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama
+    )
     assert not adapter.enabled_for_execution
 
 
@@ -212,7 +214,9 @@ def test_enabled_flash_adapters_have_defillama_refs() -> None:
     for venue, paths in expected_paths.items():
         adapter = adapter_for("flash", venue)
         assert paths <= {ref.path for ref in adapter.defillama}
-        assert all(ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama)
+        assert all(
+            ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama
+        )
         assert adapter.enabled_for_execution
 
 
@@ -226,7 +230,9 @@ def test_read_only_liquidity_adapters_have_defillama_refs() -> None:
     for venue, paths in expected_paths.items():
         adapter = adapter_for("liquidity", venue)
         assert paths <= {ref.path for ref in adapter.defillama}
-        assert all(ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama)
+        assert all(
+            ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama
+        )
         assert not adapter.enabled_for_execution
 
 
@@ -247,7 +253,9 @@ def test_native_and_forked_swap_adapters_have_defillama_refs() -> None:
     for venue, paths in expected_paths.items():
         adapter = adapter_for("swap", venue)
         assert paths <= {ref.path for ref in adapter.defillama}
-        assert all(ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama)
+        assert all(
+            ref.commit == "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9" for ref in adapter.defillama
+        )
 
 
 def test_adapter_ipc_sets_preserve_existing_degenbot_surface() -> None:

@@ -30,6 +30,8 @@ __all__ = [
     "MatchParams",
     "NativeArbParams",
     "NativeArbStrategy",  # noqa: F822
+    "OracleSandwichPlan",  # noqa: F822
+    "OracleSandwichStrategy",  # noqa: F822
     "SwapStep",
 ]
 
@@ -47,6 +49,13 @@ def __getattr__(name: str) -> object:
         return {
             "InternalMatchPlan": InternalMatchPlan,
             "InternalMatchStrategy": InternalMatchStrategy,
+        }[name]
+    if name in {"OracleSandwichPlan", "OracleSandwichStrategy"}:
+        from .oracle_sandwich import OracleSandwichPlan, OracleSandwichStrategy
+
+        return {
+            "OracleSandwichPlan": OracleSandwichPlan,
+            "OracleSandwichStrategy": OracleSandwichStrategy,
         }[name]
     if name == "NativeArbStrategy":
         from .native_arb import NativeArbStrategy

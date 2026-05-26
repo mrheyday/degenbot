@@ -142,6 +142,26 @@ class DecisionEngine:
                 )
             )
 
+        # 4. S-5 Oracle sandwich
+        if self._settings.strategy_oracle_sandwich_enabled:
+            from degenbot.strategies_coordinator.oracle_sandwich import OracleSandwichStrategy
+
+            strategy = OracleSandwichStrategy(self._settings)
+            plan = strategy.preflight(opp)
+            if plan:
+                candidates.append(
+                    RouteCandidate(
+                        kind="oracle_sandwich",
+                        route=DecisionRoute(
+                            kind="oracle_sandwich",
+                            opportunity_id=opp.id,
+                            plan=plan,
+                        ),
+                        score_wei=plan.expected_profit_wei,
+                        ctx=ctx,
+                    )
+                )
+
         # Quote enrichment + route scoring for native arb opportunities.
         best_q: AggregatorQuote | None = None
         should_enrich_quote = self._settings.strategy_native_arb_enabled and opp.kind == "NativeArb"

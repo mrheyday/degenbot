@@ -69,22 +69,20 @@ def test_native_arb_rejects_zero_flash(fake_settings, sample_opp):
 
 
 def test_native_arb_mapping_steps(fake_settings, sample_opp):
-    opp = Opportunity(
-        **{
-            **sample_opp.model_dump(),
-            "path": [
-                EngineSwapStep(
-                    dex_kind=DexKind.UNI_V3_POOL,
-                    router="0x" + "3" * 40,
-                    call_data=Hex("0x"),
-                    token_in=_FLASH_TOKEN,
-                    token_out=_TOKEN_OUT,
-                    amount_in=10**18,
-                    amount_out_min=0,
-                )
-            ],
-        }
-    )
+    opp = Opportunity(**{
+        **sample_opp.model_dump(),
+        "path": [
+            EngineSwapStep(
+                dex_kind=DexKind.UNI_V3_POOL,
+                router="0x" + "3" * 40,
+                call_data=Hex("0x"),
+                token_in=_FLASH_TOKEN,
+                token_out=_TOKEN_OUT,
+                amount_in=10**18,
+                amount_out_min=0,
+            )
+        ],
+    })
 
     strategy = NativeArbStrategy(fake_settings)
     params = strategy.build_params(opp)

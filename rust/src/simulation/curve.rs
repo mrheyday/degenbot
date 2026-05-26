@@ -10,8 +10,8 @@
 //! so cold cryptopool cycles must route through REVM.
 
 use alloy::primitives::U256;
-use serde::{Deserialize, Serialize};
 use eyre::{eyre, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::utils::u256::mul_div;
 

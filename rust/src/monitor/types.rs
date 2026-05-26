@@ -38,9 +38,7 @@ where
 pub enum Message {
     Opportunity(Opportunity),
     PoolUpdate(PoolState),
-    Heartbeat {
-        ts_ms: u64,
-    },
+    Heartbeat { ts_ms: u64 },
     Error(ErrorInfo),
     Plan(Plan),
     Settlement(Settlement),

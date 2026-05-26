@@ -38,12 +38,10 @@ def test_delegatee_csv_from_env_accepts_deploy_script_alias() -> None:
         deploy_script,
         "DELEGATEES_INITIAL",
     )
-    assert verifier.delegatee_csv_from_env(
-        {
-            "DELEGATEE_ADDRESSES": explicit,
-            "DELEGATEES_INITIAL": deploy_script,
-        }
-    ) == (explicit, "DELEGATEE_ADDRESSES")
+    assert verifier.delegatee_csv_from_env({
+        "DELEGATEE_ADDRESSES": explicit,
+        "DELEGATEES_INITIAL": deploy_script,
+    }) == (explicit, "DELEGATEE_ADDRESSES")
 
     raw, label = verifier.delegatee_csv_from_env({"DELEGATEES_INITIAL": "not-an-address"})
     with pytest.raises(ValueError, match="DELEGATEES_INITIAL"):

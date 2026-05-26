@@ -259,7 +259,118 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
 
 use crate::simulation::curve::CurveSnapshot;
 use crate::simulation::curve_optimize::optimal_input_2pool_curve;
-use crate::simulation::v2_optimize::optimal_input_2pool;
+use crate::simulation::uniswap_v3_math::v3_mid_price_x96;
+use crate::simulation::v2_optimize::{
+    apply_gap_to_price_x96, optimal_input_2pool, optimal_v2_frontrun_amount,
+    synthetic_victim_amount_in, v2_mid_price_x96, v2_optimal_sandwich_size, v2_sandwich_max_size,
+};
+
+/// Calculate the mid-price in Q64.96 for a V2 pool.
+#[pyfunction]
+#[pyo3(name = "v2_mid_price_x96")]
+pub fn v2_mid_price_x96_py(
+    reserve_in: &Bound<'_, PyAny>,
+    reserve_out: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let result = v2_mid_price_x96(
+        extract_python_u256(reserve_in)?,
+        extract_python_u256(reserve_out)?,
+    );
+    Ok(result.to_string())
+}
+
+/// Calculate the mid-price in Q64.96 for a V3 pool.
+#[pyfunction]
+#[pyo3(name = "v3_mid_price_x96")]
+pub fn v3_mid_price_x96_py(sqrt_price_x96: &Bound<'_, PyAny>) -> PyResult<String> {
+    let result = v3_mid_price_x96(extract_python_u256(sqrt_price_x96)?);
+    Ok(result.to_string())
+}
+
+/// Apply the gap to a price.
+#[pyfunction]
+#[pyo3(name = "apply_gap_to_price_x96")]
+pub fn apply_gap_to_price_x96_py(price_x96: &Bound<'_, PyAny>, gap_bps: i32) -> PyResult<String> {
+    let result = apply_gap_to_price_x96(extract_python_u256(price_x96)?, gap_bps);
+    Ok(result.to_string())
+}
+
+/// Synthetic victim swap size.
+#[pyfunction]
+#[pyo3(name = "synthetic_victim_amount_in")]
+pub fn synthetic_victim_amount_in_py(
+    gap_bps: i32,
+    reserve_in: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let result = synthetic_victim_amount_in(gap_bps, extract_python_u256(reserve_in)?);
+    Ok(result.to_string())
+}
+
+/// Calculate the optimal frontrun amount for a sandwich attack.
+#[pyfunction]
+#[pyo3(name = "optimal_v2_frontrun_amount")]
+pub fn optimal_v2_frontrun_amount_py(
+    victim_amount_in: &Bound<'_, PyAny>,
+    victim_min_out: &Bound<'_, PyAny>,
+    reserve_in: &Bound<'_, PyAny>,
+    reserve_out: &Bound<'_, PyAny>,
+    fee_bps: u32,
+    margin_bps: u32,
+) -> PyResult<String> {
+    let result = optimal_v2_frontrun_amount(
+        extract_python_u256(victim_amount_in)?,
+        extract_python_u256(victim_min_out)?,
+        extract_python_u256(reserve_in)?,
+        extract_python_u256(reserve_out)?,
+        fee_bps,
+        margin_bps,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
+
+/// Largest frontrun size `a` such that the victim's post-distortion
+/// fill is exactly `victim_min_out`.
+#[pyfunction]
+#[pyo3(name = "v2_sandwich_max_size")]
+pub fn v2_sandwich_max_size_py(
+    victim_amount_in: &Bound<'_, PyAny>,
+    victim_min_out: &Bound<'_, PyAny>,
+    reserve_in: &Bound<'_, PyAny>,
+    reserve_out: &Bound<'_, PyAny>,
+    fee_bps: u32,
+) -> PyResult<String> {
+    let result = v2_sandwich_max_size(
+        extract_python_u256(victim_amount_in)?,
+        extract_python_u256(victim_min_out)?,
+        extract_python_u256(reserve_in)?,
+        extract_python_u256(reserve_out)?,
+        fee_bps,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
+
+/// Find the unconstrained optimal frontrun size using golden-section search.
+#[pyfunction]
+#[pyo3(name = "v2_optimal_sandwich_size")]
+pub fn v2_optimal_sandwich_size_py(
+    victim_amount_in: &Bound<'_, PyAny>,
+    reserve_in: &Bound<'_, PyAny>,
+    reserve_out: &Bound<'_, PyAny>,
+    fee_bps: u32,
+    a_max: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let result = v2_optimal_sandwich_size(
+        extract_python_u256(victim_amount_in)?,
+        extract_python_u256(reserve_in)?,
+        extract_python_u256(reserve_out)?,
+        fee_bps,
+        extract_python_u256(a_max)?,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
 use crate::simulation::v3::V3Snapshot;
 use crate::simulation::v3_optimize::optimal_input_2pool_v3;
 use alloy::primitives::U256;
@@ -300,8 +411,10 @@ pub fn optimal_input_2pool_v3_py(
         .map_err(|e| PyValueError::new_err(format!("invalid p1 json: {e}")))?;
 
     let p2v3: Option<V3Snapshot> = if let Some(json) = pool2_v3_json {
-        Some(serde_json::from_str(&json)
-            .map_err(|e| PyValueError::new_err(format!("invalid p2 json: {e}")))?)
+        Some(
+            serde_json::from_str(&json)
+                .map_err(|e| PyValueError::new_err(format!("invalid p2 json: {e}")))?,
+        )
     } else {
         None
     };
@@ -310,7 +423,7 @@ pub fn optimal_input_2pool_v3_py(
         Some((
             U256::from_str_radix(&data.0, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
             U256::from_str_radix(&data.1, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
-            data.2
+            data.2,
         ))
     } else {
         None
@@ -338,7 +451,7 @@ pub fn optimal_input_2pool_curve_py(
         Some((
             U256::from_str_radix(&data.0, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
             U256::from_str_radix(&data.1, 10).map_err(|e| PyValueError::new_err(e.to_string()))?,
-            data.2
+            data.2,
         ))
     } else {
         None
@@ -358,6 +471,13 @@ pub fn add_execution_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(optimal_input_2pool_py, m)?)?;
     m.add_function(wrap_pyfunction!(optimal_input_2pool_v3_py, m)?)?;
     m.add_function(wrap_pyfunction!(optimal_input_2pool_curve_py, m)?)?;
+    m.add_function(wrap_pyfunction!(optimal_v2_frontrun_amount_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v2_mid_price_x96_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v3_mid_price_x96_py, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_gap_to_price_x96_py, m)?)?;
+    m.add_function(wrap_pyfunction!(synthetic_victim_amount_in_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v2_sandwich_max_size_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v2_optimal_sandwich_size_py, m)?)?;
     Ok(())
 }
 

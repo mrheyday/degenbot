@@ -1,5 +1,5 @@
-use alloy::primitives::U256;
 use crate::monitor::MatchCandidate;
+use alloy::primitives::U256;
 
 pub const SCALE: U256 = U256::from_limbs([1_000_000_000_000_000_000, 0, 0, 0]); // 1e18
 

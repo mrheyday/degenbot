@@ -9,7 +9,8 @@
 //! These primitives back the tick-stepping swap loop in
 //! [`super::v3::amount_out`].
 
-use alloy::primitives::U256;
+use alloy::primitives::{U256, U512};
+
 pub mod bit_math;
 pub mod error;
 pub mod full_math;
@@ -19,6 +20,16 @@ pub mod swap_math;
 pub mod tick;
 pub mod tick_bitmap;
 pub mod tick_math;
+
+/// Calculate mid-price for V3. price = sqrtPriceX96^2 / 2^96.
+pub fn v3_mid_price_x96(sqrt_price_x96: U256) -> U256 {
+    if sqrt_price_x96.is_zero() {
+        return U256::ZERO;
+    }
+    let s512 = U512::from(sqrt_price_x96);
+    let p512 = (s512 * s512) >> 96;
+    U256::from(p512)
+}
 pub mod tick_provider;
 pub mod unsafe_math;
 

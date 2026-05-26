@@ -143,6 +143,7 @@ class DecisionRoute(BaseModel):
         "dolomite_liquidation",
         "native_arb",
         "launch_sniper",
+        "oracle_sandwich",
         "cow_user_submit",
         "across_fill",
         "pass",

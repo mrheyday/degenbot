@@ -90,19 +90,17 @@ def test_four_leg_preflight_none(fake_settings, sample_opp):
 
 def test_four_leg_preflight_with_hint(fake_settings, sample_opp, sample_swap):
     # Attach hint to opp
-    opp = Opportunity(
-        **{
-            **sample_opp.model_dump(),
-            "enrichment": {
-                "four_leg_hint": {
-                    "across_fill_calldata": "0xa1a1",
-                    "cow_fill_calldata": "0xc2c2",
-                    "uniswapx_rebalance_calldata": "0xc3c3",
-                    "arb_swaps": [sample_swap],
-                }
-            },
-        }
-    )
+    opp = Opportunity(**{
+        **sample_opp.model_dump(),
+        "enrichment": {
+            "four_leg_hint": {
+                "across_fill_calldata": "0xa1a1",
+                "cow_fill_calldata": "0xc2c2",
+                "uniswapx_rebalance_calldata": "0xc3c3",
+                "arb_swaps": [sample_swap],
+            }
+        },
+    })
 
     strategy = FourLegStrategy(fake_settings)
     out = strategy.preflight(opp)
@@ -137,29 +135,27 @@ def test_four_leg_build_params_morpho(fake_settings, sample_plan):
 
 
 def test_four_leg_preflight_dynamic_mapping(fake_settings, sample_opp):
-    opp = Opportunity(
-        **{
-            **sample_opp.model_dump(),
-            "enrichment": {
-                "four_leg_hint": {
-                    "across_fill_calldata": "0xa1a1",
-                    "cow_fill_calldata": "0xc2c2",
-                    "uniswapx_rebalance_calldata": "0xc3c3",
-                }
-            },
-            "path": [
-                EngineSwapStep(
-                    dex_kind=DexKind.UNI_V3_POOL,
-                    router=_EXECUTOR_ADDR,
-                    call_data=Hex("0x"),
-                    token_in=_WETH,
-                    token_out=_USDC,
-                    amount_in=10**18,
-                    amount_out_min=3500 * 10**6,
-                )
-            ],
-        }
-    )
+    opp = Opportunity(**{
+        **sample_opp.model_dump(),
+        "enrichment": {
+            "four_leg_hint": {
+                "across_fill_calldata": "0xa1a1",
+                "cow_fill_calldata": "0xc2c2",
+                "uniswapx_rebalance_calldata": "0xc3c3",
+            }
+        },
+        "path": [
+            EngineSwapStep(
+                dex_kind=DexKind.UNI_V3_POOL,
+                router=_EXECUTOR_ADDR,
+                call_data=Hex("0x"),
+                token_in=_WETH,
+                token_out=_USDC,
+                amount_in=10**18,
+                amount_out_min=3500 * 10**6,
+            )
+        ],
+    })
 
     strategy = FourLegStrategy(fake_settings)
     out = strategy.preflight(opp)
