@@ -24,7 +24,10 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import eth_abi.abi
 import structlog
+from hexbytes import HexBytes
+from web3 import Web3
 
 from degenbot.adapters.config import DegenbotSettings, load_degenbot_settings
 from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias  # pylint: disable=useless-import-alias  # pylint: disable=useless-import-alias
@@ -40,6 +43,7 @@ ADDRESS_HEX_LEN = 42
 BYTES32_HEX_LEN = 66
 PAIR_TOKEN_COUNT = 2
 V2_TOKEN_SLOTS = 2
+V4_POOL_KEY_ABI_TYPES = ("address", "address", "uint24", "int24", "address")
 
 
 @dataclass(frozen=True)
@@ -338,6 +342,25 @@ def _optional_pool_key(value: object) -> JsonObject | None:
         "tick_spacing": int(cast("str | int", key["tick_spacing"])),
         "hooks": str(key["hooks"]),
     }
+
+
+def _v4_pool_id_from_pool_key(pool_key: JsonObject) -> HexBytes:
+    """Derive the Uniswap V4 PoolId from the wire PoolKey."""
+
+    return HexBytes(
+        Web3.keccak(
+            eth_abi.abi.encode(
+                types=V4_POOL_KEY_ABI_TYPES,
+                args=[
+                    str(pool_key["currency0"]),
+                    str(pool_key["currency1"]),
+                    int(cast("str | int", pool_key["fee"])),
+                    int(cast("str | int", pool_key["tick_spacing"])),
+                    str(pool_key["hooks"]),
+                ],
+            )
+        )
+    )
 
 
 def _swap_step_to_wire(step: SwapStep) -> JsonObject:
@@ -976,6 +999,15 @@ def _pool_registry_key_matches_chain(key: object, chain_id: int) -> bool:
     return isinstance(key, tuple) and len(key) >= 1 and key[0] == chain_id
 
 
+def _v4_registry_key_matches_pool_id(key: object, chain_id: int, pool_id: HexBytes) -> bool:
+    return (
+        isinstance(key, tuple)
+        and len(key) >= 3
+        and key[0] == chain_id
+        and HexBytes(cast("Any", key[2])) == pool_id
+    )
+
+
 def _token_address(value: object) -> str | None:
     if value is None:
         return None
@@ -1084,10 +1116,10 @@ class RegistryBackedDegenbotSimulator:
         override_states: dict[str, object] = {}
 
         for raw_step in path:
-            if raw_step.dex in POOL_ID_REQUIRED_DEX_KINDS:
-                msg = f"dex {raw_step.dex!r} requires a pool-id-aware IPC wire format"
-                raise SimulationUnavailableError(msg)
-            if raw_step.dex not in ADDRESS_KEYED_DEGENBOT_DEX_KINDS:
+            if (
+                raw_step.dex not in ADDRESS_KEYED_DEGENBOT_DEX_KINDS
+                and raw_step.dex not in POOL_ID_REQUIRED_DEX_KINDS
+            ):
                 msg = f"dex {raw_step.dex!r} is recognized but does not have an enabled degenbot pool adapter yet"
                 raise SimulationUnavailableError(msg)
             step = SwapStep(
@@ -1127,7 +1159,7 @@ class RegistryBackedDegenbotSimulator:
             msg = "degenbot registry is not importable"
             raise SimulationUnavailableError(msg) from exc
 
-        pool = pool_registry.get(chain_id=self._chain_id, pool_address=step.pool)
+        pool = self._resolve_registry_pool(pool_registry, step)
         if pool is None:
             msg = f"pool {step.pool} is not loaded in degenbot registry"
             raise SimulationUnavailableError(msg)
@@ -1169,6 +1201,43 @@ class RegistryBackedDegenbotSimulator:
             msg = f"degenbot returned invalid amount_out for pool {step.pool}"
             raise SimulationUnavailableError(msg)
         return amount_out
+
+    def _resolve_registry_pool(self, pool_registry: object, step: SwapStep) -> object | None:
+        if step.dex not in POOL_ID_REQUIRED_DEX_KINDS:
+            return pool_registry.get(chain_id=self._chain_id, pool_address=step.pool)
+
+        if step.pool_key is None:
+            msg = f"dex {step.dex!r} requires a pool_key for pool-id registry lookup"
+            raise SimulationUnavailableError(msg)
+
+        pool_id = _v4_pool_id_from_pool_key(step.pool_key)
+        pool = pool_registry.get(
+            chain_id=self._chain_id,
+            pool_address=step.pool,
+            pool_id=pool_id,
+        )
+        if pool is not None:
+            return pool
+
+        # Some coordinator fixtures historically used `pool` as a logical route id rather than the
+        # V4 PoolManager address. Fall back to a unique PoolId scan so hydrated degenbot V4 pools
+        # can still simulate while the wire remains backward-compatible.
+        raw_v4_pools = getattr(getattr(pool_registry, "_v4_pool_registry", None), "_all_v4_pools", None)
+        if not isinstance(raw_v4_pools, dict):
+            return None
+
+        matches = [
+            candidate
+            for key, candidate in raw_v4_pools.items()
+            if _v4_registry_key_matches_pool_id(key, self._chain_id, pool_id)
+        ]
+        unique_matches = tuple(dict.fromkeys(matches))
+        if len(unique_matches) == 1:
+            return unique_matches[0]
+        if len(unique_matches) > 1:
+            msg = f"pool_key for dex {step.dex!r} matched multiple V4 PoolManagers"
+            raise SimulationUnavailableError(msg)
+        return None
 
     @staticmethod
     def _resolve_pool_token(pool: object, token_address: str) -> object:

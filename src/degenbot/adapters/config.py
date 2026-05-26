@@ -116,6 +116,26 @@ class Settings(DegenbotSettings):
         default=True,
         description="Pick D3 pre-batch filter on top of Pick C bidding.",
     )
+    strategy_internal_match_enabled: bool = Field(
+        default=True,
+        description="Enable Pick A internal matching.",
+    )
+    strategy_four_leg_enabled: bool = Field(
+        default=True,
+        description="Enable Pick B four-leg composition.",
+    )
+    strategy_native_arb_enabled: bool = Field(
+        default=True,
+        description="Enable Pick A native arbitrage.",
+    )
+
+    # --- On-chain components --------------------------------------------
+    executor_address: str = Field(
+        default="0x" + "0" * 40,
+        description="Address of the on-chain Executor.sol.",
+    )
+    aave_v3_pool: str | None = Field(default=None)
+    morpho_blue: str | None = Field(default=None)
 
     # --- Bidding policy -------------------------------------------------
     min_profit_usd: float = Field(

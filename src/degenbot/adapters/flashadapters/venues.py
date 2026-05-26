@@ -17,7 +17,7 @@ FLASH_ADAPTERS: tuple[AdapterTemplate, ...] = (
         status=AdapterStatus.ENABLED,
         contracts=bindings(("AAVE_V3_POOL", "pool")),
         registry_keys=(RegistryKey.ADDRESS,),
-        execution_module="driver.execution.aave_v3_flashloan_adapter",
+        execution_module="degenbot.execution_adapters.aave_v3_flashloan_adapter",
         notes="Executor-compatible multi-asset flash-loan source; array form only.",
     ),
     AdapterTemplate(
@@ -26,7 +26,7 @@ FLASH_ADAPTERS: tuple[AdapterTemplate, ...] = (
         status=AdapterStatus.ENABLED,
         contracts=bindings(("MORPHO_SINGLETON", "singleton")),
         registry_keys=(RegistryKey.ADDRESS,),
-        execution_module="driver.execution.morpho_flashloan_adapter",
+        execution_module="degenbot.execution_adapters.morpho_flashloan_adapter",
         notes="Zero-fee Morpho Blue flash source; callback data must include borrowed token.",
     ),
     AdapterTemplate(

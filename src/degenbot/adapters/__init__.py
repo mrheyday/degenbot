@@ -2,7 +2,8 @@
 
 This package is the Python-side structure for venue adapters. It mirrors
 canonical contract addresses from `coordinator/src/router/registry.ts` while
-keeping executable logic in the existing `driver.execution.*` modules.
+keeping executable Python logic in `degenbot.execution_adapters.*` and
+pool-backed IPC logic in `degenbot.connection.ipc`.
 """
 
 from degenbot.adapters.laneadapters import EXECUTION_LANES

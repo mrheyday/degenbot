@@ -1,4 +1,7 @@
-"""Pure integer price-compatibility helpers for internal matching (Pick A)."""
+"""Pure integer price-compatibility helpers for internal matching (Pick A).
+
+Algorithm reference: docs/architecture/06-OFFCHAIN-SERVICES-SPEC.md §2.3
+"""
 
 from __future__ import annotations
 
@@ -7,7 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from degenbot.decision.types import MatchCandidate
 
-SCALE = 1_000_000_000_000_000_000
+PRICE_SCALE = 1_000_000_000_000_000_000  # 1e18
 
 
 def outbound_min_price(o: MatchCandidate) -> int:
@@ -15,7 +18,7 @@ def outbound_min_price(o: MatchCandidate) -> int:
     if o.amount_sell == 0:
         msg = "outbound_min_price: amount_sell cannot be zero"
         raise ValueError(msg)
-    return (o.amount_buy_min * SCALE) // o.amount_sell
+    return (o.amount_buy_min * PRICE_SCALE) // o.amount_sell
 
 
 def counter_max_price(c: MatchCandidate) -> int:
@@ -23,7 +26,7 @@ def counter_max_price(c: MatchCandidate) -> int:
     if c.amount_buy_min == 0:
         msg = "counter_max_price: amount_buy_min cannot be zero"
         raise ValueError(msg)
-    return (c.amount_sell * SCALE) // c.amount_buy_min
+    return (c.amount_sell * PRICE_SCALE) // c.amount_buy_min
 
 
 def is_opposing_pair(o: MatchCandidate, c: MatchCandidate) -> bool:
@@ -32,7 +35,7 @@ def is_opposing_pair(o: MatchCandidate, c: MatchCandidate) -> bool:
 
 
 def is_price_compatible(o: MatchCandidate, c: MatchCandidate) -> bool:
-    """Price compatibility check."""
+    """Price compatibility check (§06 §2.3)."""
     if not is_opposing_pair(o, c):
         return False
     return outbound_min_price(o) <= counter_max_price(c)
@@ -48,5 +51,5 @@ def clearing_price(o: MatchCandidate, c: MatchCandidate) -> int:
 def fill_amount(o: MatchCandidate, c: MatchCandidate) -> int:
     """Fill amount in token-sell units of `o`. The smaller side fully fills."""
     c_max = counter_max_price(c)
-    c_budget_in_o_sell = (c.amount_buy_min * c_max) // SCALE
+    c_budget_in_o_sell = (c.amount_buy_min * c_max) // PRICE_SCALE
     return min(o.amount_sell, c_budget_in_o_sell)

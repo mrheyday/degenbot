@@ -83,6 +83,21 @@ class UniswapXOrderSummary(BaseModel):
     order_type: UniswapXOrderType | None = Field(default=None, alias="orderType")
 
 
+class ERC7683IntentSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    order_id: Hex = Field(alias="orderId")
+    origin_chain_id: int = Field(alias="originChainId")
+    destination_chain_id: int = Field(alias="destinationChainId")
+    user: Address
+    input_token: Address = Field(alias="inputToken")
+    output_token: Address = Field(alias="outputToken")
+    input_amount: int = Field(alias="inputAmount")
+    output_amount: int = Field(alias="outputAmount")
+    fill_deadline: int = Field(alias="fillDeadline")
+    origin_data: Hex = Field(alias="originData")
+    destination_data: Hex = Field(alias="destinationData")
+
+
 class MatchCandidate(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
     id: str

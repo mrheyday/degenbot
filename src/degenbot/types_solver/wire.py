@@ -81,6 +81,7 @@ class Opportunity(BaseModel):
     path: Sequence[SwapStep] = Field(default_factory=list)
     detected_at_ns: int = Field(default=0, alias="detectedAtNs")
     pool_addresses: Sequence[str] = Field(default_factory=list, alias="poolAddresses")
+    enrichment: dict[str, Any] | None = None
     morpho_liquidation: MorphoLiquidationOpportunityPayload | None = Field(
         default=None, alias="morphoLiquidation"
     )

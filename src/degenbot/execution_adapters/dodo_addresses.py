@@ -58,26 +58,34 @@ D3_MAKER_TEMPLATE: Final[str] = "0x216C8B744c0727EfE0DD8A21d122724755A71D54"
 DODO_TOKEN_ARB: Final[str] = "0x69Eb4FA4a2fbd498C257C57Ea8b7655a2559A581"
 DODO_MINING_V1: Final[str] = "0xE3C10989dDc5Df5B1b9c0E6229c2E4e0862fDe3e"
 
-V1_PAIRS: Final[frozenset[str]] = frozenset({V1_PAIR_WETH_USDC, V1_PAIR_WBTC_USDC, V1_PAIR_USDT_USDC})
-V2_PMM_FACTORIES: Final[frozenset[str]] = frozenset(
-    {V2_DVM_FACTORY, V2_DPP_FACTORY, V2_DSP_FACTORY, V2_CROWD_POOLING_FACTORY, V2_UPCP_FACTORY}
-)
-V2_ROUTE_PROXIES: Final[frozenset[str]] = frozenset(
-    {V2_ROUTE_PROXY, V2_FEE_ROUTE_PROXY, V2_FEE_ROUTE_PROXY_WIDGET}
-)
-D3MM_CONTRACTS: Final[frozenset[str]] = frozenset(
-    {
-        D3_ORACLE,
-        D3_MM_FACTORY,
-        D3_PROXY,
-        D3_RATE_MANAGER,
-        D3_MM_LIQUIDATION_ROUTER,
-        D3_VAULT,
-        D3_USER_QUOTA,
-        D3_POOL_QUOTA,
-        D3_FEE_RATE_MODEL,
-        D3_TOKEN_TEMPLATE,
-        D3_MM_TEMPLATE,
-        D3_MAKER_TEMPLATE,
-    }
-)
+V1_PAIRS: Final[frozenset[str]] = frozenset({
+    V1_PAIR_WETH_USDC,
+    V1_PAIR_WBTC_USDC,
+    V1_PAIR_USDT_USDC,
+})
+V2_PMM_FACTORIES: Final[frozenset[str]] = frozenset({
+    V2_DVM_FACTORY,
+    V2_DPP_FACTORY,
+    V2_DSP_FACTORY,
+    V2_CROWD_POOLING_FACTORY,
+    V2_UPCP_FACTORY,
+})
+V2_ROUTE_PROXIES: Final[frozenset[str]] = frozenset({
+    V2_ROUTE_PROXY,
+    V2_FEE_ROUTE_PROXY,
+    V2_FEE_ROUTE_PROXY_WIDGET,
+})
+D3MM_CONTRACTS: Final[frozenset[str]] = frozenset({
+    D3_ORACLE,
+    D3_MM_FACTORY,
+    D3_PROXY,
+    D3_RATE_MANAGER,
+    D3_MM_LIQUIDATION_ROUTER,
+    D3_VAULT,
+    D3_USER_QUOTA,
+    D3_POOL_QUOTA,
+    D3_FEE_RATE_MODEL,
+    D3_TOKEN_TEMPLATE,
+    D3_MM_TEMPLATE,
+    D3_MAKER_TEMPLATE,
+})

@@ -65,11 +65,47 @@ class DecisionEngine:
         # TODO: Timeboost economics port
         timeboost_decision = None
 
-        # 1. Pick A — internal match (Stubbed)
-        if self._settings.strategy_internal_match_enabled:
-            pass  # find_best_match logic goes here
+        # 1. Pick A — internal match
+        if self._settings.strategy_internal_match_enabled and self._queue is not None:
+            from degenbot.matching.internal_matcher import find_best_match
 
-        # 2. Pick B — four-leg composition (Stubbed)
+            match = find_best_match(
+                outbound=self._queue.outbound,
+                inbound=self._queue.inbound,
+                uniswapx=self._queue.uniswapx,
+            )
+            if match:
+                candidates.append(
+                    RouteCandidate(
+                        kind="internal_match",
+                        route=DecisionRoute(
+                            kind="internal_match",
+                            pair=match,
+                        ),
+                        score_wei=match.fill_amount,  # Greedy fill optimization
+                        ctx=ctx,
+                    )
+                )
+
+        # 2. Pick B — four-leg composition
+        if self._settings.strategy_four_leg_enabled and opp.morpho_liquidation is None:
+            from degenbot.strategies_coordinator.four_leg import FourLegStrategy
+
+            strategy = FourLegStrategy(self._settings)
+            plan = strategy.preflight(opp)
+            if plan:
+                candidates.append(
+                    RouteCandidate(
+                        kind="four_leg",
+                        route=DecisionRoute(
+                            kind="four_leg",
+                            opportunity_id=opp.id,
+                            plan=plan,
+                        ),
+                        score_wei=opp.estimated_profit_wei,
+                        ctx=ctx,
+                    )
+                )
 
         # 3. Morpho standard liquidation
         if opp.kind.startswith("MorphoLiquidation"):

@@ -43,7 +43,7 @@ from prometheus_client import (
 )
 from pydantic import ValidationError
 
-from degenbot.auction_build import handle_auction_build_payload
+from degenbot.cow.auction_build import handle_auction_build_payload
 from degenbot.cow.models import (
     Auction,
     DriverQuoteRequest,
@@ -51,8 +51,8 @@ from degenbot.cow.models import (
     Solution,
     SolveResponse,
 )
-from degenbot.d3_bridge import handle_d3_classify_payload
 from degenbot.quote_engine.http_client import QuoteRequest
+from degenbot.strategies_solver.d3_bridge import handle_d3_classify_payload
 from degenbot.utils.metrics import SOLVE_LATENCY, SOLVE_REQUESTS
 
 if TYPE_CHECKING:

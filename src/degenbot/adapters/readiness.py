@@ -115,7 +115,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
             "coordinator/src/router/encode.ts",
             "coordinator/src/router/registry.ts",
         ),
-        solver_modules=("driver.execution.balancer_v3_adapter",),
+        solver_modules=("degenbot.execution_adapters.balancer_v3_adapter",),
         tests=(
             "coordinator/src/router/encode.test.ts",
             "coordinator/src/types/executor.test.ts",
@@ -190,8 +190,8 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
             "coordinator/src/strategies/liquidation/monitor.ts",
         ),
         solver_modules=(
-            "driver.execution.morpho_lp_adapter",
-            "driver.execution.metamorpho_v1_adapter",
+            "degenbot.execution_adapters.morpho_lp_adapter",
+            "degenbot.execution_adapters.metamorpho_v1_adapter",
         ),
         tests=(
             "coordinator/src/strategies/v4-hooks.test.ts",
@@ -226,7 +226,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
             "coordinator/src/strategies/v4-hooks.ts",
             "coordinator/src/strategies/amm-economics.ts",
         ),
-        solver_modules=("driver.execution.degenbot_ipc",),
+        solver_modules=("degenbot.connection.ipc",),
         tests=(
             "coordinator/src/strategies/v4-hooks.test.ts",
             "vendor/degenbot/tests/solver_driver/test_adapter_registry.py",
@@ -262,7 +262,7 @@ READINESS_EVIDENCE: tuple[ReadinessEvidence, ...] = (
             "coordinator/src/strategies/oracle-sandwich/leg-builder.ts",
             "coordinator/src/signals/actions/dispatch-oracle-sandwich.ts",
         ),
-        solver_modules=("driver.execution.degenbot_ipc",),
+        solver_modules=("degenbot.connection.ipc",),
         tests=(
             "coordinator/src/strategies/sandwich/offensive-policy.test.ts",
             "coordinator/src/strategies/oracle-sandwich/orchestrator.test.ts",

@@ -27,6 +27,8 @@ from .degenbot_rs import (
     get_sqrt_ratio_at_tick,
     get_tick_at_sqrt_ratio,
     optimal_input_2pool,
+    optimal_input_2pool_curve,
+    optimal_input_2pool_v3,
     to_checksum_address,
 )
 from .dispatch import (
@@ -69,6 +71,12 @@ from .aerodrome import (
 )
 from .anvil_fork import AnvilFork
 from .arbitrage import ArbitrageCalculationResult, UniswapCurveCycle, UniswapLpCycle
+from .arbitrage.types import (
+    CurveStableSwapPoolSwapAmounts,
+    UniswapV2PoolSwapAmounts,
+    UniswapV3PoolSwapAmounts,
+    UniswapV4PoolSwapAmounts,
+)
 from .bot import BotOpportunity, BotScanConfig, DegenbotBot
 from .camelot import CamelotLiquidityPool
 from .chainlink import ChainlinkPriceContract
@@ -93,7 +101,9 @@ from .decision.types import (
 from .erc20 import Erc20Token, Erc20TokenManager, EtherPlaceholder
 from .flash.source_router import ExecutorFlashRoute, resolve_executor_flash_route
 from .logging import logger
+from .matching.encoder import MatchedTrade, encode_match_pair
 from .matching.internal_matcher import find_best_match, find_matches
+from .matching.unified_queue import UnifiedQueue
 from .pancakeswap import (
     PancakeswapV2Pool,
     PancakeswapV2PoolManager,
@@ -101,10 +111,17 @@ from .pancakeswap import (
     PancakeswapV3PoolManager,
 )
 from .registry import pool_registry, token_registry
+from .strategies_coordinator.four_leg import FourLegPlan, FourLegStrategy
+from .strategies_coordinator.internal_match import (
+    InternalMatchPlan,
+    InternalMatchStrategy,
+)
 from .strategies_coordinator.native_arb import NativeArbStrategy
 from .strategies_coordinator.types import (
     DEX_KIND,
     FLASH_PROTOCOL,
+    ComposeParams,
+    MatchParams,
     NativeArbParams,
 )
 from .strategies_coordinator.types import (
@@ -157,9 +174,11 @@ __all__ = (
     "CamelotLiquidityPool",
     "ChainlinkPriceContract",
     "CompetitionSubmitter",
+    "ComposeParams",
     "ContractSwapStep",
     "CowAuction",
     "CurveStableSwapPoolStateUpdated",
+    "CurveStableSwapPoolSwapAmounts",
     "CurveStableswapPool",
     "CurveStableswapPoolSimulationResult",
     "CurveStableswapPoolState",
@@ -177,8 +196,14 @@ __all__ = (
     "Erc20TokenManager",
     "EtherPlaceholder",
     "ExecutorFlashRoute",
+    "FourLegPlan",
+    "FourLegStrategy",
+    "InternalMatchPlan",
+    "InternalMatchStrategy",
     "MatchCandidate",
     "MatchPair",
+    "MatchParams",
+    "MatchedTrade",
     "NativeArbParams",
     "NativeArbStrategy",
     "PancakeswapV2Pool",
@@ -201,6 +226,7 @@ __all__ = (
     "SushiswapV3PoolManager",
     "SwapbasedV2Pool",
     "SwapbasedV2PoolManager",
+    "UnifiedQueue",
     "UniswapCurveCycle",
     "UniswapLpCycle",
     "UniswapV2Pool",
@@ -208,16 +234,19 @@ __all__ = (
     "UniswapV2PoolManager",
     "UniswapV2PoolSimulationResult",
     "UniswapV2PoolState",
+    "UniswapV2PoolSwapAmounts",
     "UniswapV3LiquiditySnapshot",
     "UniswapV3Pool",
     "UniswapV3PoolExternalUpdate",
     "UniswapV3PoolManager",
     "UniswapV3PoolSimulationResult",
     "UniswapV3PoolState",
+    "UniswapV3PoolSwapAmounts",
     "UniswapV4LiquiditySnapshot",
     "UniswapV4Pool",
     "UniswapV4PoolExternalUpdate",
     "UniswapV4PoolState",
+    "UniswapV4PoolSwapAmounts",
     "__version__",
     "abi_decode",
     "abi_decode_single",
@@ -231,6 +260,7 @@ __all__ = (
     "encode_compose_four_leg_calldata",
     "encode_function_call",
     "encode_match_internal_calldata",
+    "encode_match_pair",
     "encode_native_arb_calldata",
     "find_best_match",
     "find_matches",
@@ -246,6 +276,8 @@ __all__ = (
     "load_degenbot_settings",
     "logger",
     "optimal_input_2pool",
+    "optimal_input_2pool_curve",
+    "optimal_input_2pool_v3",
     "pool_registry",
     "resolve_executor_flash_route",
     "set_async_web3",

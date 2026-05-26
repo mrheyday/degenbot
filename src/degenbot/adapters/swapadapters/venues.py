@@ -7,11 +7,15 @@ from degenbot.adapters.templates import (
     AdapterCategory,
     AdapterStatus,
     AdapterTemplate,
+    ContractBinding,
     DefiLlamaReference,
     RegistryKey,
 )
 
 DL_COMMIT = "5bfdd74e9b98d60e423453406f8e1c8dcc5d8af9"
+FLUID_DEFILLAMA_SOURCE = f"DefiLlama/dimension-adapters@{DL_COMMIT}/dexs/fluid-dex/index.ts"
+FLUID_DEX_RESERVES_RESOLVER = "0xb8f526718FF58758E256D9aD86bC194a9ff5986D"
+FLUID_DEX_RESOLVER = "0x1De42938De444d376eBc298E15D21F409b946E6D"
 
 
 def dl(path: str, dashboard: str = "dexs", notes: str = "") -> DefiLlamaReference:
@@ -86,7 +90,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
             ("OPENOCEAN_EXCHANGE", "openocean"),
         ),
         registry_keys=(RegistryKey.ROUTER,),
-        quote_module="driver.execution.aggregator_validator",
+        quote_module="degenbot.execution_adapters.aggregator_validator",
         ipc_recognized_kinds=(
             "AggregatorV6",
             "OneInchV6",
@@ -145,7 +149,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
             ("ALGEBRA_V4_FACTORY", "algebra_v4_factory"),
         ),
         registry_keys=(RegistryKey.FACTORY, RegistryKey.ROUTER),
-        execution_module="driver.execution.camelot_v3_adapter",
+        execution_module="degenbot.execution_adapters.camelot_v3_adapter",
         ipc_address_keyed_kinds=("CamelotV2", "CamelotV3"),
         ipc_recognized_kinds=("CamelotAlgebraV4", "Algebra"),
         defillama=(dl("dexs/camelot-v3/index.ts"),),
@@ -188,7 +192,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         status=AdapterStatus.ENABLED,
         contracts=bindings(("CURVE_ROUTER", "router"), ("CURVE_STABLESWAP_REGISTRY", "registry")),
         registry_keys=(RegistryKey.ADDRESS,),
-        execution_module="driver.execution.curve_ng_adapter",
+        execution_module="degenbot.execution_adapters.curve_ng_adapter",
         ipc_address_keyed_kinds=("CurveNG",),
         defillama=(dl("dexs/curve/index.ts"),),
         notes="Project adapter wraps NG uint256-index pool math and degenbot registry integration.",
@@ -205,7 +209,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
             ("BALANCER_V3_AGGREGATOR_ROUTER", "v3_aggregator_router"),
         ),
         registry_keys=(RegistryKey.VAULT, RegistryKey.ROUTER),
-        execution_module="driver.execution.balancer_v3_adapter",
+        execution_module="degenbot.execution_adapters.balancer_v3_adapter",
         ipc_address_keyed_kinds=("BalancerV2",),
         ipc_recognized_kinds=("BalancerV3",),
         defillama=(dl("dexs/balancer-v3/index.ts"),),
@@ -220,7 +224,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         status=AdapterStatus.ENABLED,
         contracts=bindings(("DODO_V2_PROXY02", "proxy02")),
         registry_keys=(RegistryKey.ADDRESS, RegistryKey.ROUTER),
-        execution_module="driver.execution.dodo_pmm_adapter",
+        execution_module="degenbot.execution_adapters.dodo_pmm_adapter",
         ipc_address_keyed_kinds=("DodoPmm",),
         defillama=(dl("dexs/dodo/index.ts"), dl("aggregators/dodo-agg/index.ts", "aggregators")),
         notes="Project PMM pool adapter is live; router binding is for monitor and path metadata.",
@@ -235,7 +239,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
             ("MAVERICK_V2_REWARD_ROUTER", "reward_router"),
         ),
         registry_keys=(RegistryKey.ROUTER,),
-        execution_module="driver.execution.maverick_v2_adapter",
+        execution_module="degenbot.execution_adapters.maverick_v2_adapter",
         ipc_recognized_kinds=("MaverickV2",),
         defillama=(dl("dexs/maverick-v2/index.ts"),),
         notes="Venue metadata is sourced; executable bin-shift simulation remains disabled.",
@@ -244,12 +248,28 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         venue="FluidDex",
         category=AdapterCategory.SWAP,
         status=AdapterStatus.REFERENCE_ONLY,
-        contracts=(),
+        contracts=(
+            ContractBinding(
+                export_name="DEX_RESERVES_RESOLVER",
+                address=FLUID_DEX_RESERVES_RESOLVER,
+                role="defillama_reserves_resolver",
+                source_file=FLUID_DEFILLAMA_SOURCE,
+            ),
+            ContractBinding(
+                export_name="DEX_RESOLVER",
+                address=FLUID_DEX_RESOLVER,
+                role="defillama_pool_config_resolver",
+                source_file=FLUID_DEFILLAMA_SOURCE,
+            ),
+        ),
         registry_keys=(RegistryKey.EXTERNAL_API,),
-        execution_module="driver.execution.fluid_dex_adapter",
+        execution_module="degenbot.execution_adapters.fluid_dex_adapter",
         ipc_recognized_kinds=("FluidDex",),
         defillama=(dl("dexs/fluid-dex/index.ts"), dl("dexs/fluid-dex-lite/index.ts")),
-        notes="DefiLlama has resolver addresses; TS registry has no canonical Fluid address binding yet.",
+        notes=(
+            "DefiLlama resolver addresses are pinned for pool discovery; TS registry has no "
+            "canonical Fluid execution binding yet."
+        ),
     ),
     AdapterTemplate(
         venue="Solidly",
@@ -259,7 +279,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
             ("RAMSES_ROUTER_V2", "ramses_router"), ("RAMSES_UNIVERSAL_ROUTER", "ramses_ur")
         ),
         registry_keys=(RegistryKey.ROUTER,),
-        execution_module="driver.execution.solidly_adapter",
+        execution_module="degenbot.execution_adapters.solidly_adapter",
         ipc_address_keyed_kinds=("Solidly",),
         ipc_recognized_kinds=("RamsesV2",),
         notes="Project Solidly adapter covers Ramses/Chronos/Solidlizard-style pools.",

@@ -16,7 +16,7 @@ The script asserts the contract's hard-coded constants match the
 verified-live anchors and exits non-zero on any mismatch so this can
 be wired into a post-deploy CI gate.
 
-Foundry remains the canonical contract dev framework per PROGRESS.md;
+Foundry remains the canonical contract dev framework per CLAUDE.md;
 this is a Python-side post-deploy assertion only.
 """
 

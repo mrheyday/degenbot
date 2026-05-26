@@ -41,6 +41,11 @@ logger = structlog.get_logger(__name__).bind(
     component="execution.balancer_v3_adapter",
 )
 
+BALANCER_V3_FORWARD_STUB_MESSAGE = (
+    "TODO(scaffold): forward stub -- full integration lands in "
+    "degenbot upstream PR (balancer-v3-degenbot-adapter-design Q-6)."
+)
+
 
 # ---------------------------------------------------------------------------
 # Wire types
@@ -121,30 +126,12 @@ class BalancerV3Client(AsyncHttpAdapterClient):
 
     async def list_pools(self) -> list[BalancerV3Pool]:
         """Enumerate Balancer V3 pools on Arbitrum."""
-        # This will eventually use the factory events.
-        # For now, return a placeholder for the known WETH/USDC pool.
-        return [
-            BalancerV3Pool(
-                address="0x" + "c" * 40,
-                block=0,
-                vault="0x" + "v" * 40,
-                pool_type=BalancerV3PoolType.WEIGHTED,
-                tokens=("WETH", "USDC"),
-                balances_raw=(10**18, 10**6),
-                scaling_factors=(10**18, 10**18),
-                static_swap_fee_bps=10,
-                aggregate_swap_fee_bps=10,
-                normalized_weights=(5 * 10**17, 5 * 10**17),
-            )
-        ]
+        raise NotImplementedError(BALANCER_V3_FORWARD_STUB_MESSAGE)
 
     async def get_pool(self, addr: str) -> BalancerV3Pool:
         """Fetch one pool snapshot via Vault `getPoolTokenInfo`."""
-        pools = await self.list_pools()
-        for p in pools:
-            if p.address.lower() == addr.lower():
-                return p
-        raise ValueError(f"Balancer V3 pool {addr} not found")
+        _ = addr
+        raise NotImplementedError(BALANCER_V3_FORWARD_STUB_MESSAGE)
 
     async def simulate_swap(
         self,

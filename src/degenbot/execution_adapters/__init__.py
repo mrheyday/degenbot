@@ -6,6 +6,12 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from degenbot.execution import (
+    encode_compose_four_leg_calldata,
+    encode_match_internal_calldata,
+    encode_native_arb_calldata,
+)
+
 _EXPORTS: dict[str, str] = {
     "AaveV3FlashLoanBuilder": "aave_v3_flashloan_adapter",
     "AaveV3FlashLoanRequest": "aave_v3_flashloan_adapter",
@@ -66,6 +72,9 @@ __all__ = [
     "MultiTickCrossingNotSupportedError",
     "SolidlyV1Pool",
     "SolidlyV1PoolState",
+    "encode_compose_four_leg_calldata",
+    "encode_match_internal_calldata",
+    "encode_native_arb_calldata",
 ]
 
 

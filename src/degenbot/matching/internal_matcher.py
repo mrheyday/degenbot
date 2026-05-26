@@ -1,28 +1,33 @@
-"""Internal matcher — Pick A core algorithm."""
+"""Internal matcher — Pick A core algorithm.
 
-import json
-from collections.abc import Iterable
+Reference: docs/architecture/06-OFFCHAIN-SERVICES-SPEC.md §2.3
+"""
 
-from degenbot.decision.types import (
-    MatchCandidate,
-    MatchPair,
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from degenbot.decision.types import MatchPair
+from degenbot.matching.price_compat import (
+    clearing_price,
+    fill_amount,
+    is_price_compatible,
 )
-from degenbot.matching.price_compat import clearing_price, fill_amount, is_price_compatible
 
-try:
-    from degenbot.degenbot_rs import find_best_match_json
+if TYPE_CHECKING:
+    from collections.abc import Generator, Sequence
 
-    HAS_RUST_ACCEL = True
-except ImportError:
-    HAS_RUST_ACCEL = False
+    from degenbot.decision.types import MatchCandidate
 
 
 def find_matches(
-    outbound: Iterable[MatchCandidate], counters: Iterable[MatchCandidate]
-) -> Iterable[MatchPair]:
+    outbound: Sequence[MatchCandidate],
+    inbound: Sequence[MatchCandidate],
+    uniswapx: Sequence[MatchCandidate],
+) -> Generator[MatchPair, None, None]:
     """Yields all viable internal-match pairs from the current queue snapshot."""
-    # Note: find_matches remains in Python for now to support Generator yielding.
-    # The hot-path greedy find_best_match is accelerated in Rust.
+    counters = list(inbound) + list(uniswapx)
+
     for o in outbound:
         for c in counters:
             if not is_price_compatible(o, c):
@@ -41,30 +46,13 @@ def find_matches(
 
 
 def find_best_match(
-    outbound: Iterable[MatchCandidate], counters: Iterable[MatchCandidate]
+    outbound: Sequence[MatchCandidate],
+    inbound: Sequence[MatchCandidate],
+    uniswapx: Sequence[MatchCandidate],
 ) -> MatchPair | None:
-    """Find the single best match by greedy fillAmount maximization."""
-    if HAS_RUST_ACCEL:
-        try:
-            outbound_list = list(outbound)
-            counters_list = list(counters)
-            if not outbound_list or not counters_list:
-                return None
-
-            res_json = find_best_match_json(
-                json.dumps([o.model_dump(by_alias=True) for o in outbound_list]),
-                json.dumps([c.model_dump(by_alias=True) for c in counters_list]),
-            )
-            if res_json:
-                data = json.loads(res_json)
-                # Reconstruct the MatchPair
-                return MatchPair.model_validate(data)
-            return None
-        except Exception:
-            pass
-
+    """Find the single best match by greedy fill_amount maximization."""
     best: MatchPair | None = None
-    for m in find_matches(outbound, counters):
+    for m in find_matches(outbound, inbound, uniswapx):
         if best is None or m.fill_amount > best.fill_amount:
             best = m
     return best

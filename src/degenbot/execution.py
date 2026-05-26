@@ -203,6 +203,7 @@ _ALIASED_SUBMODULES = {
     "fluid_dex_adapter": "degenbot.execution_adapters.fluid_dex_adapter",
     "fluid_dex_addresses": "degenbot.execution_adapters.fluid_dex_addresses",
     "maverick_v2_adapter": "degenbot.execution_adapters.maverick_v2_adapter",
+    "maverick_v2_addresses": "degenbot.execution_adapters.maverick_v2_addresses",
     "metamorpho_v1_adapter": "degenbot.execution_adapters.metamorpho_v1_adapter",
     "morpho_blue_addresses": "degenbot.execution_adapters.morpho_blue_addresses",
     "morpho_flashloan_adapter": "degenbot.execution_adapters.morpho_flashloan_adapter",

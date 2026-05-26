@@ -286,6 +286,38 @@ def encode_compose_four_leg_calldata(
     Encode calldata for `Executor.composeFourLeg`.
     """
 
+def optimal_input_2pool(
+    r_a1: int | bytes | str,
+    r_b1: int | bytes | str,
+    fee_bps1: int,
+    r_b2: int | bytes | str,
+    r_a2: int | bytes | str,
+    fee_bps2: int,
+) -> str:
+    """
+    Calculate the optimal input amount for a two-pool Uniswap V2 arbitrage cycle.
+    """
+
+def optimal_input_2pool_v3(
+    pool1_v3_json: str,
+    pool1_zero_for_one: bool,
+    pool2_v3_json: str | None,
+    pool2_v2_data: tuple[str, str, int] | None,
+) -> str:
+    """
+    Calculate the optimal input amount for a two-pool cycle with a V3 first pool.
+    """
+
+def optimal_input_2pool_curve(
+    pool_curve_json: str,
+    i: int,
+    j: int,
+    pool2_v2_data: tuple[str, str, int] | None,
+) -> str:
+    """
+    Calculate the optimal input amount for a Curve-to-V2 two-pool cycle.
+    """
+
 def compose_engine_job_json(
     plan_json: str,
     policy_json: str,
@@ -463,5 +495,8 @@ __all__ = [
     "get_function_selector",
     "get_sqrt_ratio_at_tick",
     "get_tick_at_sqrt_ratio",
+    "optimal_input_2pool",
+    "optimal_input_2pool_curve",
+    "optimal_input_2pool_v3",
     "to_checksum_address",
 ]

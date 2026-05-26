@@ -31,8 +31,8 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
         ),
         coordinator_modules=("coordinator/src/flash/source-router.ts",),
         solver_modules=(
-            "driver.execution.aave_v3_flashloan_adapter",
-            "driver.execution.morpho_flashloan_adapter",
+            "degenbot.execution_adapters.aave_v3_flashloan_adapter",
+            "degenbot.execution_adapters.morpho_flashloan_adapter",
         ),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
@@ -72,8 +72,8 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/router/multi-hop.ts",
         ),
         solver_modules=(
-            "driver.execution.degenbot_ipc",
-            "driver.execution.aggregator_validator",
+            "degenbot.connection.ipc",
+            "degenbot.execution_adapters.aggregator_validator",
         ),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
@@ -116,7 +116,7 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
         ),
         solver_modules=(
             "driver.quote_engine.http_client",
-            "driver.execution.degenbot_ipc",
+            "degenbot.connection.ipc",
         ),
         policy_gates=(
             "pinned block state",
@@ -146,8 +146,8 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/strategies/liquidation/monitor.ts",
         ),
         solver_modules=(
-            "driver.execution.morpho_lp_adapter",
-            "driver.execution.metamorpho_v1_adapter",
+            "degenbot.execution_adapters.morpho_lp_adapter",
+            "degenbot.execution_adapters.metamorpho_v1_adapter",
         ),
         policy_gates=(
             "strategy-specific LP mutation allowlist",
@@ -182,7 +182,7 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/strategies/native-arb.ts",
             "coordinator/src/decision/engine.ts",
         ),
-        solver_modules=("driver.execution.degenbot_ipc",),
+        solver_modules=("degenbot.connection.ipc",),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
             "state root provenance",
@@ -244,7 +244,7 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/strategies/amm-economics.ts",
             "coordinator/src/signals/detectors/sequencer-feed.ts",
         ),
-        solver_modules=("driver.execution.degenbot_ipc",),
+        solver_modules=("degenbot.connection.ipc",),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
             "self-controlled or solver-owned trigger source",
@@ -282,9 +282,9 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/submission/liquidation-policy.ts",
         ),
         solver_modules=(
-            "driver.execution.morpho_lp_adapter",
-            "driver.execution.morpho_preliquidation_adapter",
-            "driver.execution.aave_v3_flashloan_adapter",
+            "degenbot.execution_adapters.morpho_lp_adapter",
+            "degenbot.execution_adapters.morpho_preliquidation_adapter",
+            "degenbot.execution_adapters.aave_v3_flashloan_adapter",
         ),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
@@ -309,7 +309,7 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             "coordinator/src/strategies/oracle-sandwich/leg-builder.ts",
             "coordinator/src/signals/actions/dispatch-oracle-sandwich.ts",
         ),
-        solver_modules=("driver.execution.degenbot_ipc",),
+        solver_modules=("degenbot.connection.ipc",),
         contract_modules=("contracts/src/Executor.sol",),
         policy_gates=(
             "offensive variant enable map defaults on",

@@ -30,11 +30,15 @@ preserves the field for API parity but defaults to 0.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import structlog
 
 from degenbot.execution_adapters.adapter_base import validate_executor_strategy
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from typing import Any
 
 logger = structlog.get_logger(__name__).bind(
     service="solver",

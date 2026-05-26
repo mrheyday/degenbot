@@ -123,9 +123,7 @@ INVENTORY_ASYNC_CAPITAL_GATES = CapitalGateSet(
 )
 
 
-def _allow(
-    strategy_id: CapitalStrategyId, label: str, required_path: str
-) -> CapitalStrategyPolicy:
+def _allow(strategy_id: CapitalStrategyId, label: str, required_path: str) -> CapitalStrategyPolicy:
     return CapitalStrategyPolicy(
         id=strategy_id,
         label=label,

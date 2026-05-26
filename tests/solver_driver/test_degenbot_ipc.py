@@ -330,7 +330,7 @@ def test_registry_subscription_source_matches_multitoken_pool_pairs(
         _all_pools={(42161, "0x1111111111111111111111111111111111111111"): pool}
     )
     monkeypatch.setattr(
-        "driver.execution.degenbot_ipc.importlib.import_module",
+        "degenbot.connection.ipc.importlib.import_module",
         lambda _name: SimpleNamespace(pool_registry=registry),
     )
 
@@ -339,7 +339,7 @@ def test_registry_subscription_source_matches_multitoken_pool_pairs(
     assert source._matching_pools((TokenPair(token0=_USDC, token1=_WETH),)) == (pool,)
 
 
-def test_registry_simulator_rejects_uniswap_v4_until_wire_has_pool_id() -> None:
+def test_registry_simulator_rejects_uniswap_v4_without_pool_key() -> None:
     simulator = RegistryBackedDegenbotSimulator()
 
     step = SwapStep(
@@ -352,8 +352,85 @@ def test_registry_simulator_rejects_uniswap_v4_until_wire_has_pool_id() -> None:
         dex="UniswapV4",
     )
 
-    with pytest.raises(SimulationUnavailableError, match="pool-id-aware"):
+    with pytest.raises(SimulationUnavailableError, match="requires a pool_key"):
         simulator.simulate_exact_input_path((step,), 1000)
+
+
+def test_registry_simulator_uses_uniswap_v4_pool_key_registry_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Token:
+        def __init__(self, address: str) -> None:
+            self.address = address
+
+    class V4Pool:
+        address = "0x000000000004444c5dc75cB358380D2e3dE08A90"
+        token0 = Token(_WETH)
+        token1 = Token(_USDC)
+
+        def calculate_tokens_out_from_tokens_in(
+            self,
+            *,
+            token_in: Token,
+            token_out: Token,
+            token_in_quantity: int,
+            override_state: object | None,
+        ) -> int:
+            assert token_in is self.token0
+            assert token_out is self.token1
+            assert token_in_quantity == 1000
+            assert override_state is None
+            return 1234
+
+    class Registry:
+        seen_pool_id: object | None = None
+
+        def __init__(self, pool: V4Pool) -> None:
+            self.pool = pool
+
+        def get(
+            self,
+            *,
+            chain_id: int,
+            pool_address: str,
+            pool_id: object | None = None,
+        ) -> object | None:
+            assert chain_id == 42161
+            assert pool_address == self.pool.address
+            self.seen_pool_id = pool_id
+            return self.pool if pool_id is not None else None
+
+    registry = Registry(V4Pool())
+    monkeypatch.setattr(
+        "degenbot.connection.ipc.importlib.import_module",
+        lambda _name: SimpleNamespace(pool_registry=registry),
+    )
+    simulator = RegistryBackedDegenbotSimulator()
+
+    step = SwapStep(
+        pool=registry.pool.address,
+        token_in=_WETH,
+        token_out=_USDC,
+        amount_in=1000,
+        amount_out_min=1200,
+        zero_for_one=True,
+        dex="UniswapV4",
+        pool_key={
+            "currency0": _WETH,
+            "currency1": _USDC,
+            "fee": 100,
+            "tick_spacing": 1,
+            "hooks": "0x0000000000000000000000000000000000000000",
+        },
+        hook_data="0x",
+        deadline=1_900_000_000,
+    )
+
+    result = simulator.simulate_exact_input_path((step,), 1000)
+
+    assert result.amount_out == 1234
+    assert result.path == (step,)
+    assert registry.seen_pool_id is not None
 
 
 def test_encode_opportunity_from_simulation_matches_coordinator_wire_shape() -> None:

@@ -41,6 +41,15 @@ logger = structlog.get_logger(__name__).bind(
     component="execution.fluid_dex_adapter",
 )
 
+FLUID_FORWARD_STUB_MESSAGE = (
+    "TODO(scaffold): forward stub -- full integration lands in "
+    "degenbot upstream PR (degenbot-dex-coverage-gap §Q-7)."
+)
+FLUID_DRIFT_STUB_MESSAGE = (
+    "Fluid DEX swap simulation is not implemented because naive CFMM math will drift; "
+    "the Q-7 adapter must hydrate lending-position state atomically before quoting."
+)
+
 
 # ---------------------------------------------------------------------------
 # Wire types
@@ -110,24 +119,12 @@ class FluidDexClient(AsyncHttpAdapterClient):
 
     async def list_pools(self) -> list[FluidPool]:
         """Enumerate Fluid DEX pools on Arbitrum."""
-        msg = (
-            "TODO(scaffold): forward stub — full integration lands in "
-            "degenbot upstream PR (degenbot-dex-coverage-gap §Q-7)."
-        )
-        raise NotImplementedError(
-            msg,
-        )
+        raise NotImplementedError(FLUID_FORWARD_STUB_MESSAGE)
 
     async def get_pool(self, addr: str) -> FluidPool:
         """Fetch one pool snapshot."""
         _ = addr
-        msg = (
-            "TODO(scaffold): forward stub — full integration lands in "
-            "degenbot upstream PR (degenbot-dex-coverage-gap §Q-7)."
-        )
-        raise NotImplementedError(
-            msg,
-        )
+        raise NotImplementedError(FLUID_FORWARD_STUB_MESSAGE)
 
     async def simulate_swap(
         self,
@@ -140,21 +137,8 @@ class FluidDexClient(AsyncHttpAdapterClient):
         Coordinates atomically with lending-position read and models the
         rebalance step that runs alongside the swap.
         """
-        # Fetch live state including lending positions
-        pool = await self.get_pool(pool_addr)
-
-        # 1. Calculate rebalance effect
-        # Fluid DEX rebalances if the ratio of reserves to lending positions
-        # exceeds the threshold.
-        current_ratio = pool.lending_position_token0 / pool.lending_position_token1
-
-        # 2. Perform the swap using the adjusted reserves
-        # This is a placeholder for the actual Fluid invariant math
-        # until the upstream degenbot PR lands with the exact library.
-        # For now, we use a conservative UniV3-style approximation.
-        amount_out_est = int(amount_in * (1.0 / float(current_ratio)) * 0.997)
-
-        return amount_out_est
+        _ = pool_addr, amount_in, zero_for_one
+        raise NotImplementedError(FLUID_DRIFT_STUB_MESSAGE)
 
 
 def configure_logging(level: str) -> None:

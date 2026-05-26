@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import re
 from itertools import starmap
 from pathlib import Path
@@ -116,7 +117,27 @@ def test_lookup_returns_category_scoped_adapters() -> None:
     assert morpho_flash.category is AdapterCategory.FLASH
     assert morpho_flash.contract("MORPHO_SINGLETON").role == "singleton"
     assert morpho_liquidity.category is AdapterCategory.LIQUIDITY
-    assert morpho_liquidity.execution_module == "driver.execution.morpho_lp_adapter"
+    assert morpho_liquidity.execution_module == "degenbot.execution_adapters.morpho_lp_adapter"
+
+
+def test_adapter_module_paths_resolve_inside_vendored_python_package() -> None:
+    for adapter in ALL_ADAPTERS:
+        for module_name in (adapter.execution_module, adapter.quote_module):
+            if module_name is None or not module_name.startswith("degenbot."):
+                continue
+            importlib.import_module(module_name)
+
+
+def test_execution_adapters_package_exports_calldata_encoders() -> None:
+    from degenbot.execution_adapters import (
+        encode_compose_four_leg_calldata,
+        encode_match_internal_calldata,
+        encode_native_arb_calldata,
+    )
+
+    assert callable(encode_native_arb_calldata)
+    assert callable(encode_match_internal_calldata)
+    assert callable(encode_compose_four_leg_calldata)
 
 
 def test_enabled_adapters_have_contract_bindings_and_sourcify_urls() -> None:
