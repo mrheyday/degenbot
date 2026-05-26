@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from degenbot.decision.precedence import DecisionKind, compare_priority
 from degenbot.decision.sandoo_ideas import SandooIdeaSignal, evaluate_sandoo_idea
@@ -62,8 +62,31 @@ class DecisionEngine:
                 score_wei=0,
             )
 
-        # TODO: Timeboost economics port
+        # 0. Timeboost economics
         timeboost_decision = None
+        if self._settings.strategy_timeboost_enabled:
+            from degenbot.decision.timeboost import (
+                TimeboostOpportunity,
+                TimeboostRoundState,
+                decide_timeboost_bid,
+            )
+
+            # Sourced from settings / live state
+            round_state = TimeboostRoundState(
+                current_round_bid=self._settings.timeboost_current_bid_wei,
+                round_duration_sec=self._settings.timeboost_round_duration_sec,
+                expected_ops_per_round=self._settings.timeboost_expected_ops_per_round,
+            )
+
+            timeboost_decision = decide_timeboost_bid(
+                TimeboostOpportunity(
+                    expected_profit_wei=opp.estimated_profit_wei,
+                    non_express_win_probability_bps=self._settings.timeboost_non_express_win_bps,
+                    gas_cost_wei=self._settings.estimated_gas_cost_wei,
+                    strategy_class=cast("Any", opp.kind),  # Simplified mapping
+                ),
+                round_state,
+            )
 
         # 1. Pick A — internal match
         if self._settings.strategy_internal_match_enabled and self._queue is not None:

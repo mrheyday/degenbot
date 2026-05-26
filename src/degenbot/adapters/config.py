@@ -128,6 +128,17 @@ class Settings(DegenbotSettings):
         default=True,
         description="Enable Pick A native arbitrage.",
     )
+    strategy_timeboost_enabled: bool = Field(
+        default=False,
+        description="Enable Timeboost express-lane bid economics.",
+    )
+
+    # --- Timeboost state ------------------------------------------------
+    timeboost_current_bid_wei: int = Field(default=0)
+    timeboost_round_duration_sec: int = Field(default=60)
+    timeboost_expected_ops_per_round: int = Field(default=10)
+    timeboost_non_express_win_bps: int = Field(default=500)  # 5%
+    estimated_gas_cost_wei: int = Field(default=500_000 * 10**8)  # 0.0005 ETH avg
 
     # --- On-chain components --------------------------------------------
     executor_address: str = Field(
