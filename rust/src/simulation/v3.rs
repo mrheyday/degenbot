@@ -55,6 +55,110 @@ impl TickProvider for V3Snapshot {
     }
 }
 
+/// Compute amount_out and final state for `amount_in` in direction `zero_for_one`.
+pub fn amount_out_with_state(
+    pool: &V3Snapshot,
+    amount_in: U256,
+    zero_for_one: bool,
+) -> Result<(U256, V3Snapshot)> {
+    if amount_in.is_zero() {
+        return Ok((U256::ZERO, pool.clone()));
+    }
+    if pool.fee_bps >= 10_000 {
+        return Err(eyre!("v3::amount_out: fee_bps must be < 10000"));
+    }
+    if pool.tick_spacing <= 0 {
+        return Err(eyre!("v3::amount_out: tick_spacing must be positive"));
+    }
+    let fee_pips = pool
+        .fee_bps
+        .checked_mul(100)
+        .ok_or_else(|| eyre!("v3::amount_out: fee_bps overflow"))?;
+
+    let sqrt_price_limit = if zero_for_one {
+        MIN_SQRT_RATIO + U256::from(1u64)
+    } else {
+        MAX_SQRT_RATIO - U256::from(1u64)
+    };
+
+    let amount_specified = I256::try_from(amount_in)
+        .map_err(|_| eyre!("v3::amount_out: amount_in exceeds I256 range"))?;
+
+    let mut sqrt_price = pool.sqrt_price_x96;
+    let mut tick = pool.tick;
+    let mut liquidity = pool.liquidity;
+    let mut amount_remaining = amount_specified;
+    let mut amount_calculated = I256::ZERO;
+
+    while !amount_remaining.is_zero() && sqrt_price != sqrt_price_limit {
+        let sqrt_price_start = sqrt_price;
+
+        let (tick_next_unclamped, initialized) =
+            next_initialized_tick_within_one_word(pool, tick, pool.tick_spacing, zero_for_one)?;
+        let tick_next = tick_next_unclamped.clamp(MIN_TICK, MAX_TICK);
+        let sqrt_price_next = get_sqrt_ratio_at_tick(tick_next)?;
+
+        let sqrt_price_target = if zero_for_one {
+            sqrt_price_next.max(sqrt_price_limit)
+        } else {
+            sqrt_price_next.min(sqrt_price_limit)
+        };
+
+        let (next_price, step_amount_in, step_amount_out, step_fee) = compute_swap_step(
+            sqrt_price,
+            sqrt_price_target,
+            liquidity,
+            amount_remaining,
+            fee_pips,
+        )?;
+        sqrt_price = next_price;
+
+        let consumed = step_amount_in
+            .checked_add(step_fee)
+            .ok_or_else(|| eyre!("v3::amount_out: step input overflow"))?;
+        amount_remaining = amount_remaining
+            .checked_sub(
+                I256::try_from(consumed)
+                    .map_err(|_| eyre!("v3::amount_out: step input exceeds I256"))?,
+            )
+            .ok_or_else(|| eyre!("v3::amount_out: amount_remaining underflow"))?;
+        amount_calculated = amount_calculated
+            .checked_sub(
+                I256::try_from(step_amount_out)
+                    .map_err(|_| eyre!("v3::amount_out: step output exceeds I256"))?,
+            )
+            .ok_or_else(|| eyre!("v3::amount_out: amount_calculated underflow"))?;
+
+        if sqrt_price == sqrt_price_next {
+            if initialized {
+                let mut liquidity_net = pool
+                    .tick_net_liquidity
+                    .get(&tick_next)
+                    .copied()
+                    .unwrap_or(0);
+                if zero_for_one {
+                    liquidity_net = -liquidity_net;
+                }
+                liquidity = add_delta(liquidity, liquidity_net)?;
+            }
+            tick = if zero_for_one {
+                tick_next - 1
+            } else {
+                tick_next
+            };
+        } else if sqrt_price != sqrt_price_start {
+            tick = get_tick_at_sqrt_ratio(sqrt_price)?;
+        }
+    }
+
+    let mut next_pool = pool.clone();
+    next_pool.sqrt_price_x96 = sqrt_price;
+    next_pool.tick = tick;
+    next_pool.liquidity = liquidity;
+
+    Ok(((-amount_calculated).into_raw(), next_pool))
+}
+
 /// Compute amount_out for `amount_in` in direction `zero_for_one`.
 ///
 /// `zero_for_one == true` swaps token0 -> token1 (price decreasing);

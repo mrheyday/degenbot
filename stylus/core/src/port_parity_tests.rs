@@ -50,6 +50,14 @@ fn router_registry_matches_solidity_constants() {
     );
     assert!(router_registry::is_known(router_registry::PERMIT2));
     assert!(router_registry::is_known(router_registry::UNIV4_STATE_VIEW));
+    assert!(router_registry::is_known(router_registry::UNIV2_ROUTER));
+    assert!(router_registry::is_known(
+        router_registry::PANCAKE_V2_FACTORY
+    ));
+    assert_eq!(
+        router_registry::router_for(router_registry::RouterKind::PancakeV2Router),
+        router_registry::PANCAKE_V2_ROUTER
+    );
     assert!(!router_registry::is_known(address!(
         "1111111111111111111111111111111111111111"
     )));

@@ -58,6 +58,7 @@ EXECUTION_LANES: tuple[ExecutionLaneTemplate, ...] = (
             adapter_key(AdapterCategory.SWAP, "UniswapV4"),
             adapter_key(AdapterCategory.SWAP, "AggregatorV6"),
             adapter_key(AdapterCategory.SWAP, "SushiSwap"),
+            adapter_key(AdapterCategory.SWAP, "PancakeSwapV2"),
             adapter_key(AdapterCategory.SWAP, "PancakeSwapV3"),
             adapter_key(AdapterCategory.SWAP, "Camelot"),
             adapter_key(AdapterCategory.SWAP, "Curve"),

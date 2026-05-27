@@ -3,143 +3,45 @@
 use crate::alloy_py::extract_python_u256;
 use crate::execution::{
     encode_compose_four_leg_calldata, encode_match_internal_calldata, encode_native_arb_calldata,
-    ComposeParams, DexKind, FlashProtocol, MatchParams, NativeArbParams, SwapStep,
+    ComposeParams, MatchParams, NativeArbParams, SwapStep,
 };
-use alloy::primitives::{Address, Bytes};
-use pyo3::exceptions::PyValueError;
+use crate::simulation::curve::CurveSnapshot;
+use crate::simulation::curve_optimize::optimal_input_2pool_curve;
+use crate::simulation::uniswap_v3_math::v3_mid_price_x96;
+use crate::simulation::v2_optimize::{
+    apply_gap_to_price_x96, optimal_input_2pool, optimal_v2_frontrun_amount,
+    synthetic_victim_amount_in, v2_mid_price_x96, v2_optimal_sandwich_size, v2_sandwich_max_size,
+};
+use crate::simulation::v3::V3Snapshot;
+use crate::simulation::v3_optimize::{
+    optimal_input_2pool_v3, v3_optimal_sandwich_size, v3_sandwich_max_size,
+};
+use alloy::hex;
+use alloy::primitives::{Address, Bytes, U256};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
+use std::str::FromStr;
 
-fn parse_address(value: &Bound<'_, PyAny>) -> PyResult<Address> {
-    let address = value.extract::<String>()?;
-    crate::address_utils::parse_address(&address).map_err(Into::into)
-}
-
-fn parse_bytes(value: &Bound<'_, PyAny>) -> PyResult<Bytes> {
-    if let Ok(bytes) = value.extract::<&[u8]>() {
-        return Ok(Bytes::from(bytes.to_vec()));
-    }
-
-    let text = value.extract::<String>()?;
-    let stripped = text.strip_prefix("0x").unwrap_or(&text);
-    let bytes = alloy::hex::decode(stripped)
-        .map_err(|e| PyValueError::new_err(format!("Invalid hex bytes '{text}': {e}")))?;
-    Ok(Bytes::from(bytes))
-}
-
-fn parse_flash_protocol(value: &str) -> PyResult<FlashProtocol> {
-    match value.to_ascii_lowercase().as_str() {
-        "0" | "aave" => Ok(FlashProtocol::Aave),
-        "1" | "morpho" => Ok(FlashProtocol::Morpho),
-        "2" | "erc3156" | "erc-3156" => Ok(FlashProtocol::ERC3156),
-        "3" | "univ3" | "uniswapv3" | "uni_v3" => Ok(FlashProtocol::UniV3),
-        other => Err(PyValueError::new_err(format!(
-            "Unknown flash protocol '{other}'"
-        ))),
-    }
-}
-
-fn parse_dex_kind(value: &str) -> PyResult<DexKind> {
-    match value.to_ascii_lowercase().as_str() {
-        "0" | "univ2" | "uniswapv2" | "uni_v2" => Ok(DexKind::UniV2),
-        "1" | "univ3" | "uniswapv3" | "uni_v3" => Ok(DexKind::UniV3),
-        "2" | "univ4" | "uniswapv4" | "uni_v4" => Ok(DexKind::UniV4),
-        "3" | "curve" => Ok(DexKind::Curve),
-        "4" | "reserved" => Ok(DexKind::Reserved),
-        "5" | "aggregatorv6" | "aggregator_v6" => Ok(DexKind::AggregatorV6),
-        "6" | "morpho" | "morphoblue" => Ok(DexKind::MorphoBlue),
-        "7" | "algebra" => Ok(DexKind::Algebra),
-        "8" | "solidly" => Ok(DexKind::Solidly),
-        "9" | "curveng" | "curve_ng" => Ok(DexKind::CurveNG),
-        "10" | "balancerv2" | "balancer_v2" => Ok(DexKind::BalancerV2),
-        "11" | "maverickv2" | "maverick_v2" => Ok(DexKind::MaverickV2),
-        "12" | "dodopmm" | "dodo_pmm" => Ok(DexKind::DodoPmm),
-        "13" | "fluiddex" | "fluid_dex" => Ok(DexKind::FluidDex),
-        "14" | "balancerv3" | "balancer_v3" => Ok(DexKind::BalancerV3),
-        "15" | "kyberelastic" | "kyber_elastic" => Ok(DexKind::KyberElastic),
-        "16" | "lfj" | "liquiditybook" | "lfjliquiditybook" | "lfj_liquidity_book" => {
-            Ok(DexKind::LFJLiquidityBook)
-        }
-        "17" | "gmxv2" | "gmx_v2" => Ok(DexKind::GMXV2),
-        "18" | "wombat" => Ok(DexKind::Wombat),
-        "19" | "bebop" => Ok(DexKind::Bebop),
-        "20" | "hashflow" => Ok(DexKind::Hashflow),
-        "21" | "woofi" => Ok(DexKind::WooFi),
-        "22" | "okxdex" | "okx" | "okx_dex" => Ok(DexKind::OKXDex),
-        "23" | "enso" => Ok(DexKind::Enso),
-        "24" | "squid" => Ok(DexKind::Squid),
-        "25" | "lifi" | "li.fi" | "li_fi" => Ok(DexKind::LIFI),
-        "26" | "rango" => Ok(DexKind::Rango),
-        "27" | "rubic" => Ok(DexKind::Rubic),
-        "28" | "native" => Ok(DexKind::Native),
-        other => Err(PyValueError::new_err(format!("Unknown dex kind '{other}'"))),
-    }
-}
-
-fn required_item<'py>(dict: &'py Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
-    dict.get_item(key)?
-        .ok_or_else(|| PyValueError::new_err(format!("swap step missing '{key}'")))
-}
-
-fn parse_swap_step(step: &Bound<'_, PyAny>) -> PyResult<SwapStep> {
-    let dict = step.cast::<PyDict>()?;
-
-    let dex_kind = required_item(dict, "dex_kind")?
-        .extract::<String>()
-        .and_then(|s| parse_dex_kind(&s))?;
-    let router = parse_address(&required_item(dict, "router")?)?;
-    let call_data = parse_bytes(&required_item(dict, "call_data")?)?;
-    let token_in = parse_address(&required_item(dict, "token_in")?)?;
-    let token_out = parse_address(&required_item(dict, "token_out")?)?;
-    let amount_in = extract_python_u256(&required_item(dict, "amount_in")?)?;
-    let amount_out_min = extract_python_u256(&required_item(dict, "amount_out_min")?)?;
-
-    Ok(SwapStep {
-        dex_kind,
-        router,
-        call_data,
-        token_in,
-        token_out,
-        amount_in,
-        amount_out_min,
-    })
-}
-
-fn parse_swap_steps(swaps: &Bound<'_, PyList>) -> PyResult<Vec<SwapStep>> {
-    swaps.iter().map(|step| parse_swap_step(&step)).collect()
-}
-
-fn execution_error_to_py(err: &crate::errors::ExecutionError) -> PyErr {
-    PyValueError::new_err(err.to_string())
-}
-
-/// Encode `Executor.executeNativeArb` calldata from Python values.
+/// Encode calldata for `executeNativeArb`.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_native_arb_calldata")]
-#[pyo3(signature = (
-    flash_lender,
-    flash_protocol,
-    flash_token,
-    flash_amount,
-    swaps,
-    min_profit,
-    deadline
-))]
-pub fn encode_native_arb_calldata_py<'py>(
-    py: Python<'py>,
-    flash_lender: &Bound<'_, PyAny>,
+pub fn encode_native_arb_calldata_py(
+    py: Python<'_>,
+    flash_lender: &str,
     flash_protocol: &str,
-    flash_token: &Bound<'_, PyAny>,
+    flash_token: &str,
     flash_amount: &Bound<'_, PyAny>,
     swaps: &Bound<'_, PyList>,
     min_profit: &Bound<'_, PyAny>,
     deadline: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyBytes>> {
+) -> PyResult<Py<PyAny>> {
     let params = NativeArbParams {
-        flash_lender: parse_address(flash_lender)?,
-        flash_protocol: parse_flash_protocol(flash_protocol)?,
-        flash_token: parse_address(flash_token)?,
+        flash_lender: Address::from_str(flash_lender)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        flash_protocol: flash_protocol.parse().map_err(PyValueError::new_err)?,
+        flash_token: Address::from_str(flash_token)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
         flash_amount: extract_python_u256(flash_amount)?,
         swaps: parse_swap_steps(swaps)?,
         min_profit: extract_python_u256(min_profit)?,
@@ -148,28 +50,16 @@ pub fn encode_native_arb_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_native_arb_calldata(&params))
-        .map_err(|err| execution_error_to_py(&err))?;
-    Ok(PyBytes::new(py, calldata.as_ref()))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    Ok(PyBytes::new(py, calldata.as_ref()).into_any().unbind())
 }
 
-/// Encode `Executor.matchInternal` calldata from Python values.
+/// Encode calldata for `matchInternal`.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_match_internal_calldata")]
-#[pyo3(signature = (
-    cow_settlement_calldata,
-    uniswapx_batch_calldata,
-    expected_token_inflows,
-    expected_token_inflow_min,
-    flash_lender,
-    flash_protocol,
-    flash_token,
-    flash_amount,
-    min_profit,
-    deadline
-))]
-pub fn encode_match_internal_calldata_py<'py>(
-    py: Python<'py>,
+pub fn encode_match_internal_calldata_py(
+    py: Python<'_>,
     cow_settlement_calldata: &Bound<'_, PyAny>,
     uniswapx_batch_calldata: &Bound<'_, PyAny>,
     expected_token_inflows: &Bound<'_, PyList>,
@@ -180,24 +70,15 @@ pub fn encode_match_internal_calldata_py<'py>(
     flash_amount: &Bound<'_, PyAny>,
     min_profit: &Bound<'_, PyAny>,
     deadline: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let token_inflows: Vec<Address> = expected_token_inflows
-        .iter()
-        .map(|token| parse_address(&token))
-        .collect::<PyResult<_>>()?;
-    let token_inflow_min = expected_token_inflow_min
-        .iter()
-        .map(|amount| extract_python_u256(&amount))
-        .collect::<PyResult<Vec<_>>>()?;
-
+) -> PyResult<Py<PyAny>> {
     let params = MatchParams {
-        cow_settlement_calldata: parse_bytes(cow_settlement_calldata)?,
-        uniswapx_batch_calldata: parse_bytes(uniswapx_batch_calldata)?,
-        expected_token_inflows: token_inflows,
-        expected_token_inflow_min: token_inflow_min,
-        flash_lender: parse_address(flash_lender)?,
-        flash_protocol: parse_flash_protocol(flash_protocol)?,
-        flash_token: parse_address(flash_token)?,
+        cow_settlement_calldata: extract_bytes(cow_settlement_calldata)?.into(),
+        uniswapx_batch_calldata: extract_bytes(uniswapx_batch_calldata)?.into(),
+        expected_token_inflows: parse_address_list(expected_token_inflows)?,
+        expected_token_inflow_min: parse_u256_list(expected_token_inflow_min)?,
+        flash_lender: extract_address(flash_lender)?,
+        flash_protocol: flash_protocol.parse().map_err(PyValueError::new_err)?,
+        flash_token: extract_address(flash_token)?,
         flash_amount: extract_python_u256(flash_amount)?,
         min_profit: extract_python_u256(min_profit)?,
         deadline: extract_python_u256(deadline)?,
@@ -205,28 +86,16 @@ pub fn encode_match_internal_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_match_internal_calldata(&params))
-        .map_err(|err| execution_error_to_py(&err))?;
-    Ok(PyBytes::new(py, calldata.as_ref()))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    Ok(PyBytes::new(py, calldata.as_ref()).into_any().unbind())
 }
 
-/// Encode `Executor.composeFourLeg` calldata from Python values.
+/// Encode calldata for `composeFourLeg`.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 #[pyo3(name = "encode_compose_four_leg_calldata")]
-#[pyo3(signature = (
-    across_fill_calldata,
-    arb_swaps,
-    cow_fill_calldata,
-    uniswapx_rebalance_calldata,
-    flash_lender,
-    flash_protocol,
-    flash_token,
-    flash_amount,
-    min_profit,
-    deadline
-))]
-pub fn encode_compose_four_leg_calldata_py<'py>(
-    py: Python<'py>,
+pub fn encode_compose_four_leg_calldata_py(
+    py: Python<'_>,
     across_fill_calldata: &Bound<'_, PyAny>,
     arb_swaps: &Bound<'_, PyList>,
     cow_fill_calldata: &Bound<'_, PyAny>,
@@ -237,15 +106,15 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
     flash_amount: &Bound<'_, PyAny>,
     min_profit: &Bound<'_, PyAny>,
     deadline: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyBytes>> {
+) -> PyResult<Py<PyAny>> {
     let params = ComposeParams {
-        across_fill_calldata: parse_bytes(across_fill_calldata)?,
+        across_fill_calldata: extract_bytes(across_fill_calldata)?.into(),
         arb_swaps: parse_swap_steps(arb_swaps)?,
-        cow_fill_calldata: parse_bytes(cow_fill_calldata)?,
-        uniswapx_rebalance_calldata: parse_bytes(uniswapx_rebalance_calldata)?,
-        flash_lender: parse_address(flash_lender)?,
-        flash_protocol: parse_flash_protocol(flash_protocol)?,
-        flash_token: parse_address(flash_token)?,
+        cow_fill_calldata: extract_bytes(cow_fill_calldata)?.into(),
+        uniswapx_rebalance_calldata: extract_bytes(uniswapx_rebalance_calldata)?.into(),
+        flash_lender: extract_address(flash_lender)?,
+        flash_protocol: flash_protocol.parse().map_err(PyValueError::new_err)?,
+        flash_token: extract_address(flash_token)?,
         flash_amount: extract_python_u256(flash_amount)?,
         min_profit: extract_python_u256(min_profit)?,
         deadline: extract_python_u256(deadline)?,
@@ -253,17 +122,10 @@ pub fn encode_compose_four_leg_calldata_py<'py>(
 
     let calldata = py
         .detach(|| encode_compose_four_leg_calldata(&params))
-        .map_err(|err| execution_error_to_py(&err))?;
-    Ok(PyBytes::new(py, calldata.as_ref()))
-}
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-use crate::simulation::curve::CurveSnapshot;
-use crate::simulation::curve_optimize::optimal_input_2pool_curve;
-use crate::simulation::uniswap_v3_math::v3_mid_price_x96;
-use crate::simulation::v2_optimize::{
-    apply_gap_to_price_x96, optimal_input_2pool, optimal_v2_frontrun_amount,
-    synthetic_victim_amount_in, v2_mid_price_x96, v2_optimal_sandwich_size, v2_sandwich_max_size,
-};
+    Ok(PyBytes::new(py, calldata.as_ref()).into_any().unbind())
+}
 
 /// Calculate the mid-price in Q64.96 for a V2 pool.
 #[pyfunction]
@@ -371,9 +233,50 @@ pub fn v2_optimal_sandwich_size_py(
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(result.to_string())
 }
-use crate::simulation::v3::V3Snapshot;
-use crate::simulation::v3_optimize::optimal_input_2pool_v3;
-use alloy::primitives::U256;
+
+/// Largest frontrun size `a` for a V3 sandwich.
+#[pyfunction]
+#[pyo3(name = "v3_sandwich_max_size")]
+pub fn v3_sandwich_max_size_py(
+    pool_json: String,
+    victim_amount_in: &Bound<'_, PyAny>,
+    victim_min_out: &Bound<'_, PyAny>,
+    zero_for_one: bool,
+) -> PyResult<String> {
+    let pool: V3Snapshot = serde_json::from_str(&pool_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid pool json: {e}")))?;
+
+    let result = v3_sandwich_max_size(
+        &pool,
+        extract_python_u256(victim_amount_in)?,
+        extract_python_u256(victim_min_out)?,
+        zero_for_one,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
+
+/// Find the optimal frontrun size for a V3 sandwich.
+#[pyfunction]
+#[pyo3(name = "v3_optimal_sandwich_size")]
+pub fn v3_optimal_sandwich_size_py(
+    pool_json: String,
+    victim_amount_in: &Bound<'_, PyAny>,
+    zero_for_one: bool,
+    a_max: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let pool: V3Snapshot = serde_json::from_str(&pool_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid pool json: {e}")))?;
+
+    let result = v3_optimal_sandwich_size(
+        &pool,
+        extract_python_u256(victim_amount_in)?,
+        zero_for_one,
+        extract_python_u256(a_max)?,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(result.to_string())
+}
 
 /// Calculate the optimal input amount for a 2-pool Uniswap V2 arbitrage cycle.
 #[pyfunction]
@@ -478,79 +381,129 @@ pub fn add_execution_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(synthetic_victim_amount_in_py, m)?)?;
     m.add_function(wrap_pyfunction!(v2_sandwich_max_size_py, m)?)?;
     m.add_function(wrap_pyfunction!(v2_optimal_sandwich_size_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v3_sandwich_max_size_py, m)?)?;
+    m.add_function(wrap_pyfunction!(v3_optimal_sandwich_size_py, m)?)?;
     Ok(())
+}
+
+fn parse_swap_steps(list: &Bound<'_, PyList>) -> PyResult<Vec<SwapStep>> {
+    list.iter().map(|item| parse_swap_step(&item)).collect()
+}
+
+fn parse_swap_step(item: &Bound<'_, PyAny>) -> PyResult<SwapStep> {
+    let dict = item.cast::<PyDict>()?;
+    let dex_kind = required_item(dict, "dex_kind")?.extract::<String>()?;
+    let router = Address::from_str(&required_item(dict, "router")?.extract::<String>()?)
+        .map_err(|e| PyValueError::new_err(format!("invalid router address: {} - {}", e, item)))?;
+    let call_data = Bytes::from(extract_bytes(&required_item(dict, "call_data")?)?);
+    let token_in = Address::from_str(&required_item(dict, "token_in")?.extract::<String>()?)
+        .map_err(|e| PyValueError::new_err(format!("invalid token_in address: {}", e)))?;
+    let token_out = Address::from_str(&required_item(dict, "token_out")?.extract::<String>()?)
+        .map_err(|e| PyValueError::new_err(format!("invalid token_out address: {}", e)))?;
+    let amount_in = extract_python_u256(&required_item(dict, "amount_in")?)?;
+    let amount_out_min = extract_python_u256(&required_item(dict, "amount_out_min")?)?;
+
+    Ok(SwapStep {
+        dex_kind: dex_kind.parse().map_err(PyValueError::new_err)?,
+        router,
+        call_data,
+        token_in,
+        token_out,
+        amount_in,
+        amount_out_min,
+    })
+}
+
+fn parse_address_list(list: &Bound<'_, PyList>) -> PyResult<Vec<Address>> {
+    list.iter()
+        .map(|item| {
+            let s = item.extract::<String>()?;
+            Address::from_str(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+        })
+        .collect()
+}
+
+fn parse_u256_list(list: &Bound<'_, PyList>) -> PyResult<Vec<U256>> {
+    list.iter().map(|item| extract_python_u256(&item)).collect()
+}
+
+fn extract_address(item: &Bound<'_, PyAny>) -> PyResult<Address> {
+    let s = item.extract::<String>()?;
+    Address::from_str(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn extract_bytes(item: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(b) = item.cast::<PyBytes>() {
+        Ok(b.as_bytes().to_vec())
+    } else if let Ok(s) = item.extract::<String>() {
+        let s = s.strip_prefix("0x").or(s.strip_prefix("0X")).unwrap_or(&s);
+        hex::decode(s).map_err(|e| PyValueError::new_err(e.to_string()))
+    } else {
+        Err(PyValueError::new_err("Value must be an integer or bytes"))
+    }
+}
+
+fn required_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+    dict.get_item(key)?
+        .ok_or_else(|| PyKeyError::new_err(key.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
     use super::*;
-    use crate::execution::{
-        encode_native_arb_calldata, DexKind, FlashProtocol, NativeArbParams, SwapStep,
-    };
-    use alloy::primitives::{Address, Bytes, U256};
-    use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString};
-
-    fn with_python<R>(f: impl for<'py> FnOnce(Python<'py>) -> R) -> R {
-        crate::with_python_for_tests(f)
-    }
+    use crate::execution::FlashProtocol;
+    use crate::runtime::with_python;
+    use pyo3::types::PyInt;
 
     fn sample_swap_step() -> SwapStep {
         SwapStep {
-            dex_kind: DexKind::UniV3,
+            dex_kind: crate::execution::DexKind::UniV3,
             router: Address::repeat_byte(0x11),
-            call_data: Bytes::from(vec![0xaa, 0xbb, 0xcc]),
+            call_data: Bytes::from_static(b"data"),
             token_in: Address::repeat_byte(0x22),
             token_out: Address::repeat_byte(0x33),
-            amount_in: U256::from(456u64),
-            amount_out_min: U256::from(789u64),
-        }
-    }
-
-    fn sample_native_arb_params() -> NativeArbParams {
-        NativeArbParams {
-            flash_lender: Address::repeat_byte(0x44),
-            flash_protocol: FlashProtocol::Aave,
-            flash_token: Address::repeat_byte(0x55),
-            flash_amount: U256::from(1234u64),
-            swaps: vec![sample_swap_step()],
-            min_profit: U256::from(42u64),
-            deadline: U256::from(999_999u64),
+            amount_in: U256::from(100u64),
+            amount_out_min: U256::from(90u64),
         }
     }
 
     #[test]
     fn native_arb_py_binding_matches_core() {
         with_python(|py| {
-            let params = sample_native_arb_params();
+            let params = NativeArbParams {
+                flash_lender: Address::repeat_byte(0x44),
+                flash_protocol: FlashProtocol::Aave,
+                flash_token: Address::repeat_byte(0x55),
+                flash_amount: U256::from(1234u64),
+                swaps: vec![sample_swap_step()],
+                min_profit: U256::from(42u64),
+                deadline: U256::from(999_999u64),
+            };
 
             let swaps = PyList::empty(py);
             let swap = PyDict::new(py);
             swap.set_item("dex_kind", "univ3").unwrap();
             swap.set_item("router", format!("{:#x}", params.swaps[0].router))
                 .unwrap();
-            swap.set_item("call_data", PyBytes::new(py, &[0xaa, 0xbb, 0xcc]))
+            swap.set_item("call_data", PyBytes::new(py, b"data"))
                 .unwrap();
             swap.set_item("token_in", format!("{:#x}", params.swaps[0].token_in))
                 .unwrap();
             swap.set_item("token_out", format!("{:#x}", params.swaps[0].token_out))
                 .unwrap();
-            swap.set_item("amount_in", 456u64).unwrap();
-            swap.set_item("amount_out_min", 789u64).unwrap();
+            swap.set_item("amount_in", 100u64).unwrap();
+            swap.set_item("amount_out_min", 90u64).unwrap();
             swaps.append(swap).unwrap();
 
-            let flash_lender = PyString::new(py, &format!("{:#x}", params.flash_lender)).into_any();
-            let flash_token = PyString::new(py, &format!("{:#x}", params.flash_token)).into_any();
             let flash_amount = PyInt::new(py, 1234).into_any();
             let min_profit = PyInt::new(py, 42).into_any();
             let deadline = PyInt::new(py, 999_999).into_any();
 
             let calldata = encode_native_arb_calldata_py(
                 py,
-                &flash_lender,
+                &format!("{:#x}", params.flash_lender),
                 "aave",
-                &flash_token,
+                &format!("{:#x}", params.flash_token),
                 &flash_amount,
                 &swaps,
                 &min_profit,
@@ -559,7 +512,7 @@ mod tests {
             .unwrap();
 
             let expected = encode_native_arb_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.extract().unwrap();
+            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }
@@ -601,21 +554,21 @@ mod tests {
 
             let calldata = encode_match_internal_calldata_py(
                 py,
-                &cow_settlement_calldata,
-                &uniswapx_batch_calldata,
+                &cow_settlement_calldata.bind(py),
+                &uniswapx_batch_calldata.bind(py),
                 &expected_token_inflows,
                 &expected_token_inflow_min,
-                &flash_lender,
+                &flash_lender.bind(py),
                 "morpho",
-                &flash_token,
-                &flash_amount,
-                &min_profit,
-                &deadline,
+                &flash_token.bind(py),
+                &flash_amount.bind(py),
+                &min_profit.bind(py),
+                &deadline.bind(py),
             )
             .unwrap();
 
             let expected = encode_match_internal_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.extract().unwrap();
+            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }
@@ -662,21 +615,21 @@ mod tests {
 
             let calldata = encode_compose_four_leg_calldata_py(
                 py,
-                &across_fill_calldata,
+                &across_fill_calldata.bind(py),
                 &arb_swaps,
-                &cow_fill_calldata,
-                &uniswapx_rebalance_calldata,
-                &flash_lender,
+                &cow_fill_calldata.bind(py),
+                &uniswapx_rebalance_calldata.bind(py),
+                &flash_lender.bind(py),
                 "erc3156",
-                &flash_token,
-                &flash_amount,
-                &min_profit,
-                &deadline,
+                &flash_token.bind(py),
+                &flash_amount.bind(py),
+                &min_profit.bind(py),
+                &deadline.bind(py),
             )
             .unwrap();
 
             let expected = encode_compose_four_leg_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.extract().unwrap();
+            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }

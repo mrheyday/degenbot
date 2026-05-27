@@ -132,6 +132,23 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         notes="Degenbot-native V2/V3 fork classes.",
     ),
     AdapterTemplate(
+        venue="PancakeSwapV2",
+        category=AdapterCategory.SWAP,
+        status=AdapterStatus.ENABLED,
+        contracts=bindings(
+            ("PANCAKE_V2_FACTORY", "factory"),
+            ("PANCAKE_V2_ROUTER", "router"),
+        ),
+        registry_keys=(RegistryKey.FACTORY, RegistryKey.ROUTER),
+        execution_module="degenbot.pancakeswap.pools",
+        ipc_address_keyed_kinds=("PancakeSwapV2",),
+        defillama=(dl("dexs/pancakeswap-v2.ts"),),
+        notes=(
+            "Degenbot-native Pancake V2 pool class; fee is 25 bps, not Uniswap V2's 30 bps. "
+            "Vert Router source is retained as Pancake V2 router-intelligence reference only."
+        ),
+    ),
+    AdapterTemplate(
         venue="PancakeSwapV3",
         category=AdapterCategory.SWAP,
         status=AdapterStatus.ENABLED,
@@ -141,7 +158,7 @@ SWAP_ADAPTERS: tuple[AdapterTemplate, ...] = (
         ),
         registry_keys=(RegistryKey.ROUTER,),
         execution_module="degenbot.pancakeswap.pools",
-        ipc_address_keyed_kinds=("PancakeSwapV2", "PancakeSwapV3"),
+        ipc_address_keyed_kinds=("PancakeSwapV3",),
         defillama=(dl("dexs/pancakeswap-v3.ts"),),
         notes="Degenbot-native Pancake V3 pool class with dedicated Arbitrum router bindings.",
     ),

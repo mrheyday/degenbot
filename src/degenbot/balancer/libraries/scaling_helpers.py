@@ -1,10 +1,11 @@
 from collections.abc import Sequence
-from itertools import starmap
 from typing import cast
 
 from degenbot.balancer.libraries.constants import ONE
 from degenbot.balancer.libraries.fixed_point import div_down, div_up, mul_down
 from degenbot.erc20 import Erc20Token
+
+_LENGTH_MISMATCH = "amounts and scaling_factors length mismatch"
 
 # To simplify Pool logic, all token balances and amounts are normalized to behave as if the token
 # had 18 decimals. e.g. When comparing DAI (18 decimals) and USDC (6 decimals), 1 USDC and 1 DAI
@@ -55,25 +56,37 @@ def _upscale_array(amounts: list[int], scaling_factors: Sequence[int]) -> None:
     *mutates* the `amounts` array.
     """
 
-    amounts = list(starmap(mul_down, zip(amounts, scaling_factors, strict=True)))
+    if len(amounts) != len(scaling_factors):
+        raise ValueError(_LENGTH_MISMATCH)
+
+    for i, scaling_factor in enumerate(scaling_factors):
+        amounts[i] = mul_down(amounts[i], scaling_factor)
 
 
-def _downscale_down_array(amounts: list[int], scaling_factors: list[int]) -> None:
+def _downscale_down_array(amounts: list[int], scaling_factors: Sequence[int]) -> None:
     """
     Same as `_downscale_down`, but for an entire array. This function does not return anything, but
     instead *mutates* the `amounts` array.
     """
 
-    amounts = list(starmap(div_down, zip(amounts, scaling_factors, strict=True)))
+    if len(amounts) != len(scaling_factors):
+        raise ValueError(_LENGTH_MISMATCH)
+
+    for i, scaling_factor in enumerate(scaling_factors):
+        amounts[i] = div_down(amounts[i], scaling_factor)
 
 
-def _downscale_up_array(amounts: list[int], scaling_factors: list[int]) -> None:
+def _downscale_up_array(amounts: list[int], scaling_factors: Sequence[int]) -> None:
     """
     Same as `_downscale_up`, but for an entire array. This function does not return anything, but
     instead *mutates* the `amounts` array.
     """
 
-    amounts = list(starmap(div_up, zip(amounts, scaling_factors, strict=True)))
+    if len(amounts) != len(scaling_factors):
+        raise ValueError(_LENGTH_MISMATCH)
+
+    for i, scaling_factor in enumerate(scaling_factors):
+        amounts[i] = div_up(amounts[i], scaling_factor)
 
 
 def _compute_scaling_factor(token: Erc20Token) -> int:

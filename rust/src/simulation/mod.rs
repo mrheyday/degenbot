@@ -1,5 +1,6 @@
 pub mod curve;
 pub mod curve_optimize;
+pub mod rehackt;
 pub mod revm_db;
 pub mod uniswap_v3_math;
 pub mod v2;

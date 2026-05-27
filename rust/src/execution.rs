@@ -21,6 +21,8 @@ pub const MATCH_INTERNAL_SIGNATURE: &str =
 pub const COMPOSE_FOUR_LEG_SIGNATURE: &str =
     "composeFourLeg((bytes,(uint8,address,bytes,address,address,uint256,uint256)[],bytes,bytes,address,uint8,address,uint256,uint256,uint256))";
 
+use std::str::FromStr;
+
 /// Flash-loan protocol selector used by `Executor.sol`.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +31,20 @@ pub enum FlashProtocol {
     Morpho = 1,
     ERC3156 = 2,
     UniV3 = 3,
+}
+
+impl FromStr for FlashProtocol {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "aave" | "aavev3" => Ok(FlashProtocol::Aave),
+            "morpho" | "morphoblue" => Ok(FlashProtocol::Morpho),
+            "erc3156" => Ok(FlashProtocol::ERC3156),
+            "univ3" | "uniswapv3" => Ok(FlashProtocol::UniV3),
+            _ => Err(format!("unknown flash protocol: {}", s)),
+        }
+    }
 }
 
 /// DEX category selector used by `Executor.sol`.
@@ -64,6 +80,45 @@ pub enum DexKind {
     Rango = 26,
     Rubic = 27,
     Native = 28,
+}
+
+impl FromStr for DexKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "univ2" | "uniswapv2" => Ok(DexKind::UniV2),
+            "univ3" | "uniswapv3" => Ok(DexKind::UniV3),
+            "univ4" | "uniswapv4" => Ok(DexKind::UniV4),
+            "curve" => Ok(DexKind::Curve),
+            "curveng" => Ok(DexKind::CurveNG),
+            "solidly" | "aerodrome" => Ok(DexKind::Solidly),
+            "algebra" => Ok(DexKind::Algebra),
+            "maverick" | "maverickv2" => Ok(DexKind::MaverickV2),
+            "dodo" | "dodopmm" => Ok(DexKind::DodoPmm),
+            "fluid" | "fluiddex" => Ok(DexKind::FluidDex),
+            "kyber" | "kyberelastic" => Ok(DexKind::KyberElastic),
+            "lfj" | "lfjliquiditybook" => Ok(DexKind::LFJLiquidityBook),
+            "gmx" | "gmxv2" => Ok(DexKind::GMXV2),
+            "native" => Ok(DexKind::Native),
+            "reserved" => Ok(DexKind::Reserved),
+            "aggregatorv6" => Ok(DexKind::AggregatorV6),
+            "morpho" | "morphoblue" => Ok(DexKind::MorphoBlue),
+            "balancerv2" => Ok(DexKind::BalancerV2),
+            "balancerv3" => Ok(DexKind::BalancerV3),
+            "wombat" => Ok(DexKind::Wombat),
+            "bebop" => Ok(DexKind::Bebop),
+            "hashflow" => Ok(DexKind::Hashflow),
+            "woofi" => Ok(DexKind::WooFi),
+            "okxdex" => Ok(DexKind::OKXDex),
+            "enso" => Ok(DexKind::Enso),
+            "squid" => Ok(DexKind::Squid),
+            "lifi" => Ok(DexKind::LIFI),
+            "rango" => Ok(DexKind::Rango),
+            "rubic" => Ok(DexKind::Rubic),
+            _ => Err(format!("unknown dex kind: {}", s)),
+        }
+    }
 }
 
 /// One swap step in an execution plan.

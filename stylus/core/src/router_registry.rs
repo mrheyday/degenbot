@@ -22,6 +22,8 @@ pub const SQUID_MULTICALL: Address = address!("aD6Cea45f98444a922a2b4fE96b8C90F0
 pub const PERMIT2: Address = address!("000000000022D473030F116dDEE9F6B43aC78BA3");
 pub const SUSHI_V2_FACTORY: Address = address!("c35DADB65012eC5796536bD9864eD8773aBc74C4");
 pub const SUSHI_V2_ROUTER: Address = address!("1b02dA8Cb0d097eB8D57A175b88c7D8b47997506");
+pub const PANCAKE_V2_FACTORY: Address = address!("02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E");
+pub const PANCAKE_V2_ROUTER: Address = address!("8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb");
 pub const CAMELOT_V2_FACTORY: Address = address!("6EcCab422D763aC031210895C81787E87B43A652");
 pub const FRAXSWAP_FACTORY: Address = address!("5Ca135cB8527d76e932f34B5145575F9d8cbE08E");
 pub const SUSHI_V3_FACTORY: Address = address!("1af415a1EbA07a4986a52B6f2e7dE7003D82231e");
@@ -45,6 +47,7 @@ pub enum RouterKind {
     SushiV2Router = 10,
     SushiV3SwapRouter = 11,
     SquidRouter = 12,
+    PancakeV2Router = 13,
 }
 
 impl RouterKind {
@@ -63,6 +66,7 @@ impl RouterKind {
             10 => Some(Self::SushiV2Router),
             11 => Some(Self::SushiV3SwapRouter),
             12 => Some(Self::SquidRouter),
+            13 => Some(Self::PancakeV2Router),
             _ => None,
         }
     }
@@ -83,6 +87,7 @@ pub fn router_for(kind: RouterKind) -> Address {
         RouterKind::SushiV2Router => SUSHI_V2_ROUTER,
         RouterKind::SushiV3SwapRouter => SUSHI_V3_SWAP_ROUTER,
         RouterKind::SquidRouter => SQUID_ROUTER,
+        RouterKind::PancakeV2Router => PANCAKE_V2_ROUTER,
     }
 }
 
@@ -106,6 +111,8 @@ pub fn is_known(addr: Address) -> bool {
             | PERMIT2
             | SUSHI_V2_ROUTER
             | SUSHI_V2_FACTORY
+            | PANCAKE_V2_ROUTER
+            | PANCAKE_V2_FACTORY
             | SUSHI_V3_SWAP_ROUTER
             | SUSHI_V3_FACTORY
             | CAMELOT_V2_FACTORY

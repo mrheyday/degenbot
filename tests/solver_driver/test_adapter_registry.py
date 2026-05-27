@@ -76,6 +76,8 @@ DIRECT_TS_EXPORTS = {
     "NATIVE_CREDIT_VAULT",
     "ODOS_ROUTER_V2",
     "ONEINCH_AGG_V6",
+    "PANCAKE_V2_FACTORY",
+    "PANCAKE_V2_ROUTER",
     "PARASWAP_AUGUSTUS_V6",
     "RANGO_DIAMOND",
     "RUBIC_PROXY_V3",
@@ -242,6 +244,7 @@ def test_native_and_forked_swap_adapters_have_defillama_refs() -> None:
         "UniswapV3": {"dexs/uniswap-v3.ts"},
         "UniswapV4": {"dexs/uniswap-v4.ts"},
         "SushiSwap": {"dexs/sushiswap-v3.ts", "aggregators/sushiswap-agg.ts"},
+        "PancakeSwapV2": {"dexs/pancakeswap-v2.ts"},
         "PancakeSwapV3": {"dexs/pancakeswap-v3.ts"},
         "Solidly": {
             "dexs/ramsesx-arb-legacy.ts",
