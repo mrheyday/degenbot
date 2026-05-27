@@ -119,6 +119,7 @@ from .pancakeswap import (
     PancakeswapV3PoolManager,
 )
 from .registry import pool_registry, token_registry
+from .simulation import SimulationResult, Simulator
 from .strategies_coordinator.four_leg import FourLegPlan, FourLegStrategy
 from .strategies_coordinator.internal_match import (
     InternalMatchPlan,
@@ -129,6 +130,7 @@ from .strategies_coordinator.oracle_sandwich import (
     OracleSandwichPlan,
     OracleSandwichStrategy,
 )
+from .strategies_coordinator.sandwich import SandwichPlan, SandwichStrategy
 from .strategies_coordinator.types import (
     DEX_KIND,
     FLASH_PROTOCOL,
@@ -244,7 +246,11 @@ __all__ = (
     "PipelineStrategy",
     "RoutedDecision",
     "SandooIdeaSignal",
+    "SandwichPlan",
+    "SandwichStrategy",
     "SignalBus",
+    "SimulationResult",
+    "Simulator",
     "SushiswapV2Pool",
     "SushiswapV2PoolManager",
     "SushiswapV3Pool",

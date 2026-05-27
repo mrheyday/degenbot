@@ -50,6 +50,46 @@ class SwapStepDict(TypedDict):
     amount_out_min: int | bytes
 
 
+_FLASH_PROTOCOL_LABELS = {
+    0: "Aave",
+    1: "Morpho",
+    2: "ERC3156",
+    3: "UniV3",
+}
+
+_DEX_KIND_LABELS = {
+    0: "UniV2",
+    1: "UniV3",
+    2: "UniV4",
+    3: "Curve",
+    4: "Reserved",
+    5: "AggregatorV6",
+    6: "MorphoBlue",
+    7: "Algebra",
+    8: "Solidly",
+    9: "CurveNG",
+    10: "BalancerV2",
+    11: "MaverickV2",
+    12: "DodoPmm",
+    13: "FluidDex",
+    14: "BalancerV3",
+    15: "KyberElastic",
+    16: "LFJLiquidityBook",
+    17: "GMXV2",
+    18: "Wombat",
+    19: "Bebop",
+    20: "Hashflow",
+    21: "WooFi",
+    22: "OKXDex",
+    23: "Enso",
+    24: "Squid",
+    25: "LIFI",
+    26: "Rango",
+    27: "Rubic",
+    28: "Native",
+}
+
+
 def _normalize_address(value: str | bytes) -> str:
     return to_checksum_address(value)
 
@@ -66,9 +106,41 @@ def _normalize_amount(value: int | bytes) -> int | bytes:
     return to_bytes(value)
 
 
+def _enum_value(value: Any) -> Any:
+    return value.value if hasattr(value, "value") else value
+
+
+def _normalize_labeled_ordinal(value: Any, labels: Mapping[int, str], kind: str) -> str:
+    raw = _enum_value(value)
+    if isinstance(raw, int):
+        try:
+            return labels[raw]
+        except KeyError as exc:
+            msg = f"unsupported {kind} ordinal {raw}"
+            raise ValueError(msg) from exc
+
+    text = str(raw)
+    if text.isdecimal():
+        ordinal = int(text)
+        try:
+            return labels[ordinal]
+        except KeyError as exc:
+            msg = f"unsupported {kind} ordinal {ordinal}"
+            raise ValueError(msg) from exc
+    return text
+
+
+def _normalize_flash_protocol(value: Any) -> str:
+    return _normalize_labeled_ordinal(value, _FLASH_PROTOCOL_LABELS, "flash protocol")
+
+
+def _normalize_dex_kind(value: Any) -> str:
+    return _normalize_labeled_ordinal(value, _DEX_KIND_LABELS, "dex kind")
+
+
 def _normalize_swap_step(step: Mapping[str, Any]) -> SwapStepDict:
     return {
-        "dex_kind": str(step["dex_kind"]),
+        "dex_kind": _normalize_dex_kind(step["dex_kind"]),
         "router": _normalize_address(step["router"]),
         "call_data": _normalize_bytes(step["call_data"]),
         "token_in": _normalize_address(step["token_in"]),
@@ -84,7 +156,7 @@ def _normalize_swap_steps(swaps: Sequence[Mapping[str, Any]]) -> list[SwapStepDi
 
 def encode_native_arb_calldata(
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
     swaps: Sequence[Mapping[str, Any]],
@@ -95,7 +167,7 @@ def encode_native_arb_calldata(
 
     return _encode_native_arb_calldata(
         _normalize_address(flash_lender),
-        flash_protocol,
+        _normalize_flash_protocol(flash_protocol),
         _normalize_address(flash_token),
         _normalize_amount(flash_amount),
         _normalize_swap_steps(swaps),
@@ -110,7 +182,7 @@ def encode_match_internal_calldata(
     expected_token_inflows: Sequence[str | bytes],
     expected_token_inflow_min: Sequence[int | bytes],
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
     min_profit: int | bytes,
@@ -124,7 +196,7 @@ def encode_match_internal_calldata(
         [_normalize_address(token) for token in expected_token_inflows],
         [_normalize_amount(amount) for amount in expected_token_inflow_min],
         _normalize_address(flash_lender),
-        flash_protocol,
+        _normalize_flash_protocol(flash_protocol),
         _normalize_address(flash_token),
         _normalize_amount(flash_amount),
         _normalize_amount(min_profit),
@@ -138,7 +210,7 @@ def encode_compose_four_leg_calldata(
     cow_fill_calldata: bytes | HexBytesLike,
     uniswapx_rebalance_calldata: bytes | HexBytesLike,
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
     min_profit: int | bytes,
@@ -152,7 +224,7 @@ def encode_compose_four_leg_calldata(
         _normalize_bytes(cow_fill_calldata),
         _normalize_bytes(uniswapx_rebalance_calldata),
         _normalize_address(flash_lender),
-        flash_protocol,
+        _normalize_flash_protocol(flash_protocol),
         _normalize_address(flash_token),
         _normalize_amount(flash_amount),
         _normalize_amount(min_profit),

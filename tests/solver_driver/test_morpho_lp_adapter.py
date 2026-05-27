@@ -481,7 +481,7 @@ class TestMorphoLpClientQueries:
         assert candidates[0].repay_shares == 456
         assert candidates[0].health_factor == Decimal("0.99")
         assert "healthFactor_lte" in client.queries[0][0]
-        assert client.queries[0][1]["maxHealthFactor"] == 1.02
+        assert client.queries[0][1]["maxHealthFactor"] == pytest.approx(1.02)
 
     async def test_list_liquidation_candidates_returns_empty_without_query_for_no_markets(
         self,

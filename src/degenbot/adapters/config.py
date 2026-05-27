@@ -107,7 +107,37 @@ class Settings(DegenbotSettings):
     # to avoid breaking deployments that still set it.
     metrics_port: int = Field(default=9091, description="Deprecated; use solver_engine_port.")
 
+    # --- Infrastructure / REVM simulation -------------------------------
+    arb_rpc_http: str | None = Field(
+        default=None,
+        description="Optional Arbitrum HTTP RPC endpoint; used by REVM when no dedicated simulation URL is set.",
+    )
+    revm_simulation_rpc_url: str | None = Field(
+        default=None,
+        description="Dedicated HTTP RPC endpoint backing exact REVM preflight simulation.",
+    )
+    revm_simulation_required: bool = Field(
+        default=False,
+        description="Reject executable strategy routes when exact REVM simulation is unavailable or fails.",
+    )
+    revm_simulation_from_address: str | None = Field(
+        default=None,
+        description="Delegatee/signer address used as msg.sender for REVM strategy calls.",
+    )
+    revm_simulation_seed_pools: str = Field(
+        default="",
+        description="Comma-separated pool addresses to warm into the REVM cache at startup.",
+    )
+    delegatees_initial: str | None = Field(
+        default=None,
+        description="Deployment-time delegatee CSV; first address is used as a simulation caller fallback.",
+    )
+
     # --- Strategy flags -------------------------------------------------
+    strategies_enabled: bool = Field(
+        default=True,
+        description="Global kill switch for all strategies.",
+    )
     strategy_c_enabled: bool = Field(
         default=True,
         description="Legacy Pick C switch. In the current posture it controls CoW quote-only analysis.",
@@ -128,9 +158,17 @@ class Settings(DegenbotSettings):
         default=True,
         description="Enable Pick A native arbitrage.",
     )
+    strategy_sandoo_ideas_enabled: bool = Field(
+        default=True,
+        description="Enable Sandoo idea scoring for native arb.",
+    )
     strategy_oracle_sandwich_enabled: bool = Field(
         default=False,
         description="Enable S-5 oracle-update sandwich strategy.",
+    )
+    strategy_sandwich_enabled: bool = Field(
+        default=False,
+        description="Enable Pick S traditional sandwich strategy.",
     )
     strategy_timeboost_enabled: bool = Field(
         default=False,
@@ -143,6 +181,8 @@ class Settings(DegenbotSettings):
     timeboost_expected_ops_per_round: int = Field(default=10)
     timeboost_non_express_win_bps: int = Field(default=500)  # 5%
     estimated_gas_cost_wei: int = Field(default=500_000 * 10**8)  # 0.0005 ETH avg
+    max_gas_price_gwei: float = Field(default=10.0, description="Max gas price in Gwei.")
+    flash_loan_fee_wei: int = Field(default=0, description="Estimated flash loan fee in wei.")
 
     # --- On-chain components --------------------------------------------
     executor_address: str = Field(

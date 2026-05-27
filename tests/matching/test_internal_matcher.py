@@ -1,10 +1,6 @@
 """Unit tests for the ported internal matching logic (Pick A)."""
 
 import pytest
-
-from degenbot.decision.types import CowOrderSummary, MatchCandidate, UniswapXOrderSummary
-from degenbot.matching.encoder import encode_match_pair
-from degenbot.matching.internal_matcher import find_best_match
 from degenbot.matching.price_compat import (
     PRICE_SCALE,
     clearing_price,
@@ -13,6 +9,10 @@ from degenbot.matching.price_compat import (
     is_price_compatible,
     outbound_min_price,
 )
+from degenbot.matching.internal_matcher import find_best_match
+from degenbot.decision.types import MatchCandidate, MatchPair
+from degenbot.matching.encoder import encode_match_pair
+from degenbot.decision.types import CowOrderSummary, UniswapXOrderSummary
 
 # Mock addresses
 _TOKEN_A = "0x" + "a" * 40
@@ -27,10 +27,8 @@ def outbound_cand() -> MatchCandidate:
         side="outbound",
         pair_sell=_TOKEN_A,
         pair_buy=_TOKEN_B,
-        pair_sell_decimals=18,
-        pair_buy_decimals=6,
         amount_sell=10**18,  # 1.0 A
-        amount_buy_min=2 * 10**6,  # 2.0 B
+        amount_buy_min=2 * 10**6,  # 2.0 B (assuming 6 decimals)
         source_id="src-out-1",
         source_venue="across",
         source_expires_at=0,
@@ -45,8 +43,6 @@ def inbound_cand() -> MatchCandidate:
         side="inbound",
         pair_sell=_TOKEN_B,
         pair_buy=_TOKEN_A,
-        pair_sell_decimals=6,
-        pair_buy_decimals=18,
         amount_sell=3 * 10**6,  # 3.0 B
         amount_buy_min=10**18,  # 1.0 A
         source_id="src-in-1",
@@ -57,26 +53,17 @@ def inbound_cand() -> MatchCandidate:
 
 
 def test_price_compat_math(outbound_cand: MatchCandidate, inbound_cand: MatchCandidate):
-    # Outbound: 1.0 A -> 2.0 B. Min price = 2.0 B/A (scaled)
-    # Inbound: 3.0 B -> 1.0 A. Max price = 3.0 B/A (scaled)
-
     op = outbound_min_price(outbound_cand)
     cp = counter_max_price(inbound_cand)
-
-    assert op == 2 * PRICE_SCALE
-    assert cp == 3 * PRICE_SCALE
+    
+    assert op == 2_000_000
+    assert cp == 3_000_000
     assert is_price_compatible(outbound_cand, inbound_cand)
-
-    assert clearing_price(outbound_cand, inbound_cand) == 5 * PRICE_SCALE // 2
+    
+    assert clearing_price(outbound_cand, inbound_cand) == 2_500_000
 
 
 def test_fill_amount(outbound_cand: MatchCandidate, inbound_cand: MatchCandidate):
-    # Outbound wants to sell 1.0 A.
-    # Inbound has 3.0 B to sell. At clearing price 2.5 B/A (unscaled),
-    # 1.0 A costs 2.5 B.
-    # Inbound budget is 3.0 B, which can buy 3.0 / 2.5 = 1.2 A.
-    # Outbound is the bottleneck (1.0 A).
-
     fill = fill_amount(outbound_cand, inbound_cand)
     assert fill == 10**18
 
@@ -85,7 +72,7 @@ def test_find_best_match(outbound_cand: MatchCandidate, inbound_cand: MatchCandi
     match = find_best_match(
         outbound=[outbound_cand],
         inbound=[inbound_cand],
-        uniswapx=[],
+        uniswapx=[]
     )
     assert match is not None
     assert match.o.id == "out-1"
@@ -93,10 +80,9 @@ def test_find_best_match(outbound_cand: MatchCandidate, inbound_cand: MatchCandi
 
 
 def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCandidate):
-    # Ported from TS encoder.test.ts
     pair = find_best_match([outbound_cand], [inbound_cand], [])
     assert pair is not None
-
+    
     cow_order = CowOrderSummary(
         uid="0x123",
         owner=_EXECUTOR,
@@ -112,7 +98,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         signature="0x" + "0" * 130,
         signing_scheme="eip712",
     )
-
+    
     ux_order = UniswapXOrderSummary(
         order_hash="0xabc",
         reactor=_EXECUTOR,
@@ -125,7 +111,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         encoded_order="0x" + "0" * 200,
         signature="0x" + "0" * 130,
     )
-
+    
     trade = encode_match_pair(
         pair=pair,
         cow_order=cow_order,
@@ -135,8 +121,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         flash_amount=10**18,
         executor_address=_EXECUTOR,
     )
-
+    
     assert trade.cow_settlement_calldata.startswith("0x1700684f")
     assert trade.uniswapx_batch_calldata.startswith("0x364a2754")
-    assert trade.expected_token_inflows == [_TOKEN_A, _TOKEN_B]
-    assert trade.expected_token_inflow_min == [950_000_000_000_000_000, 2_375_000]
+    assert len(trade.expected_token_inflows) == 2

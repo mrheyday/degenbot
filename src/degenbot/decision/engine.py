@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from degenbot.decision.precedence import DecisionKind, compare_priority
 from degenbot.decision.sandoo_ideas import SandooIdeaSignal, evaluate_sandoo_idea
 from degenbot.decision.types import AggregatorQuote, DecisionContext, DecisionRoute
+from degenbot.simulation import Simulator, parse_seed_pools
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -43,15 +44,19 @@ class DecisionEngine:
     def __init__(self, settings: Settings, queue: Any = None) -> None:
         self._settings = settings
         self._queue = queue
+        self._revm_simulation_required = bool(getattr(settings, "revm_simulation_required", False))
+        self._simulator: Simulator | None = self._build_simulator()
 
     async def route_opportunity(self, opp: Opportunity, ctx: DecisionContext) -> RoutedDecision:
         candidates: list[RouteCandidate] = []
+        logger.debug(f"Routing opportunity {opp.id} ({opp.kind}) flow_id={ctx.flow_id}")
 
         if not self._settings.strategies_enabled:
             return RoutedDecision(
                 kind="pass",
                 route=DecisionRoute(kind="pass", reason="kill_switch_active"),
                 ctx=ctx,
+                score_wei=0,
             )
 
         if opp.flash_amount <= 0:
@@ -162,14 +167,36 @@ class DecisionEngine:
                     )
                 )
 
+        # 5. Pick S — traditional sandwich
+        if self._settings.strategy_sandwich_enabled:
+            from degenbot.strategies_coordinator.sandwich import SandwichStrategy
+
+            strategy = SandwichStrategy(self._settings)
+            plan = strategy.preflight(opp)
+            if plan:
+                candidates.append(
+                    RouteCandidate(
+                        kind="sandwich",
+                        route=DecisionRoute(
+                            kind="sandwich",
+                            opportunity_id=opp.id,
+                            plan=plan,
+                        ),
+                        score_wei=plan.expected_profit_wei,
+                        ctx=ctx,
+                    )
+                )
+
         # Quote enrichment + route scoring for native arb opportunities.
         best_q: AggregatorQuote | None = None
         should_enrich_quote = self._settings.strategy_native_arb_enabled and opp.kind == "NativeArb"
         sandoo_idea: SandooIdeaSignal | None = None
 
         if should_enrich_quote:
-            # TODO: best_quote implementation (DeFiLlamaSwap)
-            pass
+            logger.debug(
+                "native arb quote enrichment adapter not configured; "
+                "using sourced opportunity economics"
+            )
 
         if self._settings.strategy_sandoo_ideas_enabled and opp.kind == "NativeArb":
             sandoo_idea = evaluate_sandoo_idea(
@@ -181,7 +208,7 @@ class DecisionEngine:
 
         # 4. Native arb.
         if self._settings.strategy_native_arb_enabled:
-            profitable = self._evaluate_native_arb(opp, best_q, sandoo_idea, should_enrich_quote)
+            profitable = self._evaluate_native_arb(opp, best_q, sandoo_idea)
             if profitable:
                 enrichment = {}
                 if best_q:
@@ -211,7 +238,7 @@ class DecisionEngine:
                 score_wei=0,
             )
 
-        decision = self._select_best_route(candidates)
+        decision = self._select_best_route(candidates, opp)
         return RoutedDecision(
             kind=decision.kind,
             route=decision.route,
@@ -276,9 +303,17 @@ class DecisionEngine:
 
         return opp.estimated_profit_wei
 
-    def _select_best_route(self, candidates: Sequence[RouteCandidate]) -> RouteCandidate:
+    def _select_best_route(
+        self, candidates: Sequence[RouteCandidate], opp: Opportunity
+    ) -> RouteCandidate:
         best: RouteCandidate | None = None
         for candidate in candidates:
+            if candidate.kind == "pass":
+                continue
+
+            if not self._candidate_passes_revm(candidate, opp):
+                continue
+
             if (
                 best is None
                 or compare_priority(candidate.kind, best.kind) < 0
@@ -289,7 +324,134 @@ class DecisionEngine:
         if best is None:
             return RouteCandidate(
                 kind="pass",
-                route=DecisionRoute(kind="pass", reason="no_profitable_route"),
+                route=DecisionRoute(kind="pass", reason="no_profitable_route_simulated"),
                 score_wei=0,
             )
         return best
+
+    def _build_simulator(self) -> Simulator | None:
+        rpc_url = (
+            getattr(self._settings, "revm_simulation_rpc_url", None)
+            or getattr(self._settings, "arb_rpc_http", None)
+            or getattr(self._settings, "rpc_url", None)
+        )
+        if not rpc_url:
+            return None
+        return Simulator(
+            str(rpc_url),
+            seed_pools=parse_seed_pools(
+                getattr(self._settings, "revm_simulation_seed_pools", None)
+            ),
+        )
+
+    def _candidate_passes_revm(self, cand: RouteCandidate, opp: Opportunity) -> bool:
+        if self._simulator is None:
+            if self._revm_simulation_required:
+                logger.warning("REVM simulation required but simulator is not configured")
+                return False
+            return True
+
+        return self._simulate_candidate(cand, opp)
+
+    def _simulate_candidate(self, cand: RouteCandidate, opp: Opportunity) -> bool:
+        """Delegate simulation to the appropriate strategy implementation."""
+        if self._simulator is None:
+            return not self._revm_simulation_required
+
+        try:
+            if cand.kind == "native_arb":
+                from degenbot.strategies_coordinator.native_arb import NativeArbStrategy
+
+                strategy = NativeArbStrategy(self._settings)
+                params = strategy.build_params(opp)
+                return strategy.simulate(self._simulator, params)
+
+            if cand.kind == "internal_match":
+                from degenbot.strategies_coordinator.internal_match import (
+                    InternalMatchStrategy,
+                )
+
+                if cand.route.pair:
+                    strategy = InternalMatchStrategy(self._settings)
+                    estimated_profit_wei = int(
+                        (cand.enrichment or {}).get("estimated_profit_wei", 1)
+                    )
+                    params = strategy.build_params_from_pair(
+                        cand.route.pair,
+                        estimated_profit_wei,
+                    )
+                    return strategy.simulate(self._simulator, params)
+
+            if cand.kind == "four_leg":
+                from degenbot.strategies_coordinator.four_leg import FourLegStrategy
+
+                if cand.route.plan:
+                    strategy = FourLegStrategy(self._settings)
+                    params = strategy.build_params(cand.route.plan)
+                    return strategy.simulate(self._simulator, params)
+
+            if cand.kind == "morpho_liquidation":
+                return self._simulate_enriched_calldata(cand, opp)
+
+            if cand.kind == "oracle_sandwich":
+                from degenbot.strategies_coordinator.oracle_sandwich import (
+                    OracleSandwichStrategy,
+                )
+
+                if cand.route.plan:
+                    strategy = OracleSandwichStrategy(self._settings)
+                    params = strategy.build_params(cand.route.plan)
+                    return strategy.simulate(self._simulator, params)
+
+            if cand.kind == "sandwich":
+                from degenbot.strategies_coordinator.sandwich import SandwichStrategy
+
+                if cand.route.plan:
+                    strategy = SandwichStrategy(self._settings)
+                    params = strategy.build_params(cand.route.plan)
+                    return strategy.simulate(self._simulator, params)
+
+        except Exception as e:
+            logger.warning(f"Simulation exception for {cand.kind}: {e}")
+            return False
+
+        logger.warning(f"REVM simulation has no exact calldata path for {cand.kind}")
+        return False
+
+    def _simulate_enriched_calldata(self, cand: RouteCandidate, opp: Opportunity) -> bool:
+        """Simulate routes that already carry exact calldata in enrichment."""
+        from degenbot.simulation import simulate_executor_call
+
+        if self._simulator is None:
+            return False
+
+        enriched = [cand.enrichment or {}, getattr(opp, "enrichment", {}) or {}]
+        for payload in enriched:
+            calldata = (
+                payload.get("executor_calldata")
+                or payload.get("liquidation_executor_calldata")
+                or payload.get("calldata")
+            )
+            if not calldata:
+                continue
+            target = (
+                payload.get("simulation_target")
+                or payload.get("target")
+                or getattr(self._settings, "liquidation_executor_address", None)
+                or getattr(self._settings, "executor_address", None)
+            )
+            if isinstance(calldata, str):
+                raw = calldata.removeprefix("0x").removeprefix("0X")
+                data = bytes.fromhex(raw)
+            else:
+                data = bytes(calldata)
+            result = simulate_executor_call(
+                simulator=self._simulator,
+                settings=self._settings,
+                calldata=data,
+                to_addr=target,
+            )
+            return result.success
+
+        logger.warning(f"{cand.kind} rejected: exact simulation calldata is unavailable")
+        return False

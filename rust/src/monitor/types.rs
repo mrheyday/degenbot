@@ -112,6 +112,7 @@ pub struct V4PoolKey {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SwapStep {
     pub pool: Address,
     pub token_in: Address,

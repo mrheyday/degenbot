@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from driver import pnl
 
 
@@ -33,7 +35,9 @@ def test_record_outcome_increments_both_prometheus_counters() -> None:
     tracker.record_outcome(strategy="C", outcome="won", profit_usd=42.0)
 
     assert _counter_value(pnl._AUCTIONS_TOTAL, strategy="C", outcome="won") == before_auctions + 1
-    assert _counter_value(pnl._PNL_USD_TOTAL, strategy="C", outcome="won") == before_pnl + 42.0
+    assert _counter_value(pnl._PNL_USD_TOTAL, strategy="C", outcome="won") == pytest.approx(
+        before_pnl + 42.0
+    )
 
 
 def test_record_outcome_keeps_separate_series_per_strategy_and_outcome() -> None:

@@ -65,6 +65,7 @@ pub mod signature_parser;
 pub mod signed_order_admission;
 pub mod signed_order_admission_py;
 pub mod simulation;
+pub mod simulation_py;
 pub mod tick_math;
 pub mod tick_math_py;
 pub mod utils;
@@ -128,6 +129,9 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Signed-order admission module
     signed_order_admission_py::add_signed_order_admission_module(m)?;
+
+    // Simulation module
+    simulation_py::add_simulation_module(m)?;
 
     // Async modules
     m.add_class::<async_provider::PyAsyncAlloyProvider>()?;

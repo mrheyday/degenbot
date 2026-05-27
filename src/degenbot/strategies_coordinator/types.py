@@ -54,8 +54,11 @@ class FlashProtocolEnum:
 
 class DexKindEnum:
     V2 = 0
+    UniswapV2 = 0
     V3 = 1
+    UniswapV3 = 1
     V4 = 2
+    UniswapV4 = 2
     CURVE = 3
     RESERVED = 4
     AGGREGATOR_V6 = 5

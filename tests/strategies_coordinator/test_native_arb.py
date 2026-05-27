@@ -1,19 +1,19 @@
 """Unit tests for the ported native arbitrage strategy."""
 
+import pytest
 import time
 from unittest.mock import MagicMock
-
-import pytest
-
-from degenbot.adapters.config import Settings
-from degenbot.decision.types import Hex
 from degenbot.strategies_coordinator.native_arb import NativeArbStrategy
 from degenbot.strategies_coordinator.types import (
     DEX_KIND,
+    FLASH_PROTOCOL,
+    NativeArbParams,
+    SwapStep as ContractSwapStep,
 )
 from degenbot.types_solver.executor import DexKind, FlashProtocol
-from degenbot.types_solver.executor import SwapStep as EngineSwapStep
-from degenbot.types_solver.wire import Opportunity
+from degenbot.types_solver.wire import EngineSwapStep, Opportunity
+from degenbot.decision.types import Hex
+from degenbot.adapters.config import Settings
 
 # Mock addresses
 _EXECUTOR_ADDR = "0x" + "e" * 40
@@ -62,27 +62,32 @@ def test_native_arb_build_params_default(fake_settings, sample_opp):
 
 def test_native_arb_rejects_zero_flash(fake_settings, sample_opp):
     strategy = NativeArbStrategy(fake_settings)
-
+    
     opp = sample_opp.model_copy(update={"flash_amount": 0})
     with pytest.raises(ValueError, match="flashAmount must be > 0"):
         strategy.build_params(opp)
 
 
 def test_native_arb_mapping_steps(fake_settings, sample_opp):
-    opp = Opportunity(**{
-        **sample_opp.model_dump(),
-        "path": [
-            EngineSwapStep(
-                dex_kind=DexKind.UNI_V3_POOL,
-                router="0x" + "3" * 40,
-                call_data=Hex("0x"),
-                token_in=_FLASH_TOKEN,
-                token_out=_TOKEN_OUT,
-                amount_in=10**18,
-                amount_out_min=0,
-            )
-        ],
-    })
+    opp = Opportunity(
+        **{
+            **sample_opp.model_dump(),
+            "path": [
+                EngineSwapStep(
+                    dex_kind=DexKind.UNI_V3_POOL,
+                    router="0x" + "3" * 40,
+                    call_data=Hex("0x"),
+                    token_in=_FLASH_TOKEN,
+                    token_out=_TOKEN_OUT,
+                    amount_in=10**18,
+                    amount_out_min=0,
+                    zero_for_one=True,
+                    dex="UniswapV3",
+                    pool="0x" + "3" * 40,
+                )
+            ],
+        }
+    )
 
     strategy = NativeArbStrategy(fake_settings)
     params = strategy.build_params(opp)

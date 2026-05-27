@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from degenbot.decision.types import AggregatorQuote
     from degenbot.types_solver.wire import Opportunity
+
+logger = logging.getLogger(__name__)
 
 try:
     from degenbot.degenbot_rs import evaluate_sandoo_idea_json
@@ -47,6 +50,16 @@ class SandooIdeaSignal:
     components: SandooIdeaComponents
 
 
+def _parse_int(v: Any) -> int:
+    """Parse an integer from a string (decimal or hex) or int."""
+    if isinstance(v, int):
+        return v
+    s = str(v)
+    if s.startswith(("0x", "0X")):
+        return int(s, 16)
+    return int(s)
+
+
 def evaluate_sandoo_idea(
     opp: Opportunity,
     best_quote: AggregatorQuote | None,
@@ -61,31 +74,35 @@ def evaluate_sandoo_idea(
             quote_json = best_quote.model_dump_json(by_alias=True) if best_quote else None
 
             res_json = evaluate_sandoo_idea_json(
-                opp_json, quote_json, max_gas_price_gwei, str(flash_loan_fee_wei)
+                opp_json, quote_json, int(max_gas_price_gwei), str(flash_loan_fee_wei)
             )
             data = json.loads(res_json)
             # Reconstruct the SandooIdeaSignal dataclass
             return SandooIdeaSignal(
                 eligible=data["eligible"],
-                score=int(data["score"]),
+                score=_parse_int(data["score"]),
                 reasons=data["reasons"],
                 components=SandooIdeaComponents(
-                    estimated_profit_wei=int(data["components"]["estimated_profit_wei"]),
-                    safe_size_wei=int(data["components"]["safe_size_wei"]),
-                    quote_amount_out=int(data["components"]["quote_amount_out"]),
-                    quote_amount_net_out=int(data["components"]["quote_amount_net_out"]),
-                    route_gas_wei=int(data["components"]["route_gas_wei"]),
-                    quote_fee_wei=int(data["components"]["quote_fee_wei"]),
-                    flash_loan_fee_wei=int(data["components"]["flash_loan_fee_wei"]),
-                    net_profit_after_cost_wei=int(data["components"]["net_profit_after_cost_wei"]),
-                    size_vs_flash_ratio_bps=int(data["components"]["size_vs_flash_ratio_bps"]),
-                    quote_profit_gap_wei=int(data["components"]["quote_profit_gap_wei"]),
-                    score_scale=int(data["components"]["score_scale"]),
+                    estimated_profit_wei=_parse_int(data["components"]["estimated_profit_wei"]),
+                    safe_size_wei=_parse_int(data["components"]["safe_size_wei"]),
+                    quote_amount_out=_parse_int(data["components"]["quote_amount_out"]),
+                    quote_amount_net_out=_parse_int(data["components"]["quote_amount_net_out"]),
+                    route_gas_wei=_parse_int(data["components"]["route_gas_wei"]),
+                    quote_fee_wei=_parse_int(data["components"]["quote_fee_wei"]),
+                    flash_loan_fee_wei=_parse_int(data["components"]["flash_loan_fee_wei"]),
+                    net_profit_after_cost_wei=_parse_int(
+                        data["components"]["net_profit_after_cost_wei"]
+                    ),
+                    size_vs_flash_ratio_bps=_parse_int(
+                        data["components"]["size_vs_flash_ratio_bps"]
+                    ),
+                    quote_profit_gap_wei=_parse_int(data["components"]["quote_profit_gap_wei"]),
+                    score_scale=_parse_int(data["components"]["score_scale"]),
                 ),
             )
-        except Exception:
+        except Exception as e:
             # Fallback to Python on any error
-            pass
+            logger.warning(f"Rust sandoo evaluation failed: {e}")
 
     reason: list[str] = []
 

@@ -8,11 +8,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from degenbot.decision.types import Address, Hex
 from degenbot.flash.source_router import resolve_executor_flash_route
 from degenbot.strategies_coordinator.types import (
+    DEX_KIND,
     ComposeParams,
     FlashProtocol,
     SwapStep,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
     from degenbot.adapters.config import Settings
     from degenbot.flash.source_router import FlashRouteCandidate
+    from degenbot.strategies_coordinator.types import DexKind
     from degenbot.types_solver.wire import Opportunity
 
 logger = logging.getLogger(__name__)
@@ -125,11 +127,54 @@ class FourLegStrategy:
             deadline=deadline,
         )
 
+    def simulate(self, simulator: Any, params: ComposeParams) -> bool:
+        """Simulate the four-leg composition using REVM."""
+        from degenbot.simulation import encode_compose_params, simulate_executor_call
+
+        result = simulate_executor_call(
+            simulator=simulator,
+            settings=self._settings,
+            calldata=encode_compose_params(params),
+        )
+        return result.success
+
     def _map_engine_swap_to_contract(self, step: Any) -> SwapStep:
+        dex_map = {
+            "UniswapV2": DEX_KIND.V2,
+            "UniswapV3": DEX_KIND.V3,
+            "UniswapV4": DEX_KIND.V4,
+            "Curve": DEX_KIND.CURVE,
+            "CurveNG": DEX_KIND.CURVE_NG,
+            "Aerodrome": DEX_KIND.SOLIDLY,
+            "Solidly": DEX_KIND.SOLIDLY,
+            "Algebra": DEX_KIND.ALGEBRA,
+            "MaverickV2": DEX_KIND.MAVERICK_V2,
+            "DodoPmm": DEX_KIND.DODO_PMM,
+            "FluidDex": DEX_KIND.FLUID_DEX,
+            "KyberElastic": DEX_KIND.KYBER_ELASTIC,
+            "LFJLiquidityBook": DEX_KIND.LFJ_LIQUIDITY_BOOK,
+            "GMXV2": DEX_KIND.GMX_V2,
+            "Native": DEX_KIND.NATIVE,
+        }
+        raw_dex_kind = getattr(step, "dex_kind", None)
+        if raw_dex_kind is not None:
+            dex_kind = cast("DexKind", int(raw_dex_kind))
+        else:
+            raw_dex = getattr(step, "dex", None)
+            if raw_dex not in dex_map:
+                msg = f"FourLegStrategy: unsupported swap dex kind {raw_dex!r}"
+                raise ValueError(msg)
+            dex_kind = cast("DexKind", dex_map[raw_dex])
+
+        router = getattr(step, "pool", None) or getattr(step, "router", None)
+        if not router:
+            msg = "FourLegStrategy: swap step missing pool/router"
+            raise ValueError(msg)
+
         return SwapStep(
-            dex_kind=step.dex_kind,
-            router=getattr(step, "pool", getattr(step, "router", "")),
-            call_data=Hex("0x"),
+            dex_kind=dex_kind,
+            router=router,
+            call_data=getattr(step, "call_data", None) or Hex("0x"),
             token_in=step.token_in,
             token_out=step.token_out,
             amount_in=step.amount_in,

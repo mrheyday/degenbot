@@ -15,11 +15,11 @@ pub const EXECUTE_NATIVE_ARB_SIGNATURE: &str =
 
 /// `Executor.matchInternal((...))` canonical signature.
 pub const MATCH_INTERNAL_SIGNATURE: &str =
-    "matchInternal((bytes,bytes,address[],uint256[],address,address,uint256,uint256,uint256))";
+    "matchInternal((bytes,bytes,address[],uint256[],address,uint8,address,uint256,uint256,uint256))";
 
 /// `Executor.composeFourLeg((...))` canonical signature.
 pub const COMPOSE_FOUR_LEG_SIGNATURE: &str =
-    "composeFourLeg((bytes,(uint8,address,bytes,address,address,uint256,uint256)[],bytes,bytes,address,address,uint256,uint256,uint256))";
+    "composeFourLeg((bytes,(uint8,address,bytes,address,address,uint256,uint256)[],bytes,bytes,address,uint8,address,uint256,uint256,uint256))";
 
 /// Flash-loan protocol selector used by `Executor.sol`.
 #[repr(u8)]
@@ -341,6 +341,22 @@ mod tests {
             .try_into()
             .expect("selector should be 4 bytes");
         assert_eq!(selector, expected);
+    }
+
+    #[test]
+    fn test_strategy_selectors_match_locked_values() {
+        assert_eq!(
+            function_selector(EXECUTE_NATIVE_ARB_SIGNATURE),
+            [0xf6, 0xf6, 0xad, 0xd1]
+        );
+        assert_eq!(
+            function_selector(MATCH_INTERNAL_SIGNATURE),
+            [0x5f, 0x18, 0x86, 0x78]
+        );
+        assert_eq!(
+            function_selector(COMPOSE_FOUR_LEG_SIGNATURE),
+            [0x72, 0xc0, 0x46, 0x9b]
+        );
     }
 
     #[test]

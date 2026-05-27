@@ -29,10 +29,10 @@ fn parse_bytes(value: &Bound<'_, PyAny>) -> PyResult<Bytes> {
 
 fn parse_flash_protocol(value: &str) -> PyResult<FlashProtocol> {
     match value.to_ascii_lowercase().as_str() {
-        "aave" => Ok(FlashProtocol::Aave),
-        "morpho" => Ok(FlashProtocol::Morpho),
-        "erc3156" | "erc-3156" => Ok(FlashProtocol::ERC3156),
-        "univ3" | "uniswapv3" | "uni_v3" => Ok(FlashProtocol::UniV3),
+        "0" | "aave" => Ok(FlashProtocol::Aave),
+        "1" | "morpho" => Ok(FlashProtocol::Morpho),
+        "2" | "erc3156" | "erc-3156" => Ok(FlashProtocol::ERC3156),
+        "3" | "univ3" | "uniswapv3" | "uni_v3" => Ok(FlashProtocol::UniV3),
         other => Err(PyValueError::new_err(format!(
             "Unknown flash protocol '{other}'"
         ))),
@@ -41,37 +41,37 @@ fn parse_flash_protocol(value: &str) -> PyResult<FlashProtocol> {
 
 fn parse_dex_kind(value: &str) -> PyResult<DexKind> {
     match value.to_ascii_lowercase().as_str() {
-        "univ2" | "uniswapv2" | "uni_v2" => Ok(DexKind::UniV2),
-        "univ3" | "uniswapv3" | "uni_v3" => Ok(DexKind::UniV3),
-        "univ4" | "uniswapv4" | "uni_v4" => Ok(DexKind::UniV4),
-        "curve" => Ok(DexKind::Curve),
-        "reserved" => Ok(DexKind::Reserved),
-        "aggregatorv6" | "aggregator_v6" => Ok(DexKind::AggregatorV6),
-        "morpho" | "morphoblue" => Ok(DexKind::MorphoBlue),
-        "algebra" => Ok(DexKind::Algebra),
-        "solidly" => Ok(DexKind::Solidly),
-        "curveng" | "curve_ng" => Ok(DexKind::CurveNG),
-        "balancerv2" | "balancer_v2" => Ok(DexKind::BalancerV2),
-        "maverickv2" | "maverick_v2" => Ok(DexKind::MaverickV2),
-        "dodopmm" | "dodo_pmm" => Ok(DexKind::DodoPmm),
-        "fluiddex" | "fluid_dex" => Ok(DexKind::FluidDex),
-        "balancerv3" | "balancer_v3" => Ok(DexKind::BalancerV3),
-        "kyberelastic" | "kyber_elastic" => Ok(DexKind::KyberElastic),
-        "lfj" | "liquiditybook" | "lfjliquiditybook" | "lfj_liquidity_book" => {
+        "0" | "univ2" | "uniswapv2" | "uni_v2" => Ok(DexKind::UniV2),
+        "1" | "univ3" | "uniswapv3" | "uni_v3" => Ok(DexKind::UniV3),
+        "2" | "univ4" | "uniswapv4" | "uni_v4" => Ok(DexKind::UniV4),
+        "3" | "curve" => Ok(DexKind::Curve),
+        "4" | "reserved" => Ok(DexKind::Reserved),
+        "5" | "aggregatorv6" | "aggregator_v6" => Ok(DexKind::AggregatorV6),
+        "6" | "morpho" | "morphoblue" => Ok(DexKind::MorphoBlue),
+        "7" | "algebra" => Ok(DexKind::Algebra),
+        "8" | "solidly" => Ok(DexKind::Solidly),
+        "9" | "curveng" | "curve_ng" => Ok(DexKind::CurveNG),
+        "10" | "balancerv2" | "balancer_v2" => Ok(DexKind::BalancerV2),
+        "11" | "maverickv2" | "maverick_v2" => Ok(DexKind::MaverickV2),
+        "12" | "dodopmm" | "dodo_pmm" => Ok(DexKind::DodoPmm),
+        "13" | "fluiddex" | "fluid_dex" => Ok(DexKind::FluidDex),
+        "14" | "balancerv3" | "balancer_v3" => Ok(DexKind::BalancerV3),
+        "15" | "kyberelastic" | "kyber_elastic" => Ok(DexKind::KyberElastic),
+        "16" | "lfj" | "liquiditybook" | "lfjliquiditybook" | "lfj_liquidity_book" => {
             Ok(DexKind::LFJLiquidityBook)
         }
-        "gmxv2" | "gmx_v2" => Ok(DexKind::GMXV2),
-        "wombat" => Ok(DexKind::Wombat),
-        "bebop" => Ok(DexKind::Bebop),
-        "hashflow" => Ok(DexKind::Hashflow),
-        "woofi" => Ok(DexKind::WooFi),
-        "okxdex" | "okx" | "okx_dex" => Ok(DexKind::OKXDex),
-        "enso" => Ok(DexKind::Enso),
-        "squid" => Ok(DexKind::Squid),
-        "lifi" | "li.fi" | "li_fi" => Ok(DexKind::LIFI),
-        "rango" => Ok(DexKind::Rango),
-        "rubic" => Ok(DexKind::Rubic),
-        "native" => Ok(DexKind::Native),
+        "17" | "gmxv2" | "gmx_v2" => Ok(DexKind::GMXV2),
+        "18" | "wombat" => Ok(DexKind::Wombat),
+        "19" | "bebop" => Ok(DexKind::Bebop),
+        "20" | "hashflow" => Ok(DexKind::Hashflow),
+        "21" | "woofi" => Ok(DexKind::WooFi),
+        "22" | "okxdex" | "okx" | "okx_dex" => Ok(DexKind::OKXDex),
+        "23" | "enso" => Ok(DexKind::Enso),
+        "24" | "squid" => Ok(DexKind::Squid),
+        "25" | "lifi" | "li.fi" | "li_fi" => Ok(DexKind::LIFI),
+        "26" | "rango" => Ok(DexKind::Rango),
+        "27" | "rubic" => Ok(DexKind::Rubic),
+        "28" | "native" => Ok(DexKind::Native),
         other => Err(PyValueError::new_err(format!("Unknown dex kind '{other}'"))),
     }
 }

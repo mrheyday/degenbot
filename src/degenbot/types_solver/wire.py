@@ -58,6 +58,19 @@ class MorphoLiquidationOpportunityPayload(BaseModel):
     bad_debt_mode: str = Field(alias="badDebtMode")
 
 
+class EngineSwapStep(BaseModel):
+    """Swap step mirroring the monitor's wire format."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    pool: str
+    token_in: str = Field(alias="tokenIn")
+    token_out: str = Field(alias="tokenOut")
+    amount_in: int = Field(alias="amountIn")
+    amount_out_min: int = Field(alias="amountOutMin")
+    zero_for_one: bool = Field(alias="zeroForOne")
+    dex: str
+
+
 class Opportunity(BaseModel):
     """Coordinator/engine opportunity envelope consumed by strategy routing.
 
@@ -73,10 +86,11 @@ class Opportunity(BaseModel):
     token_in: str = Field(alias="tokenIn")
     token_out: str = Field(alias="tokenOut")
     amount_in: int = Field(alias="amountIn")
+    expected_amount_out: int = Field(default=0, alias="expectedAmountOut")
     estimated_profit_wei: int = Field(alias="estimatedProfitWei")
     flash_token: str = Field(alias="flashToken")
     flash_amount: int = Field(alias="flashAmount")
-    path: Sequence[SwapStep] = Field(default_factory=list)
+    path: Sequence[EngineSwapStep] = Field(default_factory=list)
     detected_at_ns: int = Field(default=0, alias="detectedAtNs")
     pool_addresses: Sequence[str] = Field(default_factory=list, alias="poolAddresses")
     enrichment: dict[str, Any] | None = None
@@ -104,9 +118,27 @@ def from_wire_json(s: str) -> dict[str, Any]:
 
 def _swap_step_from_wire(d: dict[str, Any]) -> SwapStep:
     """Hydrate a single ``SwapStep`` from a camelCase wire dict."""
+    raw_dex = d["dexKind"]
+    if isinstance(raw_dex, str):
+        # Support common string names from monitor
+        dex_map = {
+            "UniswapV2": DexKind.UNI_V2_STYLE,
+            "UniswapV3": DexKind.UNI_V3_POOL,
+            "UniswapV4": DexKind.UNI_V4_POOL_MANAGER,
+        }
+        if raw_dex in dex_map:
+            kind = dex_map[raw_dex]
+        else:
+            try:
+                kind = DexKind[raw_dex]
+            except KeyError:
+                kind = DexKind(int(raw_dex))
+    else:
+        kind = DexKind(int(raw_dex))
+
     return SwapStep(
-        dex_kind=DexKind(int(d["dexKind"])),
-        router=str(d["router"]),
+        dex_kind=kind,
+        router=str(d.get("router", d.get("pool"))),
         call_data=str(d["callData"]),
         token_in=str(d["tokenIn"]),
         token_out=str(d["tokenOut"]),

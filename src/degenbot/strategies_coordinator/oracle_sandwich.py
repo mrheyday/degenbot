@@ -178,6 +178,17 @@ class OracleSandwichStrategy:
             deadline=deadline,
         )
 
+    def simulate(self, simulator: Any, params: NativeArbParams) -> bool:
+        """Simulate the oracle sandwich using REVM."""
+        from degenbot.simulation import encode_native_arb_params, simulate_executor_call
+
+        result = simulate_executor_call(
+            simulator=simulator,
+            settings=self._settings,
+            calldata=encode_native_arb_params(params),
+        )
+        return result.success
+
     def _align_reserves(self, state: dict[str, Any], token_sold: Address) -> tuple[int, int]:
         if state["kind"] == "UniswapV2":
             r0, r1 = state["reserve0"], state["reserve1"]

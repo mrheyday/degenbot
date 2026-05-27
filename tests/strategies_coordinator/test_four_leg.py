@@ -1,25 +1,22 @@
 """Unit tests for the ported four-leg cross-protocol composition strategy (Pick B)."""
 
+import pytest
 import time
 from unittest.mock import MagicMock
-
-import pytest
-
-from degenbot.adapters.config import Settings
-from degenbot.decision.types import Hex
 from degenbot.strategies_coordinator.four_leg import (
     FourLegPlan,
     FourLegStrategy,
 )
 from degenbot.strategies_coordinator.types import (
     DEX_KIND,
-)
-from degenbot.strategies_coordinator.types import (
+    FLASH_PROTOCOL,
+    ComposeParams,
     SwapStep as ContractSwapStep,
 )
 from degenbot.types_solver.executor import DexKind, FlashProtocol
-from degenbot.types_solver.executor import SwapStep as EngineSwapStep
-from degenbot.types_solver.wire import Opportunity
+from degenbot.types_solver.wire import EngineSwapStep, Opportunity
+from degenbot.decision.types import Hex
+from degenbot.adapters.config import Settings
 
 # Mock addresses
 _EXECUTOR_ADDR = "0x" + "e" * 40
@@ -90,17 +87,19 @@ def test_four_leg_preflight_none(fake_settings, sample_opp):
 
 def test_four_leg_preflight_with_hint(fake_settings, sample_opp, sample_swap):
     # Attach hint to opp
-    opp = Opportunity(**{
-        **sample_opp.model_dump(),
-        "enrichment": {
-            "four_leg_hint": {
-                "across_fill_calldata": "0xa1a1",
-                "cow_fill_calldata": "0xc2c2",
-                "uniswapx_rebalance_calldata": "0xc3c3",
-                "arb_swaps": [sample_swap],
-            }
-        },
-    })
+    opp = Opportunity(
+        **{
+            **sample_opp.model_dump(),
+            "enrichment": {
+                "four_leg_hint": {
+                    "across_fill_calldata": "0xa1a1",
+                    "cow_fill_calldata": "0xc2c2",
+                    "uniswapx_rebalance_calldata": "0xc3c3",
+                    "arb_swaps": [sample_swap],
+                }
+            },
+        }
+    )
 
     strategy = FourLegStrategy(fake_settings)
     out = strategy.preflight(opp)
@@ -135,27 +134,32 @@ def test_four_leg_build_params_morpho(fake_settings, sample_plan):
 
 
 def test_four_leg_preflight_dynamic_mapping(fake_settings, sample_opp):
-    opp = Opportunity(**{
-        **sample_opp.model_dump(),
-        "enrichment": {
-            "four_leg_hint": {
-                "across_fill_calldata": "0xa1a1",
-                "cow_fill_calldata": "0xc2c2",
-                "uniswapx_rebalance_calldata": "0xc3c3",
-            }
-        },
-        "path": [
-            EngineSwapStep(
-                dex_kind=DexKind.UNI_V3_POOL,
-                router=_EXECUTOR_ADDR,
-                call_data=Hex("0x"),
-                token_in=_WETH,
-                token_out=_USDC,
-                amount_in=10**18,
-                amount_out_min=3500 * 10**6,
-            )
-        ],
-    })
+    opp = Opportunity(
+        **{
+            **sample_opp.model_dump(),
+            "enrichment": {
+                "four_leg_hint": {
+                    "across_fill_calldata": "0xa1a1",
+                    "cow_fill_calldata": "0xc2c2",
+                    "uniswapx_rebalance_calldata": "0xc3c3",
+                }
+            },
+            "path": [
+                EngineSwapStep(
+                    dex_kind=DexKind.UNI_V3_POOL,
+                    router=_EXECUTOR_ADDR,
+                    call_data=Hex("0x"),
+                    token_in=_WETH,
+                    token_out=_USDC,
+                    amount_in=10**18,
+                    amount_out_min=3500 * 10**6,
+                    zero_for_one=True,
+                    dex="UniswapV3",
+                    pool=_EXECUTOR_ADDR,
+                )
+            ],
+        }
+    )
 
     strategy = FourLegStrategy(fake_settings)
     out = strategy.preflight(opp)
