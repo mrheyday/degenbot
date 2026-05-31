@@ -1,18 +1,17 @@
 """Unit tests for the ported internal matching logic (Pick A)."""
 
 import pytest
+
+from degenbot.decision.types import CowOrderSummary, MatchCandidate, UniswapXOrderSummary
+from degenbot.matching.encoder import encode_match_pair
+from degenbot.matching.internal_matcher import find_best_match
 from degenbot.matching.price_compat import (
-    PRICE_SCALE,
     clearing_price,
     counter_max_price,
     fill_amount,
     is_price_compatible,
     outbound_min_price,
 )
-from degenbot.matching.internal_matcher import find_best_match
-from degenbot.decision.types import MatchCandidate, MatchPair
-from degenbot.matching.encoder import encode_match_pair
-from degenbot.decision.types import CowOrderSummary, UniswapXOrderSummary
 
 # Mock addresses
 _TOKEN_A = "0x" + "a" * 40
@@ -55,11 +54,11 @@ def inbound_cand() -> MatchCandidate:
 def test_price_compat_math(outbound_cand: MatchCandidate, inbound_cand: MatchCandidate):
     op = outbound_min_price(outbound_cand)
     cp = counter_max_price(inbound_cand)
-    
+
     assert op == 2_000_000
     assert cp == 3_000_000
     assert is_price_compatible(outbound_cand, inbound_cand)
-    
+
     assert clearing_price(outbound_cand, inbound_cand) == 2_500_000
 
 
@@ -82,7 +81,7 @@ def test_find_best_match(outbound_cand: MatchCandidate, inbound_cand: MatchCandi
 def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCandidate):
     pair = find_best_match([outbound_cand], [inbound_cand], [])
     assert pair is not None
-    
+
     cow_order = CowOrderSummary(
         uid="0x123",
         owner=_EXECUTOR,
@@ -98,7 +97,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         signature="0x" + "0" * 130,
         signing_scheme="eip712",
     )
-    
+
     ux_order = UniswapXOrderSummary(
         order_hash="0xabc",
         reactor=_EXECUTOR,
@@ -111,7 +110,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         encoded_order="0x" + "0" * 200,
         signature="0x" + "0" * 130,
     )
-    
+
     trade = encode_match_pair(
         pair=pair,
         cow_order=cow_order,
@@ -121,7 +120,7 @@ def test_encoder_cow_settle(outbound_cand: MatchCandidate, inbound_cand: MatchCa
         flash_amount=10**18,
         executor_address=_EXECUTOR,
     )
-    
+
     assert trade.cow_settlement_calldata.startswith("0x1700684f")
     assert trade.uniswapx_batch_calldata.startswith("0x364a2754")
     assert len(trade.expected_token_inflows) == 2

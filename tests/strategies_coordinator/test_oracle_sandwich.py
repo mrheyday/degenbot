@@ -1,7 +1,10 @@
 """Unit tests for the ported oracle sandwich strategy (S-5)."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
+from degenbot.adapters.config import Settings
 from degenbot.strategies_coordinator.oracle_sandwich import (
     OracleSandwichPlan,
     OracleSandwichStrategy,
@@ -11,8 +14,6 @@ from degenbot.strategies_coordinator.oracle_sandwich_math import (
     v3_virtual_reserves,
 )
 from degenbot.types_solver.wire import Opportunity
-from degenbot.decision.types import Address
-from degenbot.adapters.config import Settings
 
 # Mock addresses
 _TOKEN_A = "0x" + "a" * 40
@@ -36,18 +37,18 @@ def test_v3_virtual_reserves():
     # L = 10^18
     # R0 = L/sqrt(P) = 10^18
     # R1 = L*sqrt(P) = 10^18
-    Q96 = 1 << 96
-    r0, r1 = v3_virtual_reserves(Q96, 10**18)
+    q96 = 1 << 96
+    r0, r1 = v3_virtual_reserves(q96, 10**18)
     assert r0 == 10**18
     assert r1 == 10**18
 
 
 def test_oracle_sandwich_profit_estimate_profitable(fake_settings):
     # reserves scaled up to avoid integer division to zero
-    r_in = 10**24 # 1M A
-    r_out = 10**24 # 1M B
-    gap_bps = 500 # 5%
-    
+    r_in = 10**24  # 1M A
+    r_out = 10**24  # 1M B
+    gap_bps = 500  # 5%
+
     estimate = estimate_oracle_sandwich_profit(
         gap_bps=gap_bps,
         pool_address=_POOL,
@@ -56,7 +57,7 @@ def test_oracle_sandwich_profit_estimate_profitable(fake_settings):
         fee_bps=30,
         gas_cost_wei=fake_settings.estimated_gas_cost_wei,
     )
-    
+
     assert estimate.expected_profit_wei > 0
     assert estimate.frontrun_size_wei > 0
     assert estimate.backrun_size_wei > 0
@@ -81,10 +82,10 @@ def test_oracle_sandwich_preflight_none(fake_settings):
 
 def test_oracle_sandwich_preflight_with_enrichment(fake_settings):
     strategy = OracleSandwichStrategy(fake_settings)
-    
+
     r_in = 10**24
     r_out = 10**24
-    
+
     opp = Opportunity(
         id="test-1",
         kind="NativeArb",
@@ -113,7 +114,7 @@ def test_oracle_sandwich_preflight_with_enrichment(fake_settings):
             }
         }
     )
-    
+
     plan = strategy.preflight(opp)
     assert plan is not None
     assert plan.frontrun_size_wei > 0
@@ -134,9 +135,9 @@ def test_oracle_sandwich_build_params(fake_settings):
         token_bought=_TOKEN_B,
         router=_ROUTER,
     )
-    
+
     params = strategy.build_params(plan)
     assert len(params.swaps) == 2
     assert params.swaps[0].token_in == _TOKEN_A
     assert params.swaps[1].token_in == _TOKEN_B
-    assert params.swaps[1].amount_in == 0 # carry-over
+    assert params.swaps[1].amount_in == 0  # carry-over

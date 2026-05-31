@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from degenbot.arbitrage.uniswap_curve_cycle import UniswapCurveCycle
 from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
@@ -19,21 +19,24 @@ if TYPE_CHECKING:
     from degenbot.types.aliases import BlockNumber, ChainId
 
 
-class ArbitrageStrategy(Protocol):
-    """
-    Minimal protocol for degenbot arbitrage strategies.
+if TYPE_CHECKING:
+    ArbitrageStrategy = Any
+else:
 
-    The concrete strategy classes in this repository expose different constructor
-    and calculation parameters, so the bot keeps the contract intentionally small:
-    a strategy must be able to calculate a result and derive payloads from that
-    result.
-    """
+    class ArbitrageStrategy(Protocol):
+        """
+        Runtime protocol for degenbot arbitrage strategies.
 
-    id: str
+        Concrete strategies expose narrower typed methods, so static checks treat
+        the bot composition boundary as dynamic while runtime code keeps the
+        documented shape.
+        """
 
-    def calculate(self, **kwargs: Any) -> Any: ...
+        id: str
 
-    def generate_payloads(self, **kwargs: Any) -> Sequence[Any]: ...
+        def calculate(self, **kwargs: Any) -> Any: ...
+
+        def generate_payloads(self, **kwargs: Any) -> Sequence[Any]: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,7 +56,8 @@ class BotOpportunity:
 
     @property
     def state_block(self) -> int | None:
-        return self.result.state_block
+        state_block = self.result.state_block
+        return int(state_block) if state_block is not None else None
 
     @property
     def input_amount(self) -> int:
@@ -107,14 +111,11 @@ class DegenbotBot:
         and avoids mutating live state.
         """
 
-        if isinstance(input_token, Erc20Token):
-            token = input_token
+        if isinstance(input_token, Erc20Token) or hasattr(input_token, "address"):
+            token = cast("Erc20Token", input_token)
         else:
             token_manager = Erc20TokenManager(chain_id=chain_id)
-            if hasattr(input_token, "address"):
-                token = token_manager.get_erc20token(get_checksum_address(input_token.address))
-            else:
-                token = token_manager.get_erc20token(get_checksum_address(input_token))
+            token = token_manager.get_erc20token(get_checksum_address(input_token))
 
         strategy_list: list[ArbitrageStrategy] = []
         seen: set[tuple[str, ...]] = set()
@@ -154,6 +155,7 @@ class DegenbotBot:
             seen.add(dedupe_key)
 
             strategy_id = " -> ".join(pool.name for pool in pools)
+            strategy: ArbitrageStrategy
             if any(pool.__class__.__name__ == "CurveStableswapPool" for pool in pools):
                 strategy = UniswapCurveCycle(
                     input_token=token,

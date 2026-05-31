@@ -436,7 +436,7 @@ STRATEGY_INTELLIGENCE_PROFILES: tuple[StrategyIntelligenceProfile, ...] = (
         latency_posture="Latency-sensitive liquidation lane gated by source freshness and pending-state simulation.",
         resource_utilization=(
             "DecisionEngine Morpho payloads, live Morpho watchlist tick, route fee extraction, gas/quote sources, "
-            "PendingStateCallSimulator, and Submitter direct broadcast."
+            "PendingStateCallSimulator, and Submitter direct broadcast.",
         ),
         profitability_controls=(
             "Fresh sourced market and position reads.",

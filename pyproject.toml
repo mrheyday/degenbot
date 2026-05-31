@@ -82,6 +82,8 @@ strict = true
 
 [[tool.mypy.overrides]]
 module=[
+    "ape",
+    "ape_arbitrum",
     "scipy.*",
     "tqdm.*",
     "networkx.*",

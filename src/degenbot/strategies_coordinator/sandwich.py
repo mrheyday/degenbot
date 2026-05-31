@@ -8,13 +8,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from degenbot.decision.types import Address, Hex
 from degenbot.flash.source_router import resolve_executor_flash_route
 from degenbot.matching.sandwich_math import solve_v2_sandwich
 from degenbot.strategies_coordinator.types import (
     DEX_KIND,
+    DexKind,
     NativeArbParams,
     SwapStep,
 )
@@ -127,7 +128,7 @@ class SandwichStrategy:
         # Round-trip swaps: sold -> bought -> sold
         swaps = [
             SwapStep(
-                dex_kind=DEX_KIND.V2,
+                dex_kind=cast("DexKind", DEX_KIND.V2),
                 router=plan.router,
                 call_data=Hex("0x"),
                 token_in=plan.token_in,
@@ -136,7 +137,7 @@ class SandwichStrategy:
                 amount_out_min=0,
             ),
             SwapStep(
-                dex_kind=DEX_KIND.V2,
+                dex_kind=cast("DexKind", DEX_KIND.V2),
                 router=plan.router,
                 call_data=Hex("0x"),
                 token_in=plan.token_out,

@@ -12,9 +12,9 @@ This module contains the main transaction processing orchestrator that handles:
 """
 
 from operator import itemgetter
-from typing import assert_never
 
 import eth_abi.abi
+from eth_typing import ChecksumAddress
 from sqlalchemy import select
 
 from degenbot.aave.enrichment import ScaledEventEnricher
@@ -64,6 +64,7 @@ from degenbot.cli.aave_transaction_operations import (
 )
 from degenbot.cli.aave_utils import decode_address
 from degenbot.database.models.aave import AaveV3User
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 
@@ -103,7 +104,7 @@ def _process_transaction(tx_context: TransactionContext) -> None:
         tx_context.discount_updates_by_log_index[user_address].sort(key=itemgetter(0))
 
     # Pre-fetch all users from GHO mint/burn events to avoid N+1 queries
-    gho_user_addresses: set = set()
+    gho_user_addresses: set[ChecksumAddress] = set()
     for event in tx_context.events:
         topic = event["topics"][0]
         event_address = event["address"]
@@ -581,4 +582,5 @@ def _process_operation(
                 scaled_event=scaled_event,
             )
         else:
-            assert_never(scaled_event.event_type)
+            msg = f"Unsupported scaled token event type: {scaled_event.event_type!s}"
+            raise DegenbotValueError(message=msg)

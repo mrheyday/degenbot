@@ -254,13 +254,13 @@ def collect_contract_findings(
             )
         )
 
-    paused = bool(contract.paused())
+    paused = bool(getattr(contract, "paused")())
     findings.append(
         Finding(name="paused", expected="False", actual=str(paused), ok=paused is False)
     )
 
     for delegatee in expected_delegatees:
-        allowed = bool(contract.delegatees(delegatee))
+        allowed = bool(getattr(contract, "delegatees")(delegatee))
         findings.append(
             Finding(
                 name=f"delegatees[{delegatee}]",

@@ -4,7 +4,7 @@ Position database operations for Aave V3.
 Functions for managing collateral and debt positions.
 """
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
@@ -51,7 +51,7 @@ def get_or_create_position(
     tx_context.session.add(new_position)
     tx_context.session.flush()
 
-    return cast("T", new_position)
+    return new_position
 
 
 def get_or_create_collateral_position(

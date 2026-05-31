@@ -1,7 +1,5 @@
 """Event processing handlers for Aave V3 configuration and contract updates."""
 
-from typing import assert_never
-
 import eth_abi.abi
 from eth_typing import ChecksumAddress
 from sqlalchemy import select
@@ -31,6 +29,7 @@ from degenbot.database.models.aave import (
     AaveV3User,
     AaveV3UserCollateralConfig,
 )
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 from degenbot.provider.interface import ProviderAdapter
@@ -127,7 +126,7 @@ def _process_collateral_configuration_changed_event(
     return config
 
 
-def _decode_reserve_configuration_bitmap(config_bitmap: int) -> dict:
+def _decode_reserve_configuration_bitmap(config_bitmap: int) -> dict[str, int | bool | None]:
     """Decode Aave reserve configuration bitmap into human-readable values."""
     # LTV: bits 0-15
     ltv = config_bitmap & 0xFFFF
@@ -923,7 +922,8 @@ def _process_scaled_token_upgrade_event(
             )
 
     else:
-        assert_never()
+        msg = f"Upgraded token is not registered as an Aave scaled token: {event['address']}"
+        raise DegenbotValueError(message=msg)
 
 
 def _update_contract_revision(

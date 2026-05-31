@@ -44,6 +44,7 @@ from degenbot.cli.aave_transaction_operations import (
 from degenbot.cli.aave_utils import decode_address
 from degenbot.constants import ZERO_ADDRESS
 from degenbot.database.models.aave import AaveV3CollateralPosition, AaveV3DebtPosition, AaveV3User
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.logging import logger
 
 if TYPE_CHECKING:
@@ -675,7 +676,8 @@ def _process_debt_mint_with_match(
                     data=operation.pool_event["data"],
                 )
             else:
-                assert_never(operation.operation_type)
+                msg = f"Unsupported debt mint operation type: {operation.operation_type!s}"
+                raise DegenbotValueError(message=msg)
 
             # Use token revision (not pool revision) to get correct TokenMath
             token_math = TokenMathFactory.get_token_math_for_token_revision(
@@ -812,7 +814,7 @@ def _process_debt_burn_with_match(
 
         # Only update last_index if the new index is greater than current
         current_index = debt_position.last_index or 0
-        if scaled_event.index > current_index:
+        if scaled_event.index is not None and scaled_event.index > current_index:
             debt_position.last_index = scaled_event.index
 
         return
@@ -944,7 +946,8 @@ def _process_debt_burn_with_match(
                 )
 
             else:
-                assert_never(pattern)
+                msg = f"Unsupported liquidation debt burn pattern: {pattern!s}"
+                raise DegenbotValueError(message=msg)
 
         else:
             # Standard REPAY: use Burn event value

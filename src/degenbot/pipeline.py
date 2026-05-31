@@ -7,11 +7,11 @@ selected explicitly by name. There is no implicit broadcast to every executor.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
 FaultStage = Literal["sync", "collector", "strategy", "routing", "executor"]
 
@@ -214,11 +214,7 @@ class _PipelineCounters:
     events_seen: int = 0
     actions_emitted: int = 0
     actions_executed: int = 0
-    faults: list[PipelineFault] | None = None
-
-    def __post_init__(self) -> None:
-        if self.faults is None:
-            self.faults = []
+    faults: list[PipelineFault] = field(default_factory=list)
 
     def freeze(self) -> PipelineMetrics:
         return PipelineMetrics(
@@ -229,7 +225,7 @@ class _PipelineCounters:
         )
 
 
-def _require_non_empty(value: Sequence[object] | dict[str, object], label: str) -> None:
+def _require_non_empty(value: Sequence[object] | Mapping[str, object], label: str) -> None:
     if not value:
         message = f"missing_{label}"
         raise PipelineConfigurationError(message)

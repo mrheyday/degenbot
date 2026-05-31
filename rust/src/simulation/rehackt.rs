@@ -153,14 +153,14 @@ mod tests {
     }
 
     #[test]
-    fn balancer_fixture_is_non_dispatchable_and_source_bound() {
+    fn balancer_fixture_is_regression_ready_non_dispatchable_and_source_bound() {
         let Some(fixture) = fixture_by_id("rehackt-balancer-v2-stable-rounding") else {
             panic!("fixture exists");
         };
 
         assert_eq!(fixture.source_url, REHACKT_SOURCE_URL);
         assert_eq!(fixture.source_commit, REHACKT_SOURCE_COMMIT);
-        assert_eq!(fixture.status, FixtureStatus::SimulatorRequired);
+        assert_eq!(fixture.status, FixtureStatus::RegressionReady);
         assert!(!fixture.dispatchable);
         assert_eq!(fixture.fork_block, 23_717_396);
         assert!(fixture

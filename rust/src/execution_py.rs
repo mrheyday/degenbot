@@ -26,6 +26,7 @@ use std::str::FromStr;
 /// Encode calldata for `executeNativeArb`.
 #[pyfunction]
 #[pyo3(name = "encode_native_arb_calldata")]
+#[allow(clippy::too_many_arguments)]
 pub fn encode_native_arb_calldata_py(
     py: Python<'_>,
     flash_lender: &str,
@@ -58,6 +59,7 @@ pub fn encode_native_arb_calldata_py(
 /// Encode calldata for `matchInternal`.
 #[pyfunction]
 #[pyo3(name = "encode_match_internal_calldata")]
+#[allow(clippy::too_many_arguments)]
 pub fn encode_match_internal_calldata_py(
     py: Python<'_>,
     cow_settlement_calldata: &Bound<'_, PyAny>,
@@ -94,6 +96,7 @@ pub fn encode_match_internal_calldata_py(
 /// Encode calldata for `composeFourLeg`.
 #[pyfunction]
 #[pyo3(name = "encode_compose_four_leg_calldata")]
+#[allow(clippy::too_many_arguments)]
 pub fn encode_compose_four_leg_calldata_py(
     py: Python<'_>,
     across_fill_calldata: &Bound<'_, PyAny>,
@@ -452,8 +455,8 @@ fn required_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'p
 mod tests {
     use super::*;
     use crate::execution::FlashProtocol;
-    use crate::runtime::with_python;
-    use pyo3::types::PyInt;
+    use crate::with_python_for_tests as with_python;
+    use pyo3::types::{PyInt, PyString};
 
     fn sample_swap_step() -> SwapStep {
         SwapStep {
@@ -512,7 +515,7 @@ mod tests {
             .unwrap();
 
             let expected = encode_native_arb_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
+            let actual: &[u8] = calldata.bind(py).extract().unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }
@@ -554,21 +557,21 @@ mod tests {
 
             let calldata = encode_match_internal_calldata_py(
                 py,
-                &cow_settlement_calldata.bind(py),
-                &uniswapx_batch_calldata.bind(py),
+                &cow_settlement_calldata,
+                &uniswapx_batch_calldata,
                 &expected_token_inflows,
                 &expected_token_inflow_min,
-                &flash_lender.bind(py),
+                &flash_lender,
                 "morpho",
-                &flash_token.bind(py),
-                &flash_amount.bind(py),
-                &min_profit.bind(py),
-                &deadline.bind(py),
+                &flash_token,
+                &flash_amount,
+                &min_profit,
+                &deadline,
             )
             .unwrap();
 
             let expected = encode_match_internal_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
+            let actual: &[u8] = calldata.bind(py).extract().unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }
@@ -594,14 +597,14 @@ mod tests {
             swap.set_item("dex_kind", "univ3").unwrap();
             swap.set_item("router", format!("{:#x}", params.arb_swaps[0].router))
                 .unwrap();
-            swap.set_item("call_data", PyBytes::new(py, &[0xaa, 0xbb, 0xcc]))
+            swap.set_item("call_data", PyBytes::new(py, b"data"))
                 .unwrap();
             swap.set_item("token_in", format!("{:#x}", params.arb_swaps[0].token_in))
                 .unwrap();
             swap.set_item("token_out", format!("{:#x}", params.arb_swaps[0].token_out))
                 .unwrap();
-            swap.set_item("amount_in", 456u64).unwrap();
-            swap.set_item("amount_out_min", 789u64).unwrap();
+            swap.set_item("amount_in", 100u64).unwrap();
+            swap.set_item("amount_out_min", 90u64).unwrap();
             arb_swaps.append(swap).unwrap();
 
             let across_fill_calldata = PyBytes::new(py, b"across").into_any();
@@ -615,21 +618,21 @@ mod tests {
 
             let calldata = encode_compose_four_leg_calldata_py(
                 py,
-                &across_fill_calldata.bind(py),
+                &across_fill_calldata,
                 &arb_swaps,
-                &cow_fill_calldata.bind(py),
-                &uniswapx_rebalance_calldata.bind(py),
-                &flash_lender.bind(py),
+                &cow_fill_calldata,
+                &uniswapx_rebalance_calldata,
+                &flash_lender,
                 "erc3156",
-                &flash_token.bind(py),
-                &flash_amount.bind(py),
-                &min_profit.bind(py),
-                &deadline.bind(py),
+                &flash_token,
+                &flash_amount,
+                &min_profit,
+                &deadline,
             )
             .unwrap();
 
             let expected = encode_compose_four_leg_calldata(&params).unwrap();
-            let actual: &[u8] = calldata.unbind().extract(py).unwrap();
+            let actual: &[u8] = calldata.bind(py).extract().unwrap();
             assert_eq!(actual, expected.as_ref());
         });
     }

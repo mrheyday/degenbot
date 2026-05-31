@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from degenbot.strategies_coordinator.types import FLASH_PROTOCOL, FlashProtocol
 
@@ -96,7 +96,7 @@ def resolve_executor_flash_route(
     return _normalize_route(
         token=token,
         amount=amount,
-        protocol=FLASH_PROTOCOL.AAVE_V3,
+        protocol=cast("FlashProtocol", FLASH_PROTOCOL.AAVE_V3),
         source="default",
         context=context,
         lender=explicit_lender,
@@ -271,11 +271,11 @@ def _calculate_wrapping_cost_wei(candidate: FlashRouteCandidate | None) -> int:
     if not candidate or candidate.gas_price_wei is None:
         return 0
     wrap_units = candidate.wrap_gas_units if candidate.wrap_native else 0
-    if wrap_units == 0 and candidate.wrap_native:
+    if wrap_units is None or (wrap_units == 0 and candidate.wrap_native):
         wrap_units = DEFAULT_WRAP_GAS_UNITS
 
     unwrap_units = candidate.unwrap_gas_units if candidate.unwrap_native else 0
-    if unwrap_units == 0 and candidate.unwrap_native:
+    if unwrap_units is None or (unwrap_units == 0 and candidate.unwrap_native):
         unwrap_units = DEFAULT_UNWRAP_GAS_UNITS
 
     return (wrap_units + unwrap_units) * candidate.gas_price_wei

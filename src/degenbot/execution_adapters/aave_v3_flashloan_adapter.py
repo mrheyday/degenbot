@@ -167,6 +167,14 @@ class AaveV3FlashLoanBuilder:
         strategy: str = "native_arb",
         *,
         swaps: Sequence[Mapping[str, Any]] | None = None,
+        cow_settlement_calldata: bytes | str | None = None,
+        uniswapx_batch_calldata: bytes | str | None = None,
+        expected_token_inflows: Sequence[str | bytes] | None = None,
+        expected_token_inflow_min: Sequence[int | bytes] | None = None,
+        across_fill_calldata: bytes | str | None = None,
+        arb_swaps: Sequence[Mapping[str, Any]] | None = None,
+        cow_fill_calldata: bytes | str | None = None,
+        uniswapx_rebalance_calldata: bytes | str | None = None,
         min_profit: int = 0,
         deadline: int = 0,
     ) -> bytes:
@@ -178,7 +186,11 @@ class AaveV3FlashLoanBuilder:
         Note: Executor.sol currently supports single-asset flash loans for
         all strategy entry points.
         """
-        from degenbot.execution import encode_native_arb_calldata
+        from degenbot.execution import (
+            encode_compose_four_leg_calldata,
+            encode_match_internal_calldata,
+            encode_native_arb_calldata,
+        )
 
         validate_executor_strategy(strategy)
 
@@ -192,13 +204,56 @@ class AaveV3FlashLoanBuilder:
                 flash_protocol="Aave",
                 flash_token=req.assets[0],
                 flash_amount=req.amounts[0],
-                swaps=swaps or [],
+                swaps=[dict(swap) for swap in swaps] if swaps is not None else [],
                 min_profit=min_profit,
                 deadline=deadline,
             )
 
-        msg = f"Aave V3 adapter: strategy {strategy!r} encoding not yet implemented"
-        raise NotImplementedError(msg)
+        if strategy == "match_internal":
+            if (
+                cow_settlement_calldata is None
+                or uniswapx_batch_calldata is None
+                or expected_token_inflows is None
+                or expected_token_inflow_min is None
+            ):
+                msg = "Aave V3 match_internal encoding requires both calldata legs and expected inflows"
+                raise ValueError(msg)
+            return encode_match_internal_calldata(
+                cow_settlement_calldata=cow_settlement_calldata,
+                uniswapx_batch_calldata=uniswapx_batch_calldata,
+                expected_token_inflows=list(expected_token_inflows),
+                expected_token_inflow_min=list(expected_token_inflow_min),
+                flash_lender=self._aave_pool_address,
+                flash_protocol="Aave",
+                flash_token=req.assets[0],
+                flash_amount=req.amounts[0],
+                min_profit=min_profit,
+                deadline=deadline,
+            )
+
+        if strategy == "compose_four_leg":
+            if (
+                across_fill_calldata is None
+                or cow_fill_calldata is None
+                or uniswapx_rebalance_calldata is None
+            ):
+                msg = "Aave V3 compose_four_leg encoding requires Across, CoW, and UniswapX calldata"
+                raise ValueError(msg)
+            return encode_compose_four_leg_calldata(
+                across_fill_calldata=across_fill_calldata,
+                arb_swaps=[dict(swap) for swap in arb_swaps] if arb_swaps is not None else [],
+                cow_fill_calldata=cow_fill_calldata,
+                uniswapx_rebalance_calldata=uniswapx_rebalance_calldata,
+                flash_lender=self._aave_pool_address,
+                flash_protocol="Aave",
+                flash_token=req.assets[0],
+                flash_amount=req.amounts[0],
+                min_profit=min_profit,
+                deadline=deadline,
+            )
+
+        msg = f"Aave V3 adapter: unsupported strategy {strategy!r}"
+        raise ValueError(msg)
 
     @classmethod
     def compute_premium(cls, amount: int) -> int:

@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from eth_abi import encode as abi_encode
+from eth_abi.abi import encode as abi_encode
 
 from degenbot.matching.price_compat import is_opposing_pair, project_sell_to_buy
 

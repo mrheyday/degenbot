@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from fractions import Fraction
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakSet
 
 import eth_abi.abi
@@ -55,6 +55,11 @@ type CurveOrUniswapSwapAmount = (
 # Default discount applied to amount received.
 # This masks small differences in get_dy() vs exchange().
 CURVE_V1_DEFAULT_DISCOUNT_FACTOR = 0.9999
+
+
+def _v2_fee_bps(pool: UniswapV2Pool, token_in: Any) -> int:
+    fee = pool.fee_token0 if pool.token0 == token_in else pool.fee_token1
+    return fee.numerator * 10_000 // fee.denominator
 
 
 class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
@@ -474,8 +479,15 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                     and isinstance(p1, CurveStableswapPool)
                     and isinstance(p2, UniswapV2Pool)
                 ):
-                    p1_json = p1.to_curve_snapshot_json(state_overrides.get(p1.address))
-                    p2_state = state_overrides.get(p2.address) or p2.state
+                    p1_state = cast(
+                        "CurveStableswapPoolState | None",
+                        state_overrides.get(p1.address),
+                    )
+                    p1_json = p1.to_curve_snapshot_json(p1_state)
+                    p2_state = (
+                        cast("UniswapV2PoolState | None", state_overrides.get(p2.address))
+                        or p2.state
+                    )
                     r_in = (
                         p2_state.reserves_token0
                         if p2.token0 == self._swap_vectors[0].token_out
@@ -488,8 +500,9 @@ class UniswapCurveCycle(PublisherMixin, AbstractArbitrage):
                     )
 
                     # i=0 (input), j=1 (output)
+                    fee_bps = _v2_fee_bps(p2, self._swap_vectors[0].token_out)
                     res_str = rust_optimal_input_curve(
-                        p1_json, 0, 1, (str(r_in), str(r_out), p2.fee_bps)
+                        p1_json, 0, 1, (str(r_in), str(r_out), fee_bps)
                     )
                     optimal_x = int(res_str)
             except Exception:

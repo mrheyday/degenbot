@@ -978,7 +978,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             "sqrtPriceX96": str(s.sqrt_price_x96),
             "liquidity": str(s.liquidity),
             "tick": s.tick,
-            "feeBps": self.fee_bps,
+            "feeBps": self.fee,
             "tickSpacing": self.tick_spacing,
             "tickBitmap": {str(k): str(v.bitmap) for k, v in s.tick_bitmap.items()},
             "tickNetLiquidity": {str(k): str(v.liquidity_net) for k, v in s.tick_data.items()},

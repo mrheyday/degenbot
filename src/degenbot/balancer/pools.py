@@ -164,11 +164,12 @@ class BalancerV2Pool(PublisherMixin, AbstractLiquidityPool):
         token_in_index = self.tokens.index(token_in)
         token_out_index = self.tokens.index(token_out)
 
-        fee_amount = mul_up(token_in_quantity, self.fee * self.FEE_DENOMINATOR)
+        fee_percentage = self.fee.numerator * self.FEE_DENOMINATOR // self.fee.denominator
+        fee_amount = mul_up(token_in_quantity, fee_percentage)
 
         amount_new = _subtract_swap_fee_amount(
             amount=token_in_quantity,
-            fee_percentage=self.fee * self.FEE_DENOMINATOR,
+            fee_percentage=fee_percentage,
         )
 
         assert token_in_quantity - fee_amount == amount_new

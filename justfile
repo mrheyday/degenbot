@@ -9,7 +9,7 @@ default:
 
 # Run Rust tests
 test-rust:
-    cargo test --features auto-initialize --manifest-path rust/Cargo.toml -- --test-threads=1
+    env PYO3_PYTHON="{{justfile_directory()}}/.venv/bin/python" cargo test --features auto-initialize --manifest-path rust/Cargo.toml -- --test-threads=1
 
 # Run wrapped Rust Python tests
 test-rust-python:
@@ -21,7 +21,7 @@ test-stylus:
 
 # Run Rust linter (clippy)
 lint-rust:
-    cargo clippy --all-targets --all-features --manifest-path rust/Cargo.toml -- -D warnings
+    env PYO3_PYTHON="{{justfile_directory()}}/.venv/bin/python" cargo clippy --all-targets --all-features --manifest-path rust/Cargo.toml -- -D warnings
 
 # Run Stylus linter
 lint-stylus:
@@ -29,7 +29,7 @@ lint-stylus:
 
 # Build Rust release library (links Python - for testing only)
 build-rust-debug:
-    cargo build --release --manifest-path rust/Cargo.toml
+    env PYO3_PYTHON="{{justfile_directory()}}/.venv/bin/python" cargo build --release --manifest-path rust/Cargo.toml
 
 # Build Rust extension wheel (correct Python linker and abi3 metadata)
 build-rust-extension:

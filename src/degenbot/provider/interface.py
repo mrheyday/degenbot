@@ -22,7 +22,7 @@ Example:
     >>> result = provider.call(to="0x...", data=calldata)
 """
 
-from typing import Any, Literal, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, cast, runtime_checkable
 
 from hexbytes import HexBytes
 
@@ -183,15 +183,15 @@ class ProviderAdapter:
     def chain_id(self) -> int:
         """Get the chain ID."""
         if self._provider_type == "web3":
-            return self._provider.eth.chain_id
-        return self._provider.chain_id
+            return cast("int", self._provider.eth.chain_id)
+        return cast("int", self._provider.chain_id)
 
     @property
     def block_number(self) -> int:
         """Get the current block number."""
         if self._provider_type == "web3":
-            return self._provider.eth.block_number
-        return self._provider.block_number
+            return cast("int", self._provider.eth.block_number)
+        return cast("int", self._provider.block_number)
 
     # =========================================================================
     # Methods
@@ -200,8 +200,8 @@ class ProviderAdapter:
     def get_block_number(self) -> int:
         """Get the current block number."""
         if self._provider_type == "web3":
-            return self._provider.eth.get_block_number()
-        return self._provider.get_block_number()
+            return cast("int", self._provider.eth.get_block_number())
+        return cast("int", self._provider.get_block_number())
 
     def get_block(
         self,
@@ -216,7 +216,7 @@ class ProviderAdapter:
             Block data dict, or None if not found
         """
         if self._provider_type == "web3":
-            return self._provider.eth.get_block(block_identifier)
+            return cast("dict[str, Any] | None", self._provider.eth.get_block(block_identifier))
         # AlloyProvider only supports integer block numbers
         if isinstance(block_identifier, str):
             if block_identifier == "latest":
@@ -225,7 +225,7 @@ class ProviderAdapter:
                 block_identifier = 0
             elif block_identifier == "pending":
                 block_identifier = self._provider.get_block_number() + 1
-        return self._provider.get_block(block_identifier)
+        return cast("dict[str, Any] | None", self._provider.get_block(block_identifier))
 
     def get_logs(
         self,
@@ -254,13 +254,16 @@ class ProviderAdapter:
                 filter_param["address"] = addresses
             if topics:
                 filter_param["topics"] = topics
-            return self._provider.eth.get_logs(filter_param)
+            return cast("list[dict[str, Any]]", self._provider.eth.get_logs(filter_param))
 
-        return self._provider.get_logs(
-            from_block=from_block,
-            to_block=to_block,
-            addresses=addresses,
-            topics=topics,
+        return cast(
+            "list[dict[str, Any]]",
+            self._provider.get_logs(
+                from_block=from_block,
+                to_block=to_block,
+                addresses=addresses,
+                topics=topics,
+            ),
         )
 
     def call(
@@ -282,9 +285,9 @@ class ProviderAdapter:
         if self._provider_type == "web3":
             tx: dict[str, Any] = {"to": to, "data": data}
             if block is not None:
-                return self._provider.eth.call(tx, block)
-            return self._provider.eth.call(tx)
-        return self._provider.call(to, data, block)
+                return cast("HexBytes", self._provider.eth.call(tx, block))
+            return cast("HexBytes", self._provider.eth.call(tx))
+        return cast("HexBytes", self._provider.call(to, data, block))
 
     def get_code(
         self,
@@ -302,9 +305,9 @@ class ProviderAdapter:
         """
         if self._provider_type == "web3":
             if block is not None:
-                return self._provider.eth.get_code(address, block)
-            return self._provider.eth.get_code(address)
-        return self._provider.get_code(address, block)
+                return cast("HexBytes", self._provider.eth.get_code(address, block))
+            return cast("HexBytes", self._provider.eth.get_code(address))
+        return cast("HexBytes", self._provider.get_code(address, block))
 
     def get_balance(
         self,
@@ -322,9 +325,9 @@ class ProviderAdapter:
         """
         if self._provider_type == "web3":
             if block is not None:
-                return self._provider.eth.get_balance(address, block)
-            return self._provider.eth.get_balance(address)
-        return self._provider.get_balance(address, block)
+                return cast("int", self._provider.eth.get_balance(address, block))
+            return cast("int", self._provider.eth.get_balance(address))
+        return cast("int", self._provider.get_balance(address, block))
 
     def get_storage_at(
         self,
@@ -344,9 +347,9 @@ class ProviderAdapter:
         """
         if self._provider_type == "web3":
             if block is not None:
-                return self._provider.eth.get_storage_at(address, position, block)
-            return self._provider.eth.get_storage_at(address, position)
-        return self._provider.get_storage_at(address, position, block)
+                return cast("HexBytes", self._provider.eth.get_storage_at(address, position, block))
+            return cast("HexBytes", self._provider.eth.get_storage_at(address, position))
+        return cast("HexBytes", self._provider.get_storage_at(address, position, block))
 
     def get_transaction_count(
         self,
@@ -364,14 +367,14 @@ class ProviderAdapter:
         """
         if self._provider_type == "web3":
             if block is not None:
-                return self._provider.eth.get_transaction_count(address, block)
-            return self._provider.eth.get_transaction_count(address)
-        return self._provider.get_transaction_count(address, block)
+                return cast("int", self._provider.eth.get_transaction_count(address, block))
+            return cast("int", self._provider.eth.get_transaction_count(address))
+        return cast("int", self._provider.get_transaction_count(address, block))
 
     def is_connected(self) -> bool:
         """Check if the provider is connected."""
         if self._provider_type == "web3":
-            return self._provider.is_connected()
+            return cast("bool", self._provider.is_connected())
         # AlloyProvider doesn't have is_connected - assume connected if created
         return True
 

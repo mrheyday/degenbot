@@ -4,8 +4,6 @@ Asset and token database operations for Aave V3.
 Functions for managing ERC20 tokens, Aave assets, contracts, and related lookups.
 """
 
-from typing import assert_never
-
 from eth_typing import ChecksumAddress
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -14,6 +12,7 @@ from degenbot.cli.aave.erc20_utils import _fetch_erc20_token_metadata
 from degenbot.cli.aave_types import TokenType
 from degenbot.database.models.aave import AaveGhoToken, AaveV3Asset, AaveV3Contract, AaveV3Market
 from degenbot.database.models.erc20 import Erc20TokenTable
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.logging import logger
 from degenbot.provider.interface import ProviderAdapter
 
@@ -131,8 +130,9 @@ def get_asset_by_token_type(
                 )
                 .options(joinedload(AaveV3Asset.v_token))
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+        case _:
+            msg = f"Unsupported Aave token type for asset lookup: {token_type!s}"
+            raise DegenbotValueError(message=msg)
 
 
 def get_asset_identifier(asset: AaveV3Asset) -> str:

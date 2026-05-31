@@ -30,7 +30,7 @@ Example:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Self, cast
+from typing import Any, Self
 
 from hexbytes import HexBytes
 
@@ -131,7 +131,7 @@ class AlloyProvider:
     @property
     def network(self) -> str:
         """Get the configured Alloy network type."""
-        return cast("str", self._provider.network)
+        return self._provider.network
 
     @property
     def chain_id(self) -> int:
@@ -173,7 +173,7 @@ class AlloyProvider:
         Returns:
             Contract bytecode as HexBytes
         """
-        return cast("HexBytes", self._provider.get_code(address, block_number))
+        return self._provider.get_code(address, block_number)
 
     def call(
         self,
@@ -200,7 +200,7 @@ class AlloyProvider:
             >>> result = provider.call("0xTokenAddress", calldata)
             >>> balance = int.from_bytes(result, "big")
         """
-        return cast("HexBytes", self._provider.call(to, data, block_number))
+        return self._provider.call(to, data, block_number)
 
     def get_logs(
         self,
@@ -307,7 +307,7 @@ class AlloyProvider:
         Returns:
             Native balance in wei.
         """
-        return cast("int", self._provider.get_balance(address, block_number))
+        return self._provider.get_balance(address, block_number)
 
     def get_storage_at(
         self,
@@ -325,7 +325,7 @@ class AlloyProvider:
         Returns:
             Storage value at the position as HexBytes (32 bytes)
         """
-        return cast("HexBytes", self._provider.get_storage_at(address, position, block_number))
+        return self._provider.get_storage_at(address, position, block_number)
 
     def get_transaction_count(
         self,

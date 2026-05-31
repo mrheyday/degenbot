@@ -9,6 +9,7 @@ from degenbot.cli.aave.types import TransactionContext
 from degenbot.cli.aave_utils import decode_address
 from degenbot.constants import ZERO_ADDRESS
 from degenbot.database.models.aave import AaveV3User
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 
@@ -32,6 +33,9 @@ def get_or_init_stk_aave_balance(
     """
 
     discount_token = tx_context.gho_asset.v_gho_discount_token
+    if discount_token is None:
+        msg = "GHO discount token is not configured for this market."
+        raise DegenbotValueError(message=msg)
 
     if user.stk_aave_balance is None:
         balance: int

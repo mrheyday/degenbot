@@ -1,3 +1,4 @@
+import sys
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable
 from typing import Any, Protocol, Self
@@ -113,14 +114,9 @@ class BoundedCache[KT, VT](OrderedDict[KT, VT]):
         self.max_items = max_items
 
     def __reduce__(self) -> tuple[Any, ...]:
-        state = super().__reduce__()
-        return (
-            state[0],
-            (self.max_items,),  # max_items argument must be provided to properly unpickle
-            None,
-            None,
-            state[4],
-        )
+        module = sys.modules.get(__name__)
+        rebuild = getattr(module, "_rebuild_bounded_cache", _rebuild_bounded_cache)
+        return (rebuild, (self.max_items, tuple(self.items())))
 
     def __setitem__(self, key: KT, value: VT) -> None:
         super().__setitem__(key, value)
@@ -132,3 +128,13 @@ class BoundedCache[KT, VT](OrderedDict[KT, VT]):
         for k, v in self.items():
             new_copy[k] = v
         return new_copy
+
+
+def _rebuild_bounded_cache(
+    max_items: int,
+    items: tuple[tuple[Any, Any], ...],
+) -> BoundedCache[Any, Any]:
+    cache: BoundedCache[Any, Any] = BoundedCache(max_items=max_items)
+    for key, value in items:
+        cache[key] = value
+    return cache

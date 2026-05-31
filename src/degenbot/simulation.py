@@ -8,7 +8,7 @@ executor encoders, while REVM execution is delegated to the Rust extension.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -21,55 +21,119 @@ ZERO_ADDRESS = "0x" + "0" * 40
 class SwapStepLike(Protocol):
     """Structural type for Executor swap-step mirrors."""
 
-    dex_kind: object
-    router: object
-    call_data: object
-    token_in: object
-    token_out: object
-    amount_in: object
-    amount_out_min: object
+    @property
+    def dex_kind(self) -> Any: ...
+
+    @property
+    def router(self) -> Any: ...
+
+    @property
+    def call_data(self) -> Any: ...
+
+    @property
+    def token_in(self) -> Any: ...
+
+    @property
+    def token_out(self) -> Any: ...
+
+    @property
+    def amount_in(self) -> Any: ...
+
+    @property
+    def amount_out_min(self) -> Any: ...
 
 
 class NativeArbParamsLike(Protocol):
     """Structural type for `executeNativeArb` mirrors."""
 
-    flash_lender: object
-    flash_protocol: object
-    flash_token: object
-    flash_amount: object
-    swaps: Sequence[SwapStepLike]
-    min_profit: object
-    deadline: object
+    @property
+    def flash_lender(self) -> Any: ...
+
+    @property
+    def flash_protocol(self) -> Any: ...
+
+    @property
+    def flash_token(self) -> Any: ...
+
+    @property
+    def flash_amount(self) -> Any: ...
+
+    @property
+    def swaps(self) -> Sequence[SwapStepLike]: ...
+
+    @property
+    def min_profit(self) -> Any: ...
+
+    @property
+    def deadline(self) -> Any: ...
 
 
 class MatchParamsLike(Protocol):
     """Structural type for `matchInternal` mirrors."""
 
-    cow_settlement_calldata: object
-    uniswapx_batch_calldata: object
-    expected_token_inflows: Sequence[object]
-    expected_token_inflow_min: Sequence[object]
-    flash_lender: object
-    flash_protocol: object
-    flash_token: object
-    flash_amount: object
-    min_profit: object
-    deadline: object
+    @property
+    def cow_settlement_calldata(self) -> Any: ...
+
+    @property
+    def uniswapx_batch_calldata(self) -> Any: ...
+
+    @property
+    def expected_token_inflows(self) -> Sequence[Any]: ...
+
+    @property
+    def expected_token_inflow_min(self) -> Sequence[Any]: ...
+
+    @property
+    def flash_lender(self) -> Any: ...
+
+    @property
+    def flash_protocol(self) -> Any: ...
+
+    @property
+    def flash_token(self) -> Any: ...
+
+    @property
+    def flash_amount(self) -> Any: ...
+
+    @property
+    def min_profit(self) -> Any: ...
+
+    @property
+    def deadline(self) -> Any: ...
 
 
 class ComposeParamsLike(Protocol):
     """Structural type for `composeFourLeg` mirrors."""
 
-    across_fill_calldata: object
-    arb_swaps: Sequence[SwapStepLike]
-    cow_fill_calldata: object
-    uniswapx_rebalance_calldata: object
-    flash_lender: object
-    flash_protocol: object
-    flash_token: object
-    flash_amount: object
-    min_profit: object
-    deadline: object
+    @property
+    def across_fill_calldata(self) -> Any: ...
+
+    @property
+    def arb_swaps(self) -> Sequence[SwapStepLike]: ...
+
+    @property
+    def cow_fill_calldata(self) -> Any: ...
+
+    @property
+    def uniswapx_rebalance_calldata(self) -> Any: ...
+
+    @property
+    def flash_lender(self) -> Any: ...
+
+    @property
+    def flash_protocol(self) -> Any: ...
+
+    @property
+    def flash_token(self) -> Any: ...
+
+    @property
+    def flash_amount(self) -> Any: ...
+
+    @property
+    def min_profit(self) -> Any: ...
+
+    @property
+    def deadline(self) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +235,7 @@ def simulate_executor_call(
     )
 
 
-def swap_step_to_execution_dict(step: SwapStepLike) -> dict[str, object]:
+def swap_step_to_execution_dict(step: SwapStepLike) -> dict[str, Any]:
     """Convert a strategy SwapStep-like object into the encoder dict shape."""
     return {
         "dex_kind": step.dex_kind,

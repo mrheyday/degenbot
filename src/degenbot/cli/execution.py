@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
 import click
 
@@ -18,6 +20,22 @@ def _load_json(value: str) -> object:
     except json.JSONDecodeError as exc:
         msg = f"Invalid JSON payload: {exc}"
         raise click.BadParameter(msg) from exc
+
+
+def _load_json_list(value: str) -> list[Any]:
+    loaded = _load_json(value)
+    if not isinstance(loaded, list):
+        msg = "JSON payload must be an array"
+        raise click.BadParameter(msg)
+    return loaded
+
+
+def _load_swap_steps(value: str) -> list[Mapping[str, Any]]:
+    loaded = _load_json_list(value)
+    if not all(isinstance(item, Mapping) for item in loaded):
+        msg = "Swap JSON payload must be an array of objects"
+        raise click.BadParameter(msg)
+    return loaded
 
 
 def _echo_hex(data: bytes) -> None:
@@ -59,7 +77,7 @@ def execution_native_arb(
         flash_protocol=flash_protocol,
         flash_token=flash_token,
         flash_amount=int(flash_amount),
-        swaps=_load_json(swaps_json),
+        swaps=_load_swap_steps(swaps_json),
         min_profit=int(min_profit),
         deadline=int(deadline),
     )
@@ -115,9 +133,9 @@ def execution_match_internal(
     calldata = encode_match_internal_calldata(
         cow_settlement_calldata=bytes.fromhex(cow_settlement_calldata.removeprefix("0x")),
         uniswapx_batch_calldata=bytes.fromhex(uniswapx_batch_calldata.removeprefix("0x")),
-        expected_token_inflows=_load_json(expected_token_inflows_json),
+        expected_token_inflows=_load_json_list(expected_token_inflows_json),
         expected_token_inflow_min=[
-            int(amount) for amount in _load_json(expected_token_inflow_min_json)
+            int(amount) for amount in _load_json_list(expected_token_inflow_min_json)
         ],
         flash_lender=flash_lender,
         flash_protocol=flash_protocol,
@@ -177,7 +195,7 @@ def execution_compose_four_leg(
 
     calldata = encode_compose_four_leg_calldata(
         across_fill_calldata=bytes.fromhex(across_fill_calldata.removeprefix("0x")),
-        arb_swaps=_load_json(arb_swaps_json),
+        arb_swaps=_load_swap_steps(arb_swaps_json),
         cow_fill_calldata=bytes.fromhex(cow_fill_calldata.removeprefix("0x")),
         uniswapx_rebalance_calldata=bytes.fromhex(uniswapx_rebalance_calldata.removeprefix("0x")),
         flash_lender=flash_lender,

@@ -5,8 +5,6 @@ This module provides functions to extract user addresses from Aave event logs,
 used for batch prefetching users to avoid N+1 queries during transaction processing.
 """
 
-from typing import assert_never
-
 import eth_abi.abi
 from eth_typing import ChecksumAddress
 from web3.types import LogReceipt
@@ -23,6 +21,7 @@ from degenbot.aave.events import (
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli.aave_utils import decode_address
 from degenbot.constants import ZERO_ADDRESS
+from degenbot.exceptions.base import DegenbotValueError
 
 
 def extract_user_addresses_from_transaction(events: list[LogReceipt]) -> set[ChecksumAddress]:
@@ -237,6 +236,7 @@ def extract_user_addresses_from_event(event: LogReceipt) -> set[ChecksumAddress]
         pass
 
     else:
-        assert_never(topic)
+        msg = f"Unsupported Aave event topic: {topic.to_0x_hex()}"
+        raise DegenbotValueError(message=msg)
 
     return user_addresses

@@ -119,16 +119,16 @@ class DecisionEngine:
         if self._settings.strategy_four_leg_enabled and opp.morpho_liquidation is None:
             from degenbot.strategies_coordinator.four_leg import FourLegStrategy
 
-            strategy = FourLegStrategy(self._settings)
-            plan = strategy.preflight(opp)
-            if plan:
+            four_leg_strategy = FourLegStrategy(self._settings)
+            four_leg_plan = four_leg_strategy.preflight(opp)
+            if four_leg_plan:
                 candidates.append(
                     RouteCandidate(
                         kind="four_leg",
                         route=DecisionRoute(
                             kind="four_leg",
                             opportunity_id=opp.id,
-                            plan=plan,
+                            plan=four_leg_plan,
                         ),
                         score_wei=opp.estimated_profit_wei,
                         ctx=ctx,
@@ -151,18 +151,18 @@ class DecisionEngine:
         if self._settings.strategy_oracle_sandwich_enabled:
             from degenbot.strategies_coordinator.oracle_sandwich import OracleSandwichStrategy
 
-            strategy = OracleSandwichStrategy(self._settings)
-            plan = strategy.preflight(opp)
-            if plan:
+            oracle_sandwich_strategy = OracleSandwichStrategy(self._settings)
+            oracle_sandwich_plan = oracle_sandwich_strategy.preflight(opp)
+            if oracle_sandwich_plan:
                 candidates.append(
                     RouteCandidate(
                         kind="oracle_sandwich",
                         route=DecisionRoute(
                             kind="oracle_sandwich",
                             opportunity_id=opp.id,
-                            plan=plan,
+                            plan=oracle_sandwich_plan,
                         ),
-                        score_wei=plan.expected_profit_wei,
+                        score_wei=oracle_sandwich_plan.expected_profit_wei,
                         ctx=ctx,
                     )
                 )
@@ -171,18 +171,18 @@ class DecisionEngine:
         if self._settings.strategy_sandwich_enabled:
             from degenbot.strategies_coordinator.sandwich import SandwichStrategy
 
-            strategy = SandwichStrategy(self._settings)
-            plan = strategy.preflight(opp)
-            if plan:
+            sandwich_strategy = SandwichStrategy(self._settings)
+            sandwich_plan = sandwich_strategy.preflight(opp)
+            if sandwich_plan:
                 candidates.append(
                     RouteCandidate(
                         kind="sandwich",
                         route=DecisionRoute(
                             kind="sandwich",
                             opportunity_id=opp.id,
-                            plan=plan,
+                            plan=sandwich_plan,
                         ),
-                        score_wei=plan.expected_profit_wei,
+                        score_wei=sandwich_plan.expected_profit_wei,
                         ctx=ctx,
                     )
                 )
@@ -202,7 +202,7 @@ class DecisionEngine:
             sandoo_idea = evaluate_sandoo_idea(
                 opp=opp,
                 best_quote=best_q,
-                max_gas_price_gwei=self._settings.max_gas_price_gwei,
+                max_gas_price_gwei=int(self._settings.max_gas_price_gwei),
                 flash_loan_fee_wei=self._settings.flash_loan_fee_wei,
             )
 
@@ -210,7 +210,7 @@ class DecisionEngine:
         if self._settings.strategy_native_arb_enabled:
             profitable = self._evaluate_native_arb(opp, best_q, sandoo_idea)
             if profitable:
-                enrichment = {}
+                enrichment: dict[str, Any] = {}
                 if best_q:
                     enrichment["best_quote"] = best_q
                 if timeboost_decision:
@@ -362,9 +362,9 @@ class DecisionEngine:
             if cand.kind == "native_arb":
                 from degenbot.strategies_coordinator.native_arb import NativeArbStrategy
 
-                strategy = NativeArbStrategy(self._settings)
-                params = strategy.build_params(opp)
-                return strategy.simulate(self._simulator, params)
+                native_arb_strategy = NativeArbStrategy(self._settings)
+                native_arb_params = native_arb_strategy.build_params(opp)
+                return native_arb_strategy.simulate(self._simulator, native_arb_params)
 
             if cand.kind == "internal_match":
                 from degenbot.strategies_coordinator.internal_match import (
@@ -372,23 +372,23 @@ class DecisionEngine:
                 )
 
                 if cand.route.pair:
-                    strategy = InternalMatchStrategy(self._settings)
+                    internal_match_strategy = InternalMatchStrategy(self._settings)
                     estimated_profit_wei = int(
                         (cand.enrichment or {}).get("estimated_profit_wei", 1)
                     )
-                    params = strategy.build_params_from_pair(
+                    match_params = internal_match_strategy.build_params_from_pair(
                         cand.route.pair,
                         estimated_profit_wei,
                     )
-                    return strategy.simulate(self._simulator, params)
+                    return internal_match_strategy.simulate(self._simulator, match_params)
 
             if cand.kind == "four_leg":
                 from degenbot.strategies_coordinator.four_leg import FourLegStrategy
 
                 if cand.route.plan:
-                    strategy = FourLegStrategy(self._settings)
-                    params = strategy.build_params(cand.route.plan)
-                    return strategy.simulate(self._simulator, params)
+                    four_leg_strategy = FourLegStrategy(self._settings)
+                    compose_params = four_leg_strategy.build_params(cand.route.plan)
+                    return four_leg_strategy.simulate(self._simulator, compose_params)
 
             if cand.kind == "morpho_liquidation":
                 return self._simulate_enriched_calldata(cand, opp)
@@ -399,17 +399,19 @@ class DecisionEngine:
                 )
 
                 if cand.route.plan:
-                    strategy = OracleSandwichStrategy(self._settings)
-                    params = strategy.build_params(cand.route.plan)
-                    return strategy.simulate(self._simulator, params)
+                    oracle_sandwich_strategy = OracleSandwichStrategy(self._settings)
+                    oracle_sandwich_params = oracle_sandwich_strategy.build_params(cand.route.plan)
+                    return oracle_sandwich_strategy.simulate(
+                        self._simulator, oracle_sandwich_params
+                    )
 
             if cand.kind == "sandwich":
                 from degenbot.strategies_coordinator.sandwich import SandwichStrategy
 
                 if cand.route.plan:
-                    strategy = SandwichStrategy(self._settings)
-                    params = strategy.build_params(cand.route.plan)
-                    return strategy.simulate(self._simulator, params)
+                    sandwich_strategy = SandwichStrategy(self._settings)
+                    sandwich_params = sandwich_strategy.build_params(cand.route.plan)
+                    return sandwich_strategy.simulate(self._simulator, sandwich_params)
 
         except Exception as e:
             logger.warning(f"Simulation exception for {cand.kind}: {e}")

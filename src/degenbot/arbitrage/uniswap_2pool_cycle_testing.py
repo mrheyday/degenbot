@@ -63,6 +63,11 @@ DEBUG_VERIFY_CACHED_PROBLEM = False
 DEBUG_SLOW_CALCS = False
 
 
+def _v2_fee_bps(pool: UniswapV2Pool, token_in: Any) -> int:
+    fee = pool.fee_token0 if pool.token0 == token_in else pool.fee_token1
+    return fee.numerator * 10_000 // fee.denominator
+
+
 @dataclass(slots=True, frozen=True)
 class V4Payload:
     currency0: ChecksumAddress
@@ -2071,7 +2076,12 @@ class _UniswapTwoPoolCycleTesting(UniswapLpCycle):
 
                 try:
                     x_star_str = optimal_input_2pool(
-                        r_in_lo, r_out_lo, v2_pool_lo.fee_bps, r_in_hi, r_out_hi, v2_pool_hi.fee_bps
+                        r_in_lo,
+                        r_out_lo,
+                        _v2_fee_bps(v2_pool_lo, self.input_token),
+                        r_in_hi,
+                        r_out_hi,
+                        _v2_fee_bps(v2_pool_hi, forward_token),
                     )
                     uncompressed_forward_token_amount = int(x_star_str)
                 except Exception:

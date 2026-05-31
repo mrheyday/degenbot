@@ -144,6 +144,7 @@ class DecisionRoute(BaseModel):
         "native_arb",
         "launch_sniper",
         "oracle_sandwich",
+        "sandwich",
         "cow_user_submit",
         "across_fill",
         "pass",

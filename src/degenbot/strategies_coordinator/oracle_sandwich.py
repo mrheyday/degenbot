@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from eth_abi import encode as abi_encode
+from eth_abi.abi import encode as abi_encode
 from eth_utils.crypto import keccak
 
 from degenbot.decision.types import Address, Hex
@@ -21,6 +21,7 @@ from degenbot.strategies_coordinator.oracle_sandwich_math import (
 )
 from degenbot.strategies_coordinator.types import (
     DEX_KIND,
+    DexKind,
     NativeArbParams,
     SwapStep,
 )
@@ -234,10 +235,12 @@ class OracleSandwichStrategy:
         msg = "OracleSandwichStrategy: V4 requires prebuilt Universal Router calldata"
         raise ValueError(msg)
 
-    def _kind_to_dex_kind(self, kind: str) -> int:
-        if kind in {"UniswapV2", "UniswapV3", "UniswapV4"}:
-            return DEX_KIND.V2
-        return DEX_KIND.V2
+    def _kind_to_dex_kind(self, kind: str) -> DexKind:
+        if kind == "UniswapV3":
+            return cast("DexKind", DEX_KIND.V3)
+        if kind == "UniswapV4":
+            return cast("DexKind", DEX_KIND.V4)
+        return cast("DexKind", DEX_KIND.V2)
 
 
 def _encode_v2_swap_exact_tokens_for_tokens(

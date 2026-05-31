@@ -90,21 +90,41 @@ class TestMorphoFlashLoanBuilderEncode:
         # executeNativeArb selector
         assert calldata.hex().startswith("f6f6add1")
 
-    def test_encode_match_internal_strategy_raises_not_implemented(
-        self, mock_swaps: list[dict]
-    ) -> None:
+    def test_encode_match_internal_strategy_succeeds(self, mock_swaps: list[dict]) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
         req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            b.encode_executor_calldata(req, strategy="match_internal", swaps=mock_swaps)
+        calldata = b.encode_executor_calldata(
+            req,
+            strategy="match_internal",
+            cow_settlement_calldata=b"\x17\x00\x68\x4f",
+            uniswapx_batch_calldata=b"\x36\x4a\x27\x54",
+            expected_token_inflows=[_USDC],
+            expected_token_inflow_min=[1],
+            min_profit=1,
+            deadline=999999,
+        )
+        assert isinstance(calldata, bytes)
+        assert len(calldata) > 4
+        # matchInternal selector
+        assert calldata.hex().startswith("5f188678")
 
-    def test_encode_compose_four_leg_strategy_raises_not_implemented(
-        self, mock_swaps: list[dict]
-    ) -> None:
+    def test_encode_compose_four_leg_strategy_succeeds(self, mock_swaps: list[dict]) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)
         req = b.build_request(token=_USDC, amount=1_000_000, callback_data=b"")
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            b.encode_executor_calldata(req, strategy="compose_four_leg", swaps=mock_swaps)
+        calldata = b.encode_executor_calldata(
+            req,
+            strategy="compose_four_leg",
+            across_fill_calldata=b"\x12\x34",
+            arb_swaps=mock_swaps,
+            cow_fill_calldata=b"\x56\x78",
+            uniswapx_rebalance_calldata=b"\x9a\xbc",
+            min_profit=1,
+            deadline=999999,
+        )
+        assert isinstance(calldata, bytes)
+        assert len(calldata) > 4
+        # composeFourLeg selector
+        assert calldata.hex().startswith("72c0469b")
 
     def test_encode_unknown_strategy_rejected(self) -> None:
         b = MorphoFlashLoanBuilder(_MORPHO_BLUE, _EXECUTOR)

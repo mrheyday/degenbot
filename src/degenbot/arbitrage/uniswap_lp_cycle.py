@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any
+from typing import Any, cast
 from weakref import WeakSet
 
 import eth_abi.abi
@@ -66,6 +66,11 @@ class V4PoolKey:
 UNISWAP_V2_SWAP_FUNCTION_SELECTOR = Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
 UNISWAP_V3_SWAP_FUNCTION_SELECTOR = Web3.keccak(text="swap(address,bool,int256,uint160,bytes)")[:4]
 ERC20_TOKEN_TRANSFER_FUNCTION_SELECTOR = Web3.keccak(text="transfer(address,uint256)")[:4]
+
+
+def _v2_fee_bps(pool: UniswapV2Pool, token_in: Any) -> int:
+    fee = pool.fee_token0 if pool.token0 == token_in else pool.fee_token1
+    return fee.numerator * 10_000 // fee.denominator
 
 
 class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
@@ -487,16 +492,19 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
                     # V3-V3 case
                     if isinstance(p1, UniswapV3Pool) and isinstance(p2, UniswapV3Pool):
                         p1_zfo = p1.token0 == self.input_token
-                        p1_json = p1.to_v3_snapshot_json(state_overrides.get(p1))
-                        p2_json = p2.to_v3_snapshot_json(state_overrides.get(p2))
+                        p1_state = cast("UniswapV3PoolState | None", state_overrides.get(p1))
+                        p2_state = cast("UniswapV3PoolState | None", state_overrides.get(p2))
+                        p1_json = p1.to_v3_snapshot_json(p1_state)
+                        p2_json = p2.to_v3_snapshot_json(p2_state)
                         res_str = rust_optimal_input_v3(p1_json, p1_zfo, p2_json, None)
                         optimal_x = int(res_str)
 
                     # V3-V2 case
                     elif isinstance(p1, UniswapV3Pool) and isinstance(p2, UniswapV2Pool):
                         p1_zfo = p1.token0 == self.input_token
-                        p1_json = p1.to_v3_snapshot_json(state_overrides.get(p1))
-                        p2_state = state_overrides.get(p2) or p2.state
+                        p1_state = cast("UniswapV3PoolState | None", state_overrides.get(p1))
+                        p1_json = p1.to_v3_snapshot_json(p1_state)
+                        p2_state = cast("UniswapV2PoolState | None", state_overrides.get(p2)) or p2.state
                         r_in = (
                             p2_state.reserves_token0
                             if p2.token0 == p1.token1
@@ -507,8 +515,9 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
                             if p2.token0 == p1.token1
                             else p2_state.reserves_token0
                         )
+                        fee_bps = _v2_fee_bps(p2, p1.token1)
                         res_str = rust_optimal_input_v3(
-                            p1_json, p1_zfo, None, (str(r_in), str(r_out), p2.fee_bps)
+                            p1_json, p1_zfo, None, (str(r_in), str(r_out), fee_bps)
                         )
                         optimal_x = int(res_str)
             except Exception:

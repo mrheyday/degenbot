@@ -1994,7 +1994,11 @@ def pool_update(chunk_size: int, to_block: str) -> None:
         )
 
         for chain_id in active_chains:
-            w3 = get_web3_from_config(chain_id=chain_id)
+            provider = get_web3_from_config(chain_id=chain_id)
+            if provider.provider_type != "web3":
+                msg = "Pool database updates require a Web3-backed provider."
+                raise ValueError(msg)
+            w3 = cast("Web3", provider.underlying)
 
             active_exchanges = session.scalars(
                 select(ExchangeTable).where(

@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -96,10 +96,14 @@ class UnifiedQueue:
 
         async with self._lock:
             removed = 0
-            for q in [self._outbound_q, self._inbound_q, self._uniswapx_q, self._native_q]:
+            for q in (self._outbound_q, self._inbound_q, self._uniswapx_q):
                 new_q = [entry for entry in q if entry.expires_at_ms > now_ms]
                 removed += len(q) - len(new_q)
                 q[:] = new_q
+            native_q = cast("list[QueueItem[Any]]", self._native_q)
+            new_native_q = [entry for entry in native_q if entry.expires_at_ms > now_ms]
+            removed += len(native_q) - len(new_native_q)
+            native_q[:] = new_native_q
             return removed
 
     # -- Snapshots / iteration -------------------------------------------------

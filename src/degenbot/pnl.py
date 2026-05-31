@@ -7,7 +7,7 @@ spec §4.4: `pnl_wei_total{strategy}`, `opportunities_dispatched_total{...}`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from prometheus_client import REGISTRY, Counter
@@ -17,7 +17,7 @@ def _counter(name: str, documentation: str, labelnames: tuple[str, ...]) -> Coun
     names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
     existing = names_to_collectors.get(name.removesuffix("_total")) or names_to_collectors.get(name)
     if existing is not None:
-        return existing
+        return cast("Counter", existing)
     return Counter(name, documentation, labelnames=labelnames)
 
 

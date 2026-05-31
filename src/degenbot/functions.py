@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import eth_abi.abi
 import eth_account.messages
@@ -246,11 +246,14 @@ def fetch_logs_retrying(
                     topics_str.append([topic.to_0x_hex()])
                 else:
                     topics_str.append([t.to_0x_hex() for t in topic])
-            return provider.get_logs(
-                from_block=from_block,
-                to_block=to_block,
-                addresses=addr or None,
-                topics=topics_str or None,
+            return cast(
+                "list[LogReceipt]",
+                provider.get_logs(
+                    from_block=from_block,
+                    to_block=to_block,
+                    addresses=[str(address) for address in addr] or None,
+                    topics=topics_str or None,
+                ),
             )
         # It's Web3
         return provider.eth.get_logs(
@@ -427,7 +430,7 @@ def get_number_for_block_identifier(
                 msg = f"Block {block_id} not found"
                 raise DegenbotValueError(message=msg)
             return result
-        return provider.eth.get_block(block_id)
+        return cast("dict[str, Any]", provider.eth.get_block(cast("BlockIdentifier", block_id)))
 
     match identifier:
         case None:
@@ -439,7 +442,7 @@ def get_number_for_block_identifier(
             block_number = block.get("number")
             if TYPE_CHECKING:
                 assert block_number is not None
-            return block_number
+            return int(block_number)
         case str() as block_number_as_str:
             try:
                 return int(block_number_as_str, 16)

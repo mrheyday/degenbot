@@ -193,3 +193,6 @@ out/
 
 # macOS
 .DS_Store
+
+# Runtime artifacts
+receipt.json

@@ -23,8 +23,8 @@ def normalize_amount_to_wad(amount: int, decimals: int) -> int:
     if decimals == 18:
         return amount
     if decimals < 18:
-        return amount * 10 ** (18 - decimals)
-    return amount // 10 ** (decimals - 18)
+        return int(amount * 10 ** (18 - decimals))
+    return int(amount // 10 ** (decimals - 18))
 
 
 def denormalize_amount_from_wad(amount_wad: int, decimals: int) -> int:
@@ -36,8 +36,8 @@ def denormalize_amount_from_wad(amount_wad: int, decimals: int) -> int:
     if decimals == 18:
         return amount_wad
     if decimals < 18:
-        return amount_wad // 10 ** (18 - decimals)
-    return amount_wad * 10 ** (decimals - 18)
+        return int(amount_wad // 10 ** (18 - decimals))
+    return int(amount_wad * 10 ** (decimals - 18))
 
 
 def project_sell_to_buy(

@@ -1,6 +1,6 @@
 """Position verification module for on-chain validation of Aave positions."""
 
-from typing import assert_never, cast
+from typing import cast
 
 import tqdm
 from eth_typing import ChecksumAddress
@@ -20,6 +20,7 @@ from degenbot.database.models.aave import (
     AaveV3Market,
     AaveV3User,
 )
+from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 from degenbot.provider.interface import ProviderAdapter
@@ -237,7 +238,7 @@ def verify_scaled_token_positions(
     position_table: type[AaveV3CollateralPosition | AaveV3DebtPosition],
     block_number: int,
     show_progress: bool,
-    user_addresses: set[ChecksumAddress],
+    user_addresses: set[ChecksumAddress] | None = None,
 ) -> None:
     """
     Verify that database position balances match the contract.
@@ -282,7 +283,8 @@ def verify_scaled_token_positions(
         elif position_table is AaveV3DebtPosition:
             token_address = get_checksum_address(position.asset.v_token.address)
         else:
-            assert_never(position_table)
+            msg = f"Unsupported Aave position table: {position_table!r}"
+            raise DegenbotValueError(message=msg)
 
         (actual_scaled_balance,) = raw_call(
             w3=provider,

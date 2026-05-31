@@ -1,22 +1,24 @@
 """Unit tests for the ported four-leg cross-protocol composition strategy (Pick B)."""
 
-import pytest
 import time
 from unittest.mock import MagicMock
+
+import pytest
+
+from degenbot.adapters.config import Settings
+from degenbot.decision.types import Hex
 from degenbot.strategies_coordinator.four_leg import (
     FourLegPlan,
     FourLegStrategy,
 )
 from degenbot.strategies_coordinator.types import (
     DEX_KIND,
-    FLASH_PROTOCOL,
-    ComposeParams,
+)
+from degenbot.strategies_coordinator.types import (
     SwapStep as ContractSwapStep,
 )
 from degenbot.types_solver.executor import DexKind, FlashProtocol
 from degenbot.types_solver.wire import EngineSwapStep, Opportunity
-from degenbot.decision.types import Hex
-from degenbot.adapters.config import Settings
 
 # Mock addresses
 _EXECUTOR_ADDR = "0x" + "e" * 40

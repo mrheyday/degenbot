@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, TypedDict
 
 from degenbot.utils.bytes import HexBytesLike
@@ -13,20 +14,20 @@ class SwapStepDict(TypedDict):
 
 def encode_native_arb_calldata(
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
-    swaps: list[dict[str, Any]],
+    swaps: Sequence[Mapping[str, Any]],
     min_profit: int | bytes,
     deadline: int | bytes,
 ) -> bytes: ...
 def encode_match_internal_calldata(
     cow_settlement_calldata: bytes | HexBytesLike | str,
     uniswapx_batch_calldata: bytes | HexBytesLike | str,
-    expected_token_inflows: list[str | bytes],
-    expected_token_inflow_min: list[int | bytes],
+    expected_token_inflows: Sequence[str | bytes],
+    expected_token_inflow_min: Sequence[int | bytes],
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
     min_profit: int | bytes,
@@ -34,11 +35,11 @@ def encode_match_internal_calldata(
 ) -> bytes: ...
 def encode_compose_four_leg_calldata(
     across_fill_calldata: bytes | HexBytesLike | str,
-    arb_swaps: list[dict[str, Any]],
+    arb_swaps: Sequence[Mapping[str, Any]],
     cow_fill_calldata: bytes | HexBytesLike | str,
     uniswapx_rebalance_calldata: bytes | HexBytesLike | str,
     flash_lender: str | bytes,
-    flash_protocol: str,
+    flash_protocol: Any,
     flash_token: str | bytes,
     flash_amount: int | bytes,
     min_profit: int | bytes,

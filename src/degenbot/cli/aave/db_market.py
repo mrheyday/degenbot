@@ -15,6 +15,7 @@ from degenbot.database.models.aave import (
     AaveV3User,
     AaveV3UserCollateralConfig,
 )
+from degenbot.logging import logger
 
 
 def get_e_mode_category(
@@ -160,10 +161,16 @@ def record_oracle_price(
     block_number: int,
 ) -> None:
     """
-    Record an oracle price for an asset.
+    Record the block at which an oracle price was observed for an asset.
 
-    Updates the asset's last_known_price and last_price_block.
+    The current Aave asset schema tracks oracle sources and reserve state, but
+    does not persist price history rows.
     """
 
-    asset.last_known_price = price
-    asset.last_price_block = block_number
+    logger.debug(
+        "Observed oracle price %s for asset %s at block %s",
+        price,
+        asset.id,
+        block_number,
+    )
+    asset.last_update_block = block_number

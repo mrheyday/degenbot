@@ -286,6 +286,45 @@ def encode_compose_four_leg_calldata(
     Encode calldata for `Executor.composeFourLeg`.
     """
 
+def v2_mid_price_x96(reserve_in: int | bytes | str, reserve_out: int | bytes | str) -> str: ...
+def v3_mid_price_x96(sqrt_price_x96: int | bytes | str) -> str: ...
+def apply_gap_to_price_x96(price_x96: int | bytes | str, gap_bps: int) -> str: ...
+def synthetic_victim_amount_in(gap_bps: int, reserve_in: int | bytes | str) -> str: ...
+def optimal_v2_frontrun_amount(
+    victim_amount_in: int | bytes | str,
+    victim_min_out: int | bytes | str,
+    reserve_in: int | bytes | str,
+    reserve_out: int | bytes | str,
+    fee_bps: int,
+    margin_bps: int,
+) -> str: ...
+def v2_sandwich_max_size(
+    victim_amount_in: int | bytes | str,
+    victim_min_out: int | bytes | str,
+    reserve_in: int | bytes | str,
+    reserve_out: int | bytes | str,
+    fee_bps: int,
+) -> str: ...
+def v2_optimal_sandwich_size(
+    victim_amount_in: int | bytes | str,
+    reserve_in: int | bytes | str,
+    reserve_out: int | bytes | str,
+    fee_bps: int,
+    a_max: int | bytes | str,
+) -> str: ...
+def v3_sandwich_max_size(
+    pool_json: str,
+    victim_amount_in: int | bytes | str,
+    victim_min_out: int | bytes | str,
+    zero_for_one: bool,
+) -> str: ...
+def v3_optimal_sandwich_size(
+    pool_json: str,
+    victim_amount_in: int | bytes | str,
+    zero_for_one: bool,
+    a_max: int | bytes | str,
+) -> str: ...
+
 def optimal_input_2pool(
     r_a1: int | bytes | str,
     r_b1: int | bytes | str,
@@ -332,6 +371,18 @@ def compose_engine_job_json(
     Returns a JSON report containing the plan hash and broadcast decision.
     Raises ValueError if policy, gate, or simulation admission fails.
     """
+
+def evaluate_sandoo_idea_json(
+    opp_json: str,
+    best_quote_json: str | None,
+    max_gas_price_gwei: int,
+    flash_loan_fee_wei_str: str,
+) -> str: ...
+def find_best_match_json(outbound_json: str, counters_json: str) -> str | None: ...
+
+class RevmDb:
+    def __init__(self, arb_rpc_http: str, seed_pools: list[str] | None = None) -> None: ...
+    def call(self, from_addr: str, to_addr: str, calldata: bytes, value: int = 0) -> bytes: ...
 
 class Contract:
     """
@@ -425,6 +476,12 @@ class AlloyProvider:
         address: str,
         block_number: int | None = None,
     ) -> HexBytes: ...
+    def get_storage_at(
+        self,
+        address: str,
+        position: int | bytes,
+        block_number: int | None = None,
+    ) -> HexBytes: ...
     def get_balance(
         self,
         address: str,
@@ -458,6 +515,54 @@ class AsyncAlloyProvider:
         max_blocks_per_request: int = 5000,
         network: str = "any",
     ) -> Coroutine[Any, Any, AsyncAlloyProvider]: ...
+    def get_block_number(self) -> Coroutine[Any, Any, int]: ...
+    def get_chain_id(self) -> Coroutine[Any, Any, int]: ...
+    def get_logs(
+        self,
+        from_block: int,
+        to_block: int,
+        addresses: list[str] | None = None,
+        topics: list[list[str]] | None = None,
+    ) -> Coroutine[Any, Any, list[dict[str, Any]]]: ...
+    def get_block(self, block_number: int) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
+    def call(
+        self,
+        to: str,
+        data: bytes,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, HexBytes]: ...
+    def get_code(
+        self,
+        address: str,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, HexBytes]: ...
+    def get_balance(
+        self,
+        address: str,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, int]: ...
+    def get_transaction_count(
+        self,
+        address: str,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, int]: ...
+    def get_gas_price(self) -> Coroutine[Any, Any, str]: ...
+    def estimate_gas(
+        self,
+        to: str,
+        data: bytes,
+        from_: str | None = None,
+        value: int | None = None,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, int]: ...
+    def get_transaction(self, tx_hash: str) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
+    def get_transaction_receipt(self, tx_hash: str) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
+    def get_storage_at(
+        self,
+        address: str,
+        position: int | bytes,
+        block_number: int | None = None,
+    ) -> Coroutine[Any, Any, HexBytes]: ...
 
 class AsyncContract:
     """
@@ -465,6 +570,14 @@ class AsyncContract:
     """
 
     def __init__(self, address: str, provider_url: str) -> None: ...
+    @staticmethod
+    def create(
+        address: str,
+        provider_url: str,
+        max_retries: int | None = None,
+    ) -> Coroutine[Any, Any, AsyncContract]: ...
+    @property
+    def address(self) -> str: ...
     def call(
         self,
         function_signature: str,

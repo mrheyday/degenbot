@@ -28,12 +28,14 @@ from eth_abi.exceptions import ParseError as EthAbiParseError
 from degenbot.exceptions.base import DegenbotError
 from degenbot.utils.bytes import HexBytesLike, to_bytes
 
+_rs_decode: Any
+_rs_decode_single: Any
 try:
-    from degenbot.degenbot_rs import decode as rs_decode
-    from degenbot.degenbot_rs import decode_single as rs_decode_single
+    from degenbot.degenbot_rs import decode as _rs_decode
+    from degenbot.degenbot_rs import decode_single as _rs_decode_single
 except BaseException as exc:
-    rs_decode = None
-    rs_decode_single = None
+    _rs_decode = None
+    _rs_decode_single = None
     _RUST_ABI_IMPORT_ERROR: BaseException | None = exc
 else:
     _RUST_ABI_IMPORT_ERROR = None
@@ -176,13 +178,13 @@ class AbiAdapter:
         checksum: bool,
     ) -> tuple[Any, ...]:
         """Decode using the Rust backend."""
-        if rs_decode is None:
+        if _rs_decode is None:
             return self._decode_eth_abi(types, data)
 
         # Convert HexBytes to bytes if needed
         data_bytes = _ensure_bytes(data)
         try:
-            result = rs_decode(types=list(types), data=data_bytes, checksum=checksum)
+            result = _rs_decode(types=list(types), data=data_bytes, checksum=checksum)
         except ValueError as e:
             raise AbiDecodeError(message=f"ABI decoding failed: {e}") from e
         except NotImplementedError:
@@ -236,13 +238,13 @@ class AbiAdapter:
         checksum: bool,
     ) -> Any:
         """Decode a single value using the Rust backend."""
-        if rs_decode_single is None:
+        if _rs_decode_single is None:
             return self._decode_single_eth_abi(abi_type, data)
 
         # Convert HexBytes to bytes if needed
         data_bytes = _ensure_bytes(data)
         try:
-            return rs_decode_single(abi_type=abi_type, data=data_bytes, checksum=checksum)
+            return _rs_decode_single(abi_type=abi_type, data=data_bytes, checksum=checksum)
         except ValueError as e:
             raise AbiDecodeError(message=f"ABI decoding failed: {e}") from e
         except NotImplementedError:
@@ -355,13 +357,13 @@ def decode(
         backend = _get_default_backend_from_env()
 
     if backend == AbiBackend.RUST:
-        if rs_decode is None:
+        if _rs_decode is None:
             backend = AbiBackend.ETH_ABI
         else:
             # Convert HexBytes to bytes if needed
             data_bytes = _ensure_bytes(data)
             try:
-                result = rs_decode(types=list(types), data=data_bytes, checksum=checksum)
+                result = _rs_decode(types=list(types), data=data_bytes, checksum=checksum)
             except ValueError as e:
                 raise AbiDecodeError(message=f"ABI decoding failed: {e}") from e
             except NotImplementedError:
@@ -405,13 +407,13 @@ def decode_single(
         backend = _get_default_backend_from_env()
 
     if backend == AbiBackend.RUST:
-        if rs_decode_single is None:
+        if _rs_decode_single is None:
             backend = AbiBackend.ETH_ABI
         else:
             # Convert HexBytes to bytes if needed
             data_bytes = _ensure_bytes(data)
             try:
-                return rs_decode_single(abi_type=abi_type, data=data_bytes, checksum=checksum)
+                return _rs_decode_single(abi_type=abi_type, data=data_bytes, checksum=checksum)
             except ValueError as e:
                 raise AbiDecodeError(message=f"ABI decoding failed: {e}") from e
             except NotImplementedError:

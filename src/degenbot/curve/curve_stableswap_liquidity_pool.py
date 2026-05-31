@@ -724,8 +724,8 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         s = state_override or self.state
         snapshot = {
             "balances": [str(b) for b in s.balances],
-            "A": str(s.amp),
-            "feeBps": s.fee_bps,
+            "A": str(self.a_coefficient),
+            "feeBps": self.fee,
             "isMeta": False,  # MetaPool handling deferred
         }
         return json.dumps(snapshot)

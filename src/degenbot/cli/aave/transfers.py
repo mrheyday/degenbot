@@ -8,8 +8,6 @@ between users, including:
 - Protocol mints and burns
 """
 
-from typing import assert_never
-
 import eth_abi.abi
 from eth_typing import ChecksumAddress
 from web3.types import LogReceipt
@@ -86,6 +84,9 @@ def _match_paired_balance_transfer(
         Tuple of (matched_event, scaled_amount, index) or (None, None, None)
     """
 
+    if operation is None:
+        return None, None, None
+
     # For liquidation operations, don't match ERC20 Transfers with BalanceTransfers
     # They represent different movements and should be processed separately
     if operation.operation_type in {OperationType.LIQUIDATION, OperationType.GHO_LIQUIDATION}:
@@ -110,7 +111,7 @@ def _match_paired_balance_transfer(
             )
             return bt_event, decoded_amount, decoded_index
 
-    assert_never()
+    return None, None, None
 
 
 def _process_collateral_transfer(

@@ -180,7 +180,10 @@ impl PoolAdapter {
 
     /// Read Uniswap V4 pool state from PoolManager.
     /// Returns (sqrtPriceX96, tick, liquidity)
-    pub fn read_v4_state(&self, pool_id: stylus_sdk::alloy_primitives::FixedBytes<32>) -> Result<(U256, i32, u128), PoolAdapterError> {
+    pub fn read_v4_state(
+        &self,
+        pool_id: stylus_sdk::alloy_primitives::FixedBytes<32>,
+    ) -> Result<(U256, i32, u128), PoolAdapterError> {
         let manager = self.pool.get();
         if manager == Address::ZERO {
             return Err(PoolAdapterError::ZeroPoolAddress(ZeroPoolAddress {}));
@@ -214,7 +217,9 @@ impl PoolAdapter {
         // Word 3: feeGrowth1
         // Word 4: liquidity
         if data.len() < 160 {
-             return Err(PoolAdapterError::PoolStaticCallFailed(PoolStaticCallFailed {}));
+            return Err(PoolAdapterError::PoolStaticCallFailed(
+                PoolStaticCallFailed {},
+            ));
         }
 
         let slot0 = &data[32..64];
@@ -245,7 +250,9 @@ impl PoolAdapter {
             let res = static_call(self.vm(), Call::new(), pool, &calldata)
                 .map_err(|_| PoolAdapterError::PoolStaticCallFailed(PoolStaticCallFailed {}))?;
             if res.len() < 32 {
-                return Err(PoolAdapterError::PoolStaticCallFailed(PoolStaticCallFailed {}));
+                return Err(PoolAdapterError::PoolStaticCallFailed(
+                    PoolStaticCallFailed {},
+                ));
             }
             balances.push(U256::from_be_slice(res.as_slice()));
         }
@@ -254,7 +261,9 @@ impl PoolAdapter {
         let a_res = static_call(self.vm(), Call::new(), pool, &a_selector)
             .map_err(|_| PoolAdapterError::PoolStaticCallFailed(PoolStaticCallFailed {}))?;
         if a_res.len() < 32 {
-            return Err(PoolAdapterError::PoolStaticCallFailed(PoolStaticCallFailed {}));
+            return Err(PoolAdapterError::PoolStaticCallFailed(
+                PoolStaticCallFailed {},
+            ));
         }
         let a = U256::from_be_slice(a_res.as_slice());
 
@@ -278,6 +287,7 @@ fn ensure_nonzero_pool(pool: Address) -> Result<(), PoolAdapterError> {
     Ok(())
 }
 
+#[cfg(not(any(test, feature = "native-test")))]
 fn read_int24_from_3bytes(bytes: [u8; 3]) -> i32 {
     let raw = i32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
     if (raw & 0x0080_0000) == 0 {

@@ -42,7 +42,7 @@ class OstiumOracleGapSource:
 
     def __init__(
         self,
-        w3: AsyncWeb3,
+        w3: AsyncWeb3[Any],
         symbols: Sequence[str],
         ostium_feeds: dict[str, str],
         reference_feeds: dict[str, str],
@@ -107,13 +107,13 @@ class OstiumOracleGapSource:
 
             payload = OstiumOracleGapPayload(
                 aggregator=ref_addr,
-                ostiumSource=ostium_addr,
+                ostium_source=ostium_addr,
                 symbol=symbol,
-                onchainPrice=onchain["price"],
-                ostiumPrice=ostium["price"],
-                gapBps=gap_bps,
-                referencePublishedAtMs=onchain["updatedAtMs"],
-                ostiumPublishedAtMs=ostium["updatedAtMs"],
+                onchain_price=onchain["price"],
+                ostium_price=ostium["price"],
+                gap_bps=gap_bps,
+                reference_published_at_ms=onchain["updatedAtMs"],
+                ostium_published_at_ms=ostium["updatedAtMs"],
             )
 
             for h in self._handlers:

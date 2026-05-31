@@ -236,15 +236,15 @@ def encode_error(code: str, message: str, context: JsonObject | None = None) -> 
     return json.dumps({"Error": payload}, separators=(",", ":"))
 
 
-def parse_simulation_request(msg: JsonObject) -> tuple[tuple[SwapStep, ...], int]:
+def parse_simulation_request(payload: JsonObject) -> tuple[tuple[SwapStep, ...], int]:
     """Parse and validate an inbound `Simulate` request."""
-    raw_path = msg.get("path")
+    raw_path = payload.get("path")
     if not isinstance(raw_path, list) or not raw_path:
         msg = "Simulate.path must be a non-empty array"
         raise SimulationInputError(msg)
 
     try:
-        amount_in = int(cast("str | int", msg["amount_in"]))
+        amount_in = int(cast("str | int", payload["amount_in"]))
     except (KeyError, TypeError, ValueError) as exc:
         msg = "Simulate.amount_in must be a positive integer string"
         raise SimulationInputError(msg) from exc
@@ -394,9 +394,9 @@ def _swap_step_to_wire(step: SwapStep) -> JsonObject:
     return wire
 
 
-def parse_subscribe_request(msg: JsonObject) -> tuple[TokenPair, ...]:
+def parse_subscribe_request(payload: JsonObject) -> tuple[TokenPair, ...]:
     """Parse and validate an inbound `Subscribe` request."""
-    raw_pairs = msg.get("pairs")
+    raw_pairs = payload.get("pairs")
     if not isinstance(raw_pairs, list):
         msg = "Subscribe.pairs must be an array"
         raise SimulationInputError(msg)
@@ -423,10 +423,10 @@ def parse_subscribe_request(msg: JsonObject) -> tuple[TokenPair, ...]:
     return tuple(pairs)
 
 
-def parse_best_opportunity_request(msg: JsonObject) -> BotBestOpportunityRequest:
+def parse_best_opportunity_request(payload: JsonObject) -> BotBestOpportunityRequest:
     """Parse and validate an inbound `BestOpportunity` request."""
     try:
-        chain_id = int(cast("str | int", msg.get("chain_id", ARBITRUM_CHAIN_ID)))
+        chain_id = int(cast("str | int", payload.get("chain_id", ARBITRUM_CHAIN_ID)))
     except (TypeError, ValueError) as exc:
         msg = "BestOpportunity.chain_id must be a positive integer"
         raise SimulationInputError(msg) from exc
@@ -434,24 +434,24 @@ def parse_best_opportunity_request(msg: JsonObject) -> BotBestOpportunityRequest
         msg = "BestOpportunity.chain_id must be positive"
         raise SimulationInputError(msg)
 
-    input_token = str(msg.get("input_token", ""))
+    input_token = str(payload.get("input_token", ""))
     if not _is_address_like(input_token):
         msg = "BestOpportunity.input_token must be a 0x-prefixed 20-byte hex address"
         raise SimulationInputError(msg)
 
-    from_address = str(msg.get("from_address", ""))
+    from_address = str(payload.get("from_address", ""))
     if not _is_address_like(from_address):
         msg = "BestOpportunity.from_address must be a 0x-prefixed 20-byte hex address"
         raise SimulationInputError(msg)
 
-    min_profit = _non_negative_int(msg, "min_profit", default=0)
-    min_depth = _positive_int(msg, "min_depth", default=2)
-    max_depth = _optional_positive_int(msg, "max_depth")
+    min_profit = _non_negative_int(payload, "min_profit", default=0)
+    min_depth = _positive_int(payload, "min_depth", default=2)
+    max_depth = _optional_positive_int(payload, "max_depth")
     if max_depth is not None and max_depth < min_depth:
         msg = "BestOpportunity.max_depth must be >= min_depth"
         raise SimulationInputError(msg)
-    max_input = _optional_positive_int(msg, "max_input")
-    min_rate = _optional_fraction(msg, "min_rate_of_exchange")
+    max_input = _optional_positive_int(payload, "max_input")
+    min_rate = _optional_fraction(payload, "min_rate_of_exchange")
 
     return BotBestOpportunityRequest(
         chain_id=chain_id,
@@ -1202,7 +1202,7 @@ class RegistryBackedDegenbotSimulator:
             raise SimulationUnavailableError(msg)
         return amount_out
 
-    def _resolve_registry_pool(self, pool_registry: object, step: SwapStep) -> object | None:
+    def _resolve_registry_pool(self, pool_registry: Any, step: SwapStep) -> Any | None:
         if step.dex not in POOL_ID_REQUIRED_DEX_KINDS:
             return pool_registry.get(chain_id=self._chain_id, pool_address=step.pool)
 
@@ -1242,7 +1242,7 @@ class RegistryBackedDegenbotSimulator:
         return None
 
     @staticmethod
-    def _resolve_pool_token(pool: object, token_address: str) -> object:
+    def _resolve_pool_token(pool: Any, token_address: str) -> Any:
         target = token_address.lower()
         for attr in ("token0", "token1"):
             token = getattr(pool, attr, None)
