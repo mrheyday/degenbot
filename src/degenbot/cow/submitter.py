@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
@@ -17,10 +17,16 @@ from degenbot.cow.signing import sign_solution
 from degenbot.utils.metrics import SUBMISSION_LATENCY, SUBMISSION_REQUESTS
 
 if TYPE_CHECKING:
-    from degenbot.config import Settings
+    from pydantic import SecretStr
+
     from degenbot.cow.client import OrderbookClient
     from degenbot.cow.models import Auction
     from degenbot.cow.models import Solution as ProtocolSolution
+
+    class CompetitionSubmitterSettings(Protocol):
+        cow_solver_address: str | None
+        cow_solver_private_key: SecretStr | None
+        chain_id: int
 
 log = structlog.get_logger(__name__).bind(service="solver", component="competition_submitter")
 
@@ -35,7 +41,7 @@ class CompetitionSubmitter:
     def __init__(
         self,
         client: OrderbookClient,
-        settings: Settings,
+        settings: CompetitionSubmitterSettings,
     ) -> None:
         self._client = client
         self._settings = settings
