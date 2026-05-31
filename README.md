@@ -20,6 +20,7 @@ Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve StableSwa
 - [Configuration](#configuration)
 - [Rust Extension](#rust-extension)
 - [Documentation](#documentation)
+- [MEV-Arbitrum Overlay](#mev-arbitrum-overlay)
 - [Contributing](#contributing)
 - [License](#license)
 - [Donation](#donation)
@@ -92,8 +93,8 @@ print(f"Output: {amount_out}")
 | SushiSwap | V2, V3 | Ethereum, Base |
 | Curve | StableSwap V1, StableSwap-NG | Ethereum, Arbitrum |
 | Solidly | V2 | Ethereum, Base | *(utility functions only, no pool class)*
-| Balancer | V2 | Ethereum | *(internal, not in public API)* |
-| Camelot | V2 | Arbitrum |
+| Balancer | V2, V2 ComposableStable | Ethereum | *(stable + composable-stable pool models; see `balancer/stable_pools.py`, `balancer/composable_stable_pools.py`)* |
+| Camelot | V2, V3 (Algebra) | Arbitrum | *(V3 stored in `CamelotV3PoolTable`; activatable Algebra pool model gated — see CLI note below)* |
 | SwapBased | V2 | Base |
 
 ### Lending Protocols
@@ -509,6 +510,39 @@ degenbot bot best \
   --from-address 0x000000000000000000000000000000000000dEaD
 ```
 
+#### Execution Calldata (MEV-Arbitrum overlay)
+
+Encode calldata for the parent-repo `Executor.sol` entry points. Inputs are JSON payloads
+echoed back as `0x`-prefixed hex; the command itself does not broadcast. See
+[MEV-Arbitrum Overlay](#mev-arbitrum-overlay) for the full surface.
+
+```bash
+# Encode Executor.executeNativeArb(...)
+degenbot execution native-arb \
+  --flash-lender 0x... --flash-protocol AaveV3 \
+  --flash-token 0x... --flash-amount 1000000 \
+  --swaps-json '[{"kind":"UniswapV3", ...}]' \
+  --min-profit 0 --deadline 0
+
+# Encode Executor.matchInternal(...)
+degenbot execution match-internal \
+  --cow-settlement-calldata 0x... \
+  --uniswapx-batch-calldata 0x... \
+  --expected-token-inflows-json '["0x..."]' \
+  --expected-token-inflow-min-json '[0]' \
+  --flash-lender 0x... --flash-protocol AaveV3 \
+  --flash-token 0x... --flash-amount 0 \
+  --min-profit 0 --deadline 0
+
+# Encode Executor.composeFourLeg(...)
+degenbot execution compose-four-leg \
+  --across-fill-calldata 0x... --arb-swaps-json '[...]' \
+  --cow-fill-calldata 0x... --uniswapx-rebalance-calldata 0x... \
+  --flash-lender 0x... --flash-protocol AaveV3 \
+  --flash-token 0x... --flash-amount 0 \
+  --min-profit 0 --deadline 0
+```
+
 #### Database Management
 
 ```bash
@@ -796,6 +830,129 @@ Additional documentation is available in the [`docs/`](docs/) directory:
 - **[Arbitrage](docs/arbitrage/)**: Multi-pool cycle testing documentation
 - **[CLI](docs/cli/)**: Detailed CLI command reference
 - **[Configuration](docs/config.md)**: Configuration options
+
+## MEV-Arbitrum Overlay
+
+This checkout is the vendored degenbot used by the parent
+[`mev-arbitrum`](../../README.md) project. The package is a strict superset of upstream
+`BowTiedDevil/degenbot@0.6.0a2`: every upstream feature is preserved, and the following
+surfaces are added here only. They are not published to PyPI and are not part of the
+upstream public API.
+
+Read [`docs/architecture/mev-arbitrum-code-home.md`](../../docs/architecture/mev-arbitrum-code-home.md)
+for the boundary doctrine between this package, `coordinator/`, and `contracts/`.
+
+### Execution CLI group
+
+Encodes calldata for the parent-repo `Executor.sol` entry points. See the
+[Execution Calldata](#execution-calldata-mev-arbitrum-overlay) block under CLI Reference for
+the invocation form.
+
+| Command | Encodes | Source |
+| --- | --- | --- |
+| `degenbot execution native-arb` | `Executor.executeNativeArb(...)` | `src/degenbot/cli/execution.py` |
+| `degenbot execution match-internal` | `Executor.matchInternal(...)` | `src/degenbot/cli/execution.py` |
+| `degenbot execution compose-four-leg` | `Executor.composeFourLeg(...)` | `src/degenbot/cli/execution.py` |
+
+All three commands delegate to Rust encoders in `rust/src/execution_py.rs` via
+`degenbot.execution` (Python convenience wrappers) and emit `0x`-prefixed hex on stdout.
+The CLI does not sign or broadcast.
+
+### Rust extension overlay modules
+
+In addition to the upstream `tick_math_py` / `abi_decoder` / `abi_encoder` / `address_utils` /
+`provider_py` / `contract_py` surface registered in `rust/src/lib.rs`, the maturin binding
+exposes four overlay submodules:
+
+| Submodule | Public functions | Purpose |
+| --- | --- | --- |
+| `execution_py` | `encode_native_arb_calldata`, `encode_match_internal_calldata`, `encode_compose_four_leg_calldata`, `v2_mid_price_x96`, `v3_mid_price_x96`, `apply_gap_to_price_x96`, `synthetic_victim_amount_in`, `optimal_v2_frontrun_amount`, `v2_sandwich_max_size`, `v2_optimal_sandwich_size`, `v3_sandwich_max_size`, `v3_optimal_sandwich_size`, `optimal_input_2pool`, `optimal_input_2pool_v3`, `optimal_input_2pool_curve` | Executor calldata + closed-form sandwich/two-pool math |
+| `execution_engine_py` | `evaluate_sandoo_idea_json`, `find_best_match_json`, `compose_engine_job_json` | Strategy-candidate evaluation and engine-job composition |
+| `signed_order_admission_py` | `evaluate_prediction_fx_match_json` | Pre-admission scoring for signed prediction/FX orders |
+| `simulation_py` | `RevmDb` class (`call`, seeded pool warmup) | REVM-backed deterministic local simulation |
+
+Python wrappers live in `src/degenbot/execution.py` and `src/degenbot/simulation.py`. Type
+stubs are in `src/degenbot/degenbot_rs.pyi`.
+
+### Execution adapters (`src/degenbot/execution_adapters/`)
+
+Per-venue Python adapters that normalize state, encode swap/flash legs, and surface
+deployment addresses. Re-exported lazily through `degenbot.execution_adapters`.
+
+| Adapter | Coverage |
+| --- | --- |
+| `aave_v3_flashloan_adapter` | Aave V3 `flashLoan` builder + request type |
+| `aave_v4_adapter` | Aave V4 reserves, user health, swap quote |
+| `balancer_v3_adapter` + `balancer_v3_weighted_math` / `balancer_log_exp_math` / `balancer_fixed_point` | Balancer V3 client + pool math |
+| `camelot_v3_adapter` | Camelot Algebra V3 pool state, `MultiTickCrossingNotSupportedError` |
+| `curve_ng_adapter` | Curve StableSwap-NG pool state |
+| `dodo_pmm_adapter` + `dodo_pmm_math` / `dodo_v1_math` | DODO PMM pool state and math |
+| `fluid_dex_adapter` | Fluid DEX client + pool state |
+| `maverick_v2_adapter` | Maverick V2 client + pool state |
+| `metamorpho_v1_adapter` | MetaMorpho V1 vault client |
+| `morpho_flashloan_adapter` | Morpho Blue `flashLoan` builder + request type |
+| `morpho_lp_adapter` | Morpho Blue market + position helpers |
+| `morpho_preliquidation_adapter` | Morpho pre-liquidation helpers |
+| `solidly_adapter` | Solidly V1 pool state |
+| `aggregator_validator` | Whitelisted aggregator router validation |
+
+Address constants for the above live in sibling `*_addresses.py` modules
+(`aave_v3_addresses`, `arbitrum_token_addresses`, `balancer_v3_addresses`,
+`compound_v3_addresses`, `cow_addresses`, `dodo_addresses`, `fluid_dex_addresses`,
+`maverick_v2_addresses`, `morpho_blue_addresses`, `uniswap_addresses`).
+
+### Adapter registry (`src/degenbot/adapters/`)
+
+Python-side venue/lane registry that mirrors `coordinator/src/router/registry.ts`. Read-only
+view of "what we can execute through" and "is it ready":
+
+- `adapters.registry` — `ALL_ADAPTERS`, `adapter_for`, `adapters_by_category`,
+  `adapters_by_status`, `lane_for`, `lanes_by_status`
+- `adapters.laneadapters.lanes` — `EXECUTION_LANES` enumeration
+- `adapters.flashadapters.venues`, `adapters.liquidityadapters.venues`,
+  `adapters.swapadapters.venues` — per-category venue catalogues
+- `adapters.readiness` — `READINESS_EVIDENCE`, `ReadinessStatus`, `evidence_for_adapter`,
+  `evidence_for_lane`, `readiness_evidence_for_id`
+- `adapters.ipc`, `adapters.source`, `adapters.config`, `adapters.templates` — IPC
+  contract, source provenance, config, and adapter scaffolding helpers
+
+### CoW auction bridge (`src/degenbot/cow/auction_build.py` + `auction_build.py` shim)
+
+`degenbot.auction_build` re-exports the CoW auction-build bridge used by the parent-repo
+solver driver: `AuctionBuildRequest`, `AuctionBuildResponse`, `AuctionOrderRef`,
+`AuctionQuotePolicy`, `AuctionRef`, `build_auction_response`,
+`handle_auction_build_payload`.
+
+### Bot scanner (`src/degenbot/bot.py`)
+
+Backs the `degenbot bot best` CLI. Public types: `BotOpportunity`, `BotScanConfig`,
+`DegenbotBot`.
+
+### Database models added beyond upstream
+
+`src/degenbot/database/models/pools.py` adds:
+
+- `CamelotV3PoolTable` (Algebra V3, Arbitrum) — populated by the pool updater; the
+  activator surface is still gated (see CLI Reference note on Camelot Algebra)
+- Balancer stable / composable-stable model surface (`balancer/stable_pools.py`,
+  `balancer/composable_stable_pools.py`) on top of the upstream V2 weighted-pool model
+
+### Arbitrum chain support
+
+Arbitrum is wired across the existing upstream protocol surface:
+
+- Uniswap V2 / V3 / V4 deployments (`src/degenbot/uniswap/deployments.py` —
+  `ArbitrumUniswapV2`, `ArbitrumUniswapV3`, `ArbitrumUniswapV4`, `ArbitrumCamelotV3`)
+- Curve StableSwap-NG factory + pool model on Arbitrum
+- Address constants in `execution_adapters/arbitrum_token_addresses.py` and
+  `arbitrum_token_metadata.py`
+
+### Verification
+
+- Python: `just test-python` (covers the overlay surface)
+- Rust: `just test-rust` (covers `execution_py`, `execution_engine_py`,
+  `signed_order_admission_py`, `simulation_py`)
+- Combined: `just test-all`
 
 ## Contributing
 
