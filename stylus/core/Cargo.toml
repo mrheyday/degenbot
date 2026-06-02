@@ -15,6 +15,9 @@ stylus-core = "0.10.7"
 stylus-proc = "0.10.7"
 stylus-sdk = "=0.10.7"
 
+[dev-dependencies]
+degenbot_contract_bindings = { path = "../../rust/crates/contract_bindings" }
+
 [lib]
 crate-type = ["lib", "cdylib"]
 

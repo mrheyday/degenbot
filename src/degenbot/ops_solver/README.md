@@ -66,9 +66,10 @@ on the ops scripts.
 
 ## Configuration
 
-`ape-config.yaml` in this directory; minimal Arbitrum One setup. Chainstack is the standard
-`ARB_RPC_HTTP` provider for repository fork checks; Ape's Alchemy network alias is retained for the
-verification plugin path and can be overridden via env var.
+`ape-config.yaml` in this directory; minimal Arbitrum One setup. Alchemy is the standard provider
+surface for repository fork checks, WebSocket feeds, Bundler/Gas Manager calls, and Ape's
+`arbitrum:mainnet:alchemy` verification path. Export `ALCHEMY_API_KEY` for degenbot helpers and
+`WEB3_ALCHEMY_API_KEY` for Ape-compatible tooling when the caller does not copy the value across.
 
 ## Run
 

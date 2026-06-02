@@ -1,5 +1,6 @@
 import asyncio
 import enum
+import hashlib
 import itertools
 import time
 from collections.abc import AsyncIterator, Iterable, Iterator, Sequence
@@ -31,6 +32,40 @@ class PathStep:
 class Direction(enum.Enum):
     FORWARD = enum.auto()
     FORWARD_AND_REVERSE = enum.auto()
+
+
+def path_hash(path: Sequence[PathStep]) -> str:
+    """Return a stable SHA-256 identity for a path's pool sequence."""
+
+    hasher = hashlib.sha256()
+    for step in path:
+        hasher.update(_hex_to_fixed_width_bytes(str(step.address), width=20))
+        if step.hash is not None:
+            hasher.update(_hex_to_fixed_width_bytes(step.hash, width=32))
+    return hasher.hexdigest()
+
+
+def _hex_to_fixed_width_bytes(value: str, *, width: int) -> bytes:
+    hex_value = value.removeprefix("0x").lower()
+    if len(hex_value) % 2:
+        hex_value = f"0{hex_value}"
+    raw = bytes.fromhex(hex_value)
+    if len(raw) > width:
+        msg = f"hex value {value!r} exceeds {width} bytes"
+        raise ValueError(msg)
+    return raw.rjust(width, b"\0")
+
+
+def deduplicate_paths(paths: Iterable[Sequence[PathStep]]) -> Iterator[Sequence[PathStep]]:
+    """Yield first-seen paths using stable pool-sequence identity."""
+
+    seen: set[str] = set()
+    for path in paths:
+        identity = path_hash(path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        yield path
 
 
 def _dfs(

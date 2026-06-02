@@ -1,0 +1,3 @@
+warning: `VIRTUAL_ENV=/Volumes/PNYRP60PSSD/dev-projects/mev-arbitrum/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+<frozen runpy>:128: RuntimeWarning: 'degenbot.connection.ipc' found in sys.modules after import of package 'degenbot.connection', but prior to execution of 'degenbot.connection.ipc'; this may result in unpredictable behaviour
+{"service": "degenbot", "component": "execution.degenbot_ipc", "socket_path": "/tmp/degenbot.sock", "degenbot_version": "0.6.0a2", "degenbot_source": "/Volumes/PNYRP60PSSD/dev-projects/mev-arbitrum/vendor/vendor/degenbot", "event": "degenbot_ipc_started", "level": "info", "timestamp": "2026-06-01T13:01:39.208990Z"}

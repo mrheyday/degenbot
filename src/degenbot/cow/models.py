@@ -177,27 +177,99 @@ class Auction(BaseModel):
     surplus_capturing_jit_order_owners: list[str] = Field(alias="surplusCapturingJitOrderOwners")
 
 
-class Interaction(BaseModel):
-    """A single contract call inside a settlement.
-
-    The OpenAPI spec defines two flavours (LiquidityInteraction vs
-    CustomInteraction); we accept both via `extra='allow'` since we
-    PASS THROUGH this blob unchanged in our (currently empty) solutions.
-    """
+class Call(BaseModel):
+    """A pre/post settlement contract call."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
+    target: str
+    value: BigIntStr
+    call_data: str = Field(alias="callData")
+
+
+class Asset(BaseModel):
+    """Token amount consumed or produced by a custom interaction."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    token: str
+    amount: BigIntStr
+
+
+class Allowance(BaseModel):
+    """Token allowance required by a custom interaction."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    token: str
+    spender: str
+    amount: BigIntStr
+
+
+class JitTradeOrder(BaseModel):
+    """JIT-order payload embedded in a CoW solver solution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    sell_token: str = Field(alias="sellToken")
+    buy_token: str = Field(alias="buyToken")
+    receiver: str
+    sell_amount: BigIntStr = Field(alias="sellAmount")
+    buy_amount: BigIntStr = Field(alias="buyAmount")
+    valid_to: int = Field(alias="validTo")
+    app_data: str = Field(alias="appData")
+    kind: OrderKind
+    sell_token_balance: SellTokenBalance = Field(alias="sellTokenBalance")
+    buy_token_balance: BuyTokenBalance = Field(alias="buyTokenBalance")
+    signing_scheme: SigningScheme = Field(alias="signingScheme")
+    signature: str
+
+
+class Interaction(BaseModel):
+    """A liquidity or custom interaction inside a settlement."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: Literal["liquidity", "custom"] | None = None
     internalize: bool | None = None
+    id: str | None = None
+    input_token: str | None = Field(default=None, alias="inputToken")
+    output_token: str | None = Field(default=None, alias="outputToken")
+    input_amount: BigIntStr | None = Field(default=None, alias="inputAmount")
+    output_amount: BigIntStr | None = Field(default=None, alias="outputAmount")
+    target: str | None = None
+    value: BigIntStr | None = None
+    call_data: str | None = Field(default=None, alias="callData")
+    allowances: list[Allowance] = Field(default_factory=list)
+    inputs: list[Asset] = Field(default_factory=list)
+    outputs: list[Asset] = Field(default_factory=list)
 
 
 class Trade(BaseModel):
-    """A trade matched against a CoW order, with executed amounts.
-
-    `oneOf Fulfillment / JitTrade` — both share the same shape from the
-    solver's perspective. Loose typing here for the POC.
-    """
+    """A fulfillment, JIT trade, or legacy settlement-shaped trade."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: str | None = None
+    order: str | JitTradeOrder | dict[str, Any] | None = None
+    executed_amount: BigIntStr | None = Field(default=None, alias="executedAmount")
+    fee: BigIntStr | None = None
+
+    sell_token_index: int | None = Field(default=None, alias="sellTokenIndex")
+    buy_token_index: int | None = Field(default=None, alias="buyTokenIndex")
+    receiver: str | None = None
+    sell_amount: BigIntStr | None = Field(default=None, alias="sellAmount")
+    buy_amount: BigIntStr | None = Field(default=None, alias="buyAmount")
+    valid_to: int | None = Field(default=None, alias="validTo")
+    app_data: str | None = Field(default=None, alias="appData")
+    fee_amount: BigIntStr | None = Field(default=None, alias="feeAmount")
+    flags: int | None = None
+    signature: str | None = None
+
+    sell_token: str | None = Field(default=None, alias="sellToken")
+    buy_token: str | None = Field(default=None, alias="buyToken")
+    amount: BigIntStr | None = None
+    order_uid: str | None = Field(default=None, alias="orderUid")
 
 
 class Solution(BaseModel):
@@ -218,8 +290,8 @@ class Solution(BaseModel):
     prices: dict[str, BigIntStr]
     trades: list[Trade]
     interactions: list[Interaction]
-    pre_interactions: list[dict[str, Any]] | None = Field(default=None, alias="preInteractions")
-    post_interactions: list[dict[str, Any]] | None = Field(default=None, alias="postInteractions")
+    pre_interactions: list[Call] | None = Field(default=None, alias="preInteractions")
+    post_interactions: list[Call] | None = Field(default=None, alias="postInteractions")
     gas: int | None = None
     max_fee_per_gas: BigIntStr | None = Field(default=None, alias="maxFeePerGas")
     max_priority_fee_per_gas: BigIntStr | None = Field(default=None, alias="maxPriorityFeePerGas")
@@ -240,7 +312,7 @@ class CompetitionSolution(BaseModel):
 
     def model_dump_wire(self) -> dict[str, Any]:
         """Serialize for outbound HTTP."""
-        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True))
+        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True, mode="json"))
         assert isinstance(wire, dict)
         return wire
 
@@ -274,7 +346,7 @@ class SolveResponse(BaseModel):
         convention). pydantic's default `model_dump(by_alias=True)`
         handles aliases; we post-process bigint fields here.
         """
-        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True))
+        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True, mode="json"))
         assert isinstance(wire, dict)
         return wire
 
@@ -353,7 +425,7 @@ class DriverQuoteResponse(BaseModel):
 
     clearing_prices: dict[str, BigIntStr] = Field(alias="clearingPrices")
     solver: str
-    pre_interactions: list[Interaction] | None = Field(default=None, alias="preInteractions")
+    pre_interactions: list[Call] | None = Field(default=None, alias="preInteractions")
     interactions: list[Interaction] | None = None
     gas: int | None = None
     tx_origin: str | None = Field(default=None, alias="txOrigin")
@@ -361,7 +433,7 @@ class DriverQuoteResponse(BaseModel):
 
     def model_dump_wire(self) -> dict[str, Any]:
         """Serialize to camelCase JSON-ready dict with BigInt→str coercion."""
-        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True))
+        wire = _to_wire(self.model_dump(by_alias=True, exclude_none=True, mode="json"))
         assert isinstance(wire, dict)
         return wire
 

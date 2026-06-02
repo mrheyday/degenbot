@@ -6,17 +6,11 @@
 //! through the configured lane (default RPC / Kairos / Timeboost), watches
 //! inclusion, and emits `Settlement`s back to the coordinator.
 //!
-//! Phase 1a (this commit): module skeleton + `ExecutorBackend` trait +
-//! `MockBackend` implementation + the actor loop that drives the state
-//! machine. The actor loop is fully tested at unit level — see `tests` below.
-//!
-//! Phase 1b (next commit): `LiveBackend` — real `PrivateKeySigner`, Alloy
-//! HTTP provider, REVM `CacheDB` over a forked-state oracle, WS pending-tx
-//! and new-block subscriptions. Anvil round-trip is the validation gate.
-//!
-//! Phase 2 (per ADR-026 implementation plan): wire the IPC server's inbound
-//! handler to route `Message::Plan` envelopes onto the executor's mpsc and
-//! mirror `Message::Settlement` back through the coordinator broadcast bus.
+//! Current implementation: `MockBackend` keeps the actor state machine
+//! unit-testable; `LiveBackend` owns the signer, per-lane Alloy providers,
+//! pending nonce cache, pre/post balance accounting, and inclusion watcher.
+//! `serve_message_bus` routes `Message::Plan` envelopes from the coordinator
+//! bus into the executor queue and mirrors `Message::Settlement` back out.
 
 pub mod gas;
 pub mod inclusion;
@@ -30,19 +24,32 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy::network::{Ethereum, EthereumWallet};
-use alloy::primitives::{B256, I256, U256};
+use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder};
+use alloy::primitives::{Address, Bytes, B256, I256, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::rpc::types::TransactionRequest;
+use alloy::sol;
+use alloy::sol_types::SolCall;
+use dashmap::DashMap;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-use crate::monitor::{Message, Plan, Settlement, SettlementStatus, Timestamps};
+use crate::monitor::{Lane, Message, Plan, Settlement, SettlementStatus, Timestamps};
 
 use self::lane::LaneEndpoints;
 use self::nonce::PendingNonceCache;
 use self::signer::ExecutorSigner;
+
+sol! {
+    #[allow(missing_docs)]
+    interface IERC20Balance {
+        function balanceOf(address owner) external view returns (uint256);
+    }
+}
+
+const NONCE_CACHE_TTL_MS: u64 = 1_000;
 
 /// Bag of side-effects the actor depends on. The trait carves the boundary
 /// between the actor's deterministic state machine and the live blockchain
@@ -142,6 +149,59 @@ pub async fn serve<B: ExecutorBackend>(
     serve_with_rate_ceiling(backend, plan_rx, settlement_tx, 0).await;
 }
 
+/// Bridge the coordinator broadcast bus into the executor actor.
+///
+/// The IPC layer publishes heterogeneous [`Message`] envelopes. This bridge
+/// filters only `Message::Plan` into the executor's private `mpsc` queue and
+/// reuses the same settlement broadcast bus for `Message::Settlement` output.
+pub async fn serve_message_bus<B: ExecutorBackend>(
+    backend: B,
+    mut inbound_rx: broadcast::Receiver<Message>,
+    settlement_tx: broadcast::Sender<Message>,
+    tx_rate_ceiling_per_min: u32,
+) {
+    let (plan_tx, plan_rx) = mpsc::channel::<Plan>(1024);
+    let executor = tokio::spawn(serve_with_rate_ceiling(
+        backend,
+        plan_rx,
+        settlement_tx,
+        tx_rate_ceiling_per_min,
+    ));
+
+    loop {
+        match inbound_rx.recv().await {
+            Ok(Message::Plan(plan)) => {
+                if let Err(err) = plan_tx.send(plan).await {
+                    warn!(
+                        target: "engine::executor",
+                        error = %err,
+                        "executor plan channel closed while routing bus message"
+                    );
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!(
+                    target: "engine::executor",
+                    skipped,
+                    "executor inbound bus lagged; continuing with latest messages"
+                );
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+
+    drop(plan_tx);
+    if let Err(err) = executor.await {
+        error!(
+            target: "engine::executor",
+            error = %err,
+            "executor actor task failed while draining message bus"
+        );
+    }
+}
+
 /// Drive the executor with a tx-rate ceiling (CLAUDE.md submitter
 /// kill-switch). A plan whose broadcast would exceed `tx_rate_ceiling_per_min`
 /// transactions per minute is blocked and emitted as `Dropped` rather than
@@ -234,19 +294,68 @@ async fn run_one_plan<B: ExecutorBackend>(
         return;
     }
 
+    // 1.5 Admission/provenance and lane-economics gate. Dry runs may omit
+    // admission artifacts because they never sign or broadcast.
+    if let Err(reason) = validate_submission_policy(&plan) {
+        warn!(
+            target: "engine::executor",
+            trace_id = %trace_id,
+            reason = %reason,
+            "plan rejected by submission policy"
+        );
+        emit(
+            settlement_tx,
+            mk(
+                SettlementStatus::Dropped,
+                None,
+                timestamps,
+                SettlementExtras {
+                    revert_reason: Some(reason),
+                    ..Default::default()
+                },
+            ),
+        );
+        return;
+    }
+
     // 2. Pre-flight. Always runs when dry_run=true (the whole point) or
     //    when require_preflight=true. Otherwise skipped.
     let preflight_required = plan.dry_run || plan.require_preflight;
     if preflight_required {
         match backend.preflight(&plan).await {
             Ok(delta) => {
+                timestamps.preflight_ns = Some(ts_now_ns());
+                if delta < plan.expected_balance_delta_floor {
+                    let err = PreflightError::DeltaBelowFloor {
+                        actual: delta,
+                        floor: plan.expected_balance_delta_floor,
+                    };
+                    warn!(
+                        target: "engine::executor",
+                        trace_id = %trace_id,
+                        error = %err,
+                        "preflight delta below declared floor"
+                    );
+                    emit(
+                        settlement_tx,
+                        mk(
+                            SettlementStatus::PreflightFailed,
+                            None,
+                            timestamps,
+                            SettlementExtras {
+                                revert_reason: Some(err.to_string()),
+                                ..Default::default()
+                            },
+                        ),
+                    );
+                    return;
+                }
                 debug!(
                     target: "engine::executor",
                     trace_id = %trace_id,
                     delta = ?delta,
                     "preflight passed"
                 );
-                timestamps.preflight_ns = Some(ts_now_ns());
             }
             Err(err) => {
                 warn!(
@@ -462,6 +571,48 @@ fn ts_now_ns() -> u64 {
         .unwrap_or(0)
 }
 
+fn validate_submission_policy(plan: &Plan) -> Result<(), String> {
+    if plan.dry_run {
+        return Ok(());
+    }
+
+    match plan.admission_hash {
+        Some(hash) if hash != B256::ZERO => {}
+        _ => {
+            return Err(
+                "missing or zero admission_hash; non-dry-run execution requires sealed provenance"
+                    .to_string(),
+            );
+        }
+    }
+
+    let timeboost_bid = plan.timeboost_bid_wei.unwrap_or(U256::ZERO);
+    match plan.submission_lane {
+        Lane::Timeboost => {
+            if timeboost_bid == U256::ZERO {
+                return Err(
+                    "timeboost_bid_wei must be positive when submission_lane=Timeboost".to_string(),
+                );
+            }
+            if !plan.expected_balance_delta_floor.is_positive() {
+                return Err("Timeboost bid requires a positive expected profit floor".to_string());
+            }
+            let profit_floor = plan.expected_balance_delta_floor.into_raw();
+            if timeboost_bid >= profit_floor {
+                return Err(format!(
+                    "timeboost_bid_wei {timeboost_bid} must stay below profit floor {profit_floor}"
+                ));
+            }
+        }
+        _ if timeboost_bid > U256::ZERO => {
+            return Err("timeboost_bid_wei is only valid on the Timeboost lane".to_string());
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // MockBackend — used by both the unit tests below and by future integration
 // harnesses that want to exercise the actor without a live RPC.
@@ -536,25 +687,16 @@ impl ExecutorBackend for MockBackend {
 ///   signing key in this process.
 ///
 /// Construction takes the default-lane RPC URL and (optionally) Kairos /
-/// Timeboost overrides. In Phase 1b only the default lane is wired through
-/// to `sign_and_submit` (one underlying provider); per-lane providers land
-/// in Phase 1c when Timeboost bidding is also activated.
+/// Timeboost overrides. Each configured lane gets its own provider so
+/// `Plan.submission_lane` is honored at submission and inclusion-watch time.
 #[derive(Clone)]
 pub struct LiveBackend {
     signer: ExecutorSigner,
-    /// Type-erased provider with the wallet attached. Submission goes
-    /// through this provider's `send_transaction` which auto-fills nonce +
-    /// chainId + gas via the wallet/recommended-fillers stack.
-    provider: DynProvider,
-    /// Endpoint URLs for each lane. Phase 1b uses only the default lane.
-    #[allow(dead_code)]
+    providers: LaneProviderSet,
     lane_endpoints: LaneEndpoints,
-    /// Pending-nonce cache. Currently unused by `LiveBackend` because Alloy's
-    /// `NonceFiller` handles it; retained here for Phase 1c when we drop the
-    /// recommended-fillers stack and manage nonce manually for sub-block
-    /// throughput.
-    #[allow(dead_code)]
     nonce: PendingNonceCache,
+    nonce_refresh: Arc<tokio::sync::Mutex<()>>,
+    submitted: Arc<DashMap<B256, SubmittedTxContext>>,
 }
 
 impl LiveBackend {
@@ -572,18 +714,15 @@ impl LiveBackend {
         lane_endpoints: LaneEndpoints,
     ) -> Result<Self, SubmitError> {
         let wallet = EthereumWallet::from(signer.inner().clone());
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect(&lane_endpoints.default_http)
-            .await
-            .map_err(|e| SubmitError::Rpc(format!("connect {}: {e}", lane_endpoints.default_http)))?
-            .erased();
+        let providers = LaneProviderSet::connect(wallet, &lane_endpoints).await?;
 
         Ok(Self {
             signer,
-            provider,
+            providers,
             lane_endpoints,
             nonce: PendingNonceCache::new(),
+            nonce_refresh: Arc::new(tokio::sync::Mutex::new(())),
+            submitted: Arc::new(DashMap::new()),
         })
     }
 
@@ -595,26 +734,214 @@ impl LiveBackend {
     /// Underlying provider — exposed for the integration test to query state
     /// directly. Production callers should not need this.
     pub fn provider(&self) -> &DynProvider {
-        &self.provider
+        self.providers.default()
     }
+
+    /// Configured lane endpoints.
+    pub fn lane_endpoints(&self) -> &LaneEndpoints {
+        &self.lane_endpoints
+    }
+
+    fn provider_for_lane(&self, lane: &Lane) -> &DynProvider {
+        self.providers.provider_for(lane)
+    }
+
+    async fn next_nonce(&self, provider: &DynProvider) -> Result<u64, SubmitError> {
+        if let Some(nonce) = self
+            .nonce
+            .take_and_increment_if_fresh(ts_now_ms(), NONCE_CACHE_TTL_MS)
+        {
+            return Ok(nonce);
+        }
+
+        let _guard = self.nonce_refresh.lock().await;
+        if let Some(nonce) = self
+            .nonce
+            .take_and_increment_if_fresh(ts_now_ms(), NONCE_CACHE_TTL_MS)
+        {
+            return Ok(nonce);
+        }
+
+        let refreshed_at = ts_now_ms();
+        let pending = provider
+            .get_transaction_count(self.signer.address())
+            .pending()
+            .await
+            .map_err(|e| SubmitError::Nonce(format!("get pending nonce: {e}")))?;
+        self.nonce.prime(pending, refreshed_at);
+        self.nonce
+            .take_and_increment_if_fresh(ts_now_ms(), NONCE_CACHE_TTL_MS)
+            .ok_or_else(|| SubmitError::Nonce("pending nonce cache did not prime".to_string()))
+    }
+}
+
+#[derive(Clone)]
+struct LaneProviderSet {
+    default: DynProvider,
+    private_relay: Option<DynProvider>,
+    kairos: Option<DynProvider>,
+    timeboost: Option<DynProvider>,
+}
+
+impl LaneProviderSet {
+    async fn connect(
+        wallet: EthereumWallet,
+        endpoints: &LaneEndpoints,
+    ) -> Result<Self, SubmitError> {
+        let default = connect_wallet_provider(&wallet, "default", &endpoints.default_http).await?;
+        let private_relay = connect_optional_wallet_provider(
+            &wallet,
+            "private_relay",
+            endpoints.private_relay_http.as_deref(),
+        )
+        .await?;
+        let kairos =
+            connect_optional_wallet_provider(&wallet, "kairos", endpoints.kairos_http.as_deref())
+                .await?;
+        let timeboost = connect_optional_wallet_provider(
+            &wallet,
+            "timeboost",
+            endpoints.timeboost_http.as_deref(),
+        )
+        .await?;
+
+        Ok(Self {
+            default,
+            private_relay,
+            kairos,
+            timeboost,
+        })
+    }
+
+    fn default(&self) -> &DynProvider {
+        &self.default
+    }
+
+    fn provider_for(&self, lane: &Lane) -> &DynProvider {
+        match lane {
+            Lane::Default => &self.default,
+            Lane::PrivateRelay => self.private_relay.as_ref().unwrap_or(&self.default),
+            Lane::Kairos => self.kairos.as_ref().unwrap_or(&self.default),
+            Lane::Timeboost => self.timeboost.as_ref().unwrap_or(&self.default),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SubmittedTxContext {
+    from: Address,
+    nonce: u64,
+    profit_token: Address,
+    lane: Lane,
+    pre_submit_balance: U256,
+}
+
+async fn connect_optional_wallet_provider(
+    wallet: &EthereumWallet,
+    lane_name: &str,
+    endpoint: Option<&str>,
+) -> Result<Option<DynProvider>, SubmitError> {
+    match endpoint {
+        Some(url) => Ok(Some(connect_wallet_provider(wallet, lane_name, url).await?)),
+        None => Ok(None),
+    }
+}
+
+async fn connect_wallet_provider(
+    wallet: &EthereumWallet,
+    lane_name: &str,
+    endpoint: &str,
+) -> Result<DynProvider, SubmitError> {
+    let provider = ProviderBuilder::new()
+        .wallet(wallet.clone())
+        .connect(endpoint)
+        .await
+        .map_err(|e| SubmitError::Rpc(format!("connect {lane_name} {endpoint}: {e}")))?;
+    Ok(provider.erased())
+}
+
+async fn read_profit_balance<P>(
+    provider: &P,
+    token: Address,
+    owner: Address,
+) -> Result<U256, String>
+where
+    P: Provider<Ethereum>,
+{
+    if token == Address::ZERO {
+        return provider
+            .get_balance(owner)
+            .await
+            .map_err(|e| format!("native balance {owner}: {e}"));
+    }
+
+    let calldata = IERC20Balance::balanceOfCall { owner }.abi_encode();
+    let tx = TransactionRequest::default()
+        .with_to(token)
+        .with_input(Bytes::from(calldata));
+    let out = provider
+        .call(tx)
+        .await
+        .map_err(|e| format!("balanceOf {token} owner {owner}: {e}"))?;
+    <IERC20Balance::balanceOfCall as SolCall>::abi_decode_returns(&out)
+        .map_err(|e| format!("balanceOf decode {token} owner {owner}: {e}"))
+}
+
+fn u256_diff_to_i256(post: U256, pre: U256) -> I256 {
+    if post >= pre {
+        I256::try_from(post - pre).unwrap_or(I256::MAX)
+    } else {
+        let signed = I256::try_from(pre - post).unwrap_or(I256::MAX);
+        signed.checked_neg().unwrap_or(I256::MIN + I256::ONE)
+    }
+}
+
+fn ts_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[async_trait::async_trait]
 impl ExecutorBackend for LiveBackend {
     async fn preflight(&self, plan: &Plan) -> Result<I256, PreflightError> {
-        preflight::check(&self.provider, plan, self.signer.address()).await
+        preflight::check(
+            self.provider_for_lane(&plan.submission_lane),
+            plan,
+            self.signer.address(),
+        )
+        .await
     }
 
     async fn sign_and_submit(&self, plan: &Plan) -> Result<B256, SubmitError> {
-        let tx = tx_builder::build_tx_request(plan);
-        // The wallet+recommended-fillers stack on `provider` auto-fills
-        // nonce, chainId, gas-estimate, and signs before broadcast.
-        let pending = self
-            .provider
-            .send_transaction(tx)
-            .await
-            .map_err(|e| SubmitError::Rpc(format!("send_transaction: {e}")))?;
-        Ok(*pending.tx_hash())
+        let provider = self.provider_for_lane(&plan.submission_lane);
+        let pre_submit_balance =
+            read_profit_balance(provider, plan.profit_token, self.signer.address())
+                .await
+                .map_err(|e| SubmitError::Rpc(format!("pre-submit balance: {e}")))?;
+        let nonce = self.next_nonce(provider).await?;
+        let tx = tx_builder::build_tx_request(plan).with_nonce(nonce);
+
+        let pending = match provider.send_transaction(tx).await {
+            Ok(pending) => pending,
+            Err(e) => {
+                self.nonce.clear();
+                return Err(SubmitError::Rpc(format!("send_transaction: {e}")));
+            }
+        };
+        let tx_hash = *pending.tx_hash();
+        self.submitted.insert(
+            tx_hash,
+            SubmittedTxContext {
+                from: self.signer.address(),
+                nonce,
+                profit_token: plan.profit_token,
+                lane: plan.submission_lane.clone(),
+                pre_submit_balance,
+            },
+        );
+        Ok(tx_hash)
     }
 
     async fn await_inclusion(
@@ -622,7 +949,42 @@ impl ExecutorBackend for LiveBackend {
         tx_hash: B256,
         deadline_ms: u64,
     ) -> Result<InclusionOutcome, InclusionError> {
-        inclusion::watch(&self.provider, tx_hash, deadline_ms).await
+        let context = self.submitted.get(&tx_hash).map(|entry| entry.clone());
+        let provider = context
+            .as_ref()
+            .map(|ctx| self.provider_for_lane(&ctx.lane))
+            .unwrap_or_else(|| self.provider_for_lane(&Lane::Default));
+
+        let mut outcome = match context.as_ref() {
+            Some(ctx) => {
+                inclusion::watch_with_replacement(
+                    provider,
+                    tx_hash,
+                    ctx.from,
+                    ctx.nonce,
+                    deadline_ms,
+                )
+                .await?
+            }
+            None => inclusion::watch(provider, tx_hash, deadline_ms).await?,
+        };
+
+        if let (Some(ctx), InclusionOutcome::Mined(receipt)) = (&context, &mut outcome) {
+            let post_balance = read_profit_balance(provider, ctx.profit_token, ctx.from)
+                .await
+                .map_err(|e| InclusionError::Rpc(format!("post-inclusion balance: {e}")))?;
+            receipt.realized_balance_delta =
+                u256_diff_to_i256(post_balance, ctx.pre_submit_balance);
+        }
+
+        if matches!(
+            outcome,
+            InclusionOutcome::Mined(_) | InclusionOutcome::Replaced | InclusionOutcome::Dropped
+        ) {
+            self.submitted.remove(&tx_hash);
+        }
+
+        Ok(outcome)
     }
 }
 
@@ -713,6 +1075,180 @@ mod tests {
         assert_eq!(settlements[0].tx_hash, settlements[1].tx_hash);
         assert!(settlements[1].block_number.is_some());
         assert!(settlements[1].timestamps.included_ns.is_some());
+    }
+
+    #[tokio::test]
+    async fn non_dry_run_without_admission_hash_is_dropped_before_preflight() {
+        let backend = MockBackend {
+            preflight_result: std::sync::Arc::new(|_| {
+                panic!("missing admission hash must be rejected before preflight")
+            }),
+            ..MockBackend::happy()
+        };
+        let mut plan = sample_plan();
+        plan.admission_hash = None;
+
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(backend, plan_rx, settlement_tx));
+
+        plan_tx.send(plan).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::Dropped);
+        assert!(settlements[0].tx_hash.is_none());
+        assert!(settlements[0]
+            .revert_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("admission_hash"));
+    }
+
+    #[tokio::test]
+    async fn dry_run_without_admission_hash_still_runs_preflight() {
+        let mut plan = sample_plan();
+        plan.dry_run = true;
+        plan.admission_hash = None;
+
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(MockBackend::happy(), plan_rx, settlement_tx));
+
+        plan_tx.send(plan).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::PreflightPassed);
+        assert!(settlements[0].dry_run);
+    }
+
+    #[tokio::test]
+    async fn timeboost_lane_requires_positive_bid_before_preflight() {
+        let backend = MockBackend {
+            preflight_result: std::sync::Arc::new(|_| {
+                panic!("timeboost bid validation must run before preflight")
+            }),
+            ..MockBackend::happy()
+        };
+        let mut plan = sample_plan();
+        plan.submission_lane = Lane::Timeboost;
+        plan.timeboost_bid_wei = None;
+
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(backend, plan_rx, settlement_tx));
+
+        plan_tx.send(plan).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::Dropped);
+        assert!(settlements[0]
+            .revert_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("timeboost_bid_wei"));
+    }
+
+    #[tokio::test]
+    async fn timeboost_bid_must_stay_below_profit_floor() {
+        let backend = MockBackend {
+            preflight_result: std::sync::Arc::new(|_| {
+                panic!("timeboost bid validation must run before preflight")
+            }),
+            ..MockBackend::happy()
+        };
+        let mut plan = sample_plan();
+        plan.submission_lane = Lane::Timeboost;
+        plan.timeboost_bid_wei = Some(U256::from(10_000_000_000_000_000_u64));
+
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(backend, plan_rx, settlement_tx));
+
+        plan_tx.send(plan).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::Dropped);
+        assert!(settlements[0]
+            .revert_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("profit floor"));
+    }
+
+    #[tokio::test]
+    async fn non_timeboost_lane_rejects_nonzero_timeboost_bid() {
+        let backend = MockBackend {
+            preflight_result: std::sync::Arc::new(|_| {
+                panic!("non-timeboost bid validation must run before preflight")
+            }),
+            ..MockBackend::happy()
+        };
+        let mut plan = sample_plan();
+        plan.submission_lane = Lane::Kairos;
+        plan.timeboost_bid_wei = Some(U256::ONE);
+
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(backend, plan_rx, settlement_tx));
+
+        plan_tx.send(plan).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::Dropped);
+        assert!(settlements[0]
+            .revert_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Timeboost lane"));
+    }
+
+    #[tokio::test]
+    async fn message_bus_routes_plan_envelopes_to_executor_and_mirrors_settlements() {
+        let (inbound_tx, inbound_rx) = broadcast::channel::<Message>(64);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve_message_bus(
+            MockBackend::happy(),
+            inbound_rx,
+            settlement_tx,
+            0,
+        ));
+
+        inbound_tx.send(Message::Heartbeat { ts_ms: 1 }).unwrap();
+        inbound_tx.send(Message::Plan(sample_plan())).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(inbound_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 2, "expected Submitted + Included");
+        assert_eq!(settlements[0].status, SettlementStatus::Submitted);
+        assert_eq!(settlements[1].status, SettlementStatus::Included);
     }
 
     #[tokio::test]
@@ -815,6 +1351,34 @@ mod tests {
             .contains("below floor"));
         assert!(settlements[0].timestamps.preflight_ns.is_some());
         assert!(settlements[0].timestamps.broadcast_ns.is_none());
+    }
+
+    #[tokio::test]
+    async fn below_floor_preflight_delta_is_rejected_by_actor() {
+        let backend = MockBackend {
+            preflight_result: std::sync::Arc::new(|p| {
+                Ok(p.expected_balance_delta_floor - I256::ONE)
+            }),
+            ..MockBackend::happy()
+        };
+        let (plan_tx, plan_rx) = mpsc::channel::<Plan>(8);
+        let (settlement_tx, mut settlement_rx) = broadcast::channel::<Message>(64);
+        let actor = tokio::spawn(serve(backend, plan_rx, settlement_tx));
+
+        plan_tx.send(sample_plan()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let settlements = collect_settlements(&mut settlement_rx).await;
+
+        drop(plan_tx);
+        actor.await.unwrap();
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].status, SettlementStatus::PreflightFailed);
+        assert!(settlements[0]
+            .revert_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("below floor"));
     }
 
     #[tokio::test]

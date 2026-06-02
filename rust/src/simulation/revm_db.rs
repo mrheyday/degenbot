@@ -6,9 +6,10 @@
 //! counters for stale-read detection.
 //!
 //! This module deliberately does not infer protocol storage slots. Pool-specific
-//! reserve/tick storage writes require explicit slot manifests per adapter; until
-//! those exist, monitor updates are recorded as versioned snapshots and REVM
-//! account/storage misses fall back to the pinned AlloyDB provider.
+//! reserve/tick storage writes are accepted only through explicit adapter-owned
+//! slot manifests; monitor updates without manifests are recorded as versioned
+//! snapshots and REVM account/storage misses fall back to the pinned AlloyDB
+//! provider.
 
 use alloy::primitives::{Address, Bytes, U256};
 use alloy_network::Ethereum;
@@ -16,10 +17,14 @@ use alloy_provider::{DynProvider, Provider, ProviderBuilder};
 use dashmap::DashMap;
 use eyre::{eyre, ContextCompat, Result, WrapErr};
 use parking_lot::RwLock;
+#[cfg(test)]
+use revm::state::AccountInfo;
 use revm::{
     context::result::{ExecutionResult, Output},
     database::{AlloyDB, BlockId, CacheDB, WrapDatabaseAsync},
+    database_interface::Database,
     primitives::TxKind,
+    primitives::{StorageKey, StorageValue},
     Context, ExecuteEvm, MainBuilder, MainContext,
 };
 
@@ -36,6 +41,14 @@ pub struct RevmDb {
     inner: RwLock<RevmCacheDb>,
     epochs: DashMap<Address, u64>,
     pool_states: DashMap<Address, PoolState>,
+    storage_overlays: DashMap<Address, Vec<StorageSlotOverlay>>,
+}
+
+/// One audited storage-slot mutation supplied by a protocol adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageSlotOverlay {
+    pub slot: StorageKey,
+    pub value: StorageValue,
 }
 
 impl RevmDb {
@@ -80,6 +93,7 @@ impl RevmDb {
             inner: RwLock::new(cache),
             epochs,
             pool_states: DashMap::new(),
+            storage_overlays: DashMap::new(),
         })
     }
 
@@ -129,9 +143,10 @@ impl RevmDb {
 
     /// Apply a fresh on-chain state to the local epoch map.
     ///
-    /// This does not mutate protocol storage. Storage writes will be added only
-    /// from audited per-protocol slot manifests; for now, the state cache is the
-    /// deterministic freshness witness consumed by strategy logic.
+    /// This does not infer protocol storage. Use
+    /// [`Self::apply_pool_storage_overlay`] for audited slot-manifest writes;
+    /// the state cache remains the deterministic freshness witness consumed by
+    /// strategy logic.
     pub fn apply_pool_state(&self, state: &PoolState) -> Result<()> {
         self.pool_states.insert(state.address, state.clone());
         self.epochs
@@ -139,6 +154,57 @@ impl RevmDb {
             .and_modify(|epoch| *epoch = epoch.saturating_add(1))
             .or_insert(1);
         Ok(())
+    }
+
+    /// Apply audited storage-slot overlays to the REVM cache for `pool`.
+    ///
+    /// Callers must derive `(slot, value)` from protocol-specific manifests.
+    /// The simulation layer only applies explicit writes; it does not infer
+    /// layout from reserve or tick snapshots.
+    pub fn apply_pool_storage_overlay<I>(&self, pool: Address, slots: I) -> Result<usize>
+    where
+        I: IntoIterator<Item = (StorageKey, StorageValue)>,
+    {
+        let slots: Vec<StorageSlotOverlay> = slots
+            .into_iter()
+            .map(|(slot, value)| StorageSlotOverlay { slot, value })
+            .collect();
+        if slots.is_empty() {
+            return Ok(0);
+        }
+
+        {
+            let mut db = self.inner.write();
+            for overlay in &slots {
+                db.insert_account_storage(pool, overlay.slot, overlay.value)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to apply storage overlay for pool {pool:?} slot {:?}",
+                            overlay.slot
+                        )
+                    })?;
+            }
+        }
+
+        self.storage_overlays
+            .entry(pool)
+            .and_modify(|existing| existing.extend(slots.iter().copied()))
+            .or_insert_with(|| slots.clone());
+        self.epochs
+            .entry(pool)
+            .and_modify(|epoch| *epoch = epoch.saturating_add(1))
+            .or_insert(1);
+        Ok(slots.len())
+    }
+
+    /// Read a storage value through the REVM cache.
+    ///
+    /// This is primarily a verification hook for manifest overlays. Cache
+    /// misses still delegate to the pinned AlloyDB backend.
+    pub fn cached_storage_value(&self, pool: Address, slot: StorageKey) -> Result<StorageValue> {
+        let mut db = self.inner.write();
+        db.storage(pool, slot)
+            .wrap_err_with(|| format!("failed to read cached storage {pool:?}[{slot:?}]"))
     }
 
     /// Return the latest observed pool state, if the monitor has supplied one.
@@ -165,7 +231,15 @@ impl RevmDb {
             inner: RwLock::new(CacheDB::new(wrapped)),
             epochs: DashMap::new(),
             pool_states: DashMap::new(),
+            storage_overlays: DashMap::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_test_account(&self, address: Address) {
+        self.inner
+            .write()
+            .insert_account_info(address, AccountInfo::default());
     }
 }
 
@@ -205,6 +279,24 @@ mod tests {
         assert_eq!(db.epoch(pool), 2);
         assert_eq!(db.pool_state(pool).expect("pool state").block_number, 11);
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn audited_storage_overlay_mutates_cached_revm_storage_and_epoch() -> Result<()> {
+        let db = RevmDb::test_instance();
+        let pool = address!("0000000000000000000000000000000000000001");
+        let slot = U256::from(1_u64);
+        let value = U256::from(42_u64);
+
+        db.seed_test_account(pool);
+        assert_eq!(db.epoch(pool), 0);
+
+        let written = db.apply_pool_storage_overlay(pool, [(slot, value)])?;
+
+        assert_eq!(written, 1);
+        assert_eq!(db.epoch(pool), 1);
+        assert_eq!(db.cached_storage_value(pool, slot)?, value);
         Ok(())
     }
 

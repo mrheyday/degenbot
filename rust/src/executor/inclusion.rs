@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use alloy::primitives::{B256, I256, U256};
+use alloy::primitives::{Address, B256, I256, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::eth::TransactionReceipt;
 use futures::StreamExt;
@@ -35,6 +35,41 @@ pub async fn watch<P: Provider>(
     provider: &P,
     tx_hash: B256,
     deadline_ms: u64,
+) -> Result<InclusionOutcome, InclusionError> {
+    watch_internal(provider, tx_hash, deadline_ms, None).await
+}
+
+/// Watch for `tx_hash` with signer/nonce context. If the receipt never
+/// appears but the signer account's mined nonce advances past `nonce`, the
+/// transaction was replaced by another mined transaction from the same
+/// account.
+pub async fn watch_with_replacement<P: Provider>(
+    provider: &P,
+    tx_hash: B256,
+    from: Address,
+    nonce: u64,
+    deadline_ms: u64,
+) -> Result<InclusionOutcome, InclusionError> {
+    watch_internal(
+        provider,
+        tx_hash,
+        deadline_ms,
+        Some(ReplacementProbe { from, nonce }),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReplacementProbe {
+    from: Address,
+    nonce: u64,
+}
+
+async fn watch_internal<P: Provider>(
+    provider: &P,
+    tx_hash: B256,
+    deadline_ms: u64,
+    replacement: Option<ReplacementProbe>,
 ) -> Result<InclusionOutcome, InclusionError> {
     let poll = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS);
 
@@ -59,6 +94,9 @@ pub async fn watch<P: Provider>(
             if let Some(outcome) = check_receipt(provider, tx_hash).await? {
                 return Ok(outcome);
             }
+            if let Some(outcome) = check_replacement(provider, replacement).await? {
+                return Ok(outcome);
+            }
             // Race: new head OR poll timeout OR deadline.
             tokio::select! {
                 _ = stream.next() => {}
@@ -76,8 +114,26 @@ pub async fn watch<P: Provider>(
             if let Some(outcome) = check_receipt(provider, tx_hash).await? {
                 return Ok(outcome);
             }
+            if let Some(outcome) = check_replacement(provider, replacement).await? {
+                return Ok(outcome);
+            }
             tokio::time::sleep(poll).await;
         }
+    }
+}
+
+async fn check_replacement<P: Provider>(
+    provider: &P,
+    replacement: Option<ReplacementProbe>,
+) -> Result<Option<InclusionOutcome>, InclusionError> {
+    let Some(probe) = replacement else {
+        return Ok(None);
+    };
+
+    match provider.get_transaction_count(probe.from).await {
+        Ok(mined_nonce) if mined_nonce > probe.nonce => Ok(Some(InclusionOutcome::Replaced)),
+        Ok(_) => Ok(None),
+        Err(e) => Err(InclusionError::Rpc(format!("get_transaction_count: {e}"))),
     }
 }
 
@@ -122,19 +178,14 @@ fn decode_receipt(receipt: TransactionReceipt) -> InclusionReceipt {
         block_number,
         gas_used,
         effective_gas_price_wei,
-        // Phase 1b: realized balance delta is computed at the strategist
-        // level via post-Settlement reconciliation against the profit_token
-        // balance. We leave it at zero here; the realized-vs-floor metric
-        // tracks divergence between preflight expectation and on-chain
-        // reality.
+        // LiveBackend overwrites this with a pre/post profit-token balance
+        // delta after inclusion when submitted-tx context is available.
         realized_balance_delta: I256::ZERO,
         status,
         revert_reason: if status {
             None
         } else {
-            // Phase 1c: decode revert reason from the receipt's revertReason
-            // field (when supported by the node) or by re-running eth_call.
-            Some("reverted (decoded reason TBD in Phase 1c)".to_string())
+            Some("reverted; receipt did not expose revert data".to_string())
         },
     }
 }

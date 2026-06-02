@@ -176,13 +176,17 @@ class CompetitionSubmitter:
             "sellTokenIndex": cls._field(trade, "sell_token_index", "sellTokenIndex", default=0),
             "buyTokenIndex": cls._field(trade, "buy_token_index", "buyTokenIndex", default=0),
             "receiver": cls._field(trade, "receiver", default=ZERO_ADDRESS),
-            "sellAmount": cls._field(trade, "sell_amount", "sellAmount", default=0),
-            "buyAmount": cls._field(trade, "buy_amount", "buyAmount", default=0),
+            "sellAmount": cls._uint_string_field(trade, "sell_amount", "sellAmount"),
+            "buyAmount": cls._uint_string_field(trade, "buy_amount", "buyAmount"),
             "validTo": cls._field(trade, "valid_to", "validTo", default=0),
             "appData": cls._field(trade, "app_data", "appData", default=ZERO_BYTES32),
-            "feeAmount": cls._field(trade, "fee_amount", "feeAmount", default=0),
+            "feeAmount": cls._uint_string_field(trade, "fee_amount", "feeAmount"),
             "flags": cls._field(trade, "flags", default=0),
-            "executedAmount": cls._field(trade, "executed_amount", "executedAmount", default=0),
+            "executedAmount": cls._uint_string_field(
+                trade,
+                "executed_amount",
+                "executedAmount",
+            ),
             "signature": cls._field(trade, "signature", default="0x"),
         }
 
@@ -217,3 +221,7 @@ class CompetitionSubmitter:
                     return extra[name]
 
         return default
+
+    @classmethod
+    def _uint_string_field(cls, obj: Any, *names: str) -> str:
+        return str(cls._field(obj, *names, default=0))

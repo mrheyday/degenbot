@@ -9,7 +9,8 @@ plugins:
   - name: arbitrum
 # Default network for ops scripts. Override on the command line:
 #   ape run ... --network arbitrum:mainnet:alchemy
-# RPC URL is supplied via env var (Alchemy plugin reads WEB3_ALCHEMY_API_KEY).
+# RPC URL is supplied via env var. Degenbot helpers read ALCHEMY_API_KEY;
+# Ape's Alchemy plugin reads WEB3_ALCHEMY_API_KEY.
 arbitrum:
   mainnet:
     default_provider: alchemy

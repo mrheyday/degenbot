@@ -17,6 +17,7 @@
 //! - [`provider_py`] - `PyO3` bindings for sync provider
 //! - [`async_provider`] - Async Ethereum provider wrapper
 //! - [`contract`] - Smart contract interface with ABI encoding/decoding
+//! - [`contract_bindings`] - Generated parent-contract Alloy bindings
 //! - [`contract_py`] - `PyO3` bindings for contract
 //! - [`execution`] - Executor calldata builders for the locked on-chain entrypoints
 //! - [`execution_py`] - `PyO3` bindings for executor calldata builders
@@ -28,6 +29,7 @@
 //! - [`async_contract`] - Async contract wrapper with batch calls
 //! - [`signature_parser`] - Robust function signature parsing
 //! - [`runtime`] - Shared Tokio runtime singleton
+//! - [`types`] - Canonical Rust wire/ABI mirrors used by the solver engine
 //! - [`hex_utils`] - Pure-Rust hex encoding/decoding (no `PyO3` dependency)
 //! - [`py_converters`] - Python object converters for RPC types (block/tx/log dicts, JSON-to-Python with `HexBytes`)
 //!
@@ -44,6 +46,7 @@ pub mod async_contract;
 pub mod async_provider;
 
 pub mod contract;
+pub mod contract_bindings;
 pub mod contract_py;
 pub mod decision;
 pub mod errors;
@@ -68,6 +71,7 @@ pub mod simulation;
 pub mod simulation_py;
 pub mod tick_math;
 pub mod tick_math_py;
+pub mod types;
 pub mod utils;
 
 // Re-export commonly used items at the crate root

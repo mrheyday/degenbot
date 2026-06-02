@@ -49,6 +49,7 @@ hotpath = { version = "0.16.1", optional = true }
 # mev-arbitrum forked crates, ported to alloy 2.x / revm 38 (see the
 # mev-arbitrum workspace Cargo.toml). Available to the degenbot Rust
 # extension for CoW solver-engine DTOs and swap-path route storage.
+degenbot_contract_bindings = { path = "crates/contract_bindings" }
 cowprotocol-solvers-dto-alloy = { git = "https://github.com/mrheyday/cowprotocol-solvers-dto-alloy", branch = "main" }
 swap-path = { path = "../../swap-path-alloy2" }
 revm = { version = "40", features = ["std", "serde-json", "alloydb"] }

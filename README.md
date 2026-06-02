@@ -634,10 +634,27 @@ Commands accepting `--to-block` support the following formats:
 |----------|--------|-------------|
 | `DEGENBOT_DEBUG` | `1`, `true`, `yes` | Enable debug-level logging output |
 | `DEGENBOT_DEBUG_FUNCTION_CALLS` | `1`, `true`, `yes` | Enable function call trace logging |
+| `ALCHEMY_API_KEY` | Alchemy key | Default key for generated HTTP RPC, WSS, and supported Bundler/Gas Manager endpoints |
+| `WEB3_ALCHEMY_API_KEY` | Alchemy key | Ape-compatible fallback when `ALCHEMY_API_KEY` is unset |
+| `ALCHEMY_CHAIN_<chain_id>_NETWORK` | Alchemy network identifier | Override/add the Alchemy network slug for a chain, e.g. `ALCHEMY_CHAIN_42161_NETWORK=arb-mainnet` |
+| `ALCHEMY_NETWORK_<chain_id>` | Alchemy network identifier | Legacy-compatible override for the same network slug |
+| `ALCHEMY_CHAIN_<chain_id>_ACCOUNT_ABSTRACTION` | `1`, `true`, `yes`, `on` | Enable Bundler/Gas Manager endpoint construction for a newly supported chain after confirming Alchemy AA support |
 
 ```bash
 DEGENBOT_DEBUG=1 python my_script.py
 ```
+
+If a chain is missing from the `[rpc]` table, degenbot falls back to Alchemy using
+`ALCHEMY_API_KEY` or `WEB3_ALCHEMY_API_KEY`. The same resolved key and network identifier are used
+for HTTP RPC, WebSocket RPC, Bundler API, and Gas Manager API endpoints through
+`degenbot.provider.alchemy.alchemy_endpoint_bundle(chain_id)`. Check
+`degenbot.provider.alchemy.alchemy_account_abstraction_supported(chain_id)` before routing Bundler
+or Gas Manager calls; direct Bundler/Gas Manager endpoint construction is fail-closed for node-only
+chains, and endpoint bundles expose `None` for unsupported AA endpoint fields. For newly supported
+Alchemy AA chains, set
+`ALCHEMY_CHAIN_<chain_id>_ACCOUNT_ABSTRACTION=true` after confirming support.
+Use `degenbot.cli.utils.get_rpc_endpoint_from_config(chain_id=..., service=...)` when CLI code needs
+the same fallback behavior for HTTP, WSS, Bundler, or Gas Manager endpoints.
 
 ### Configuration File
 
@@ -670,6 +687,24 @@ Degenbot includes a high-performance Rust extension module (`degenbot_rs`) that 
 | [thiserror](https://github.com/dtolnay/thiserror) | Derivative error types |
 | [serde](https://serde.rs) | Serialization/deserialization |
 | [lru](https://github.com/jaemk/lru) | LRU cache implementation |
+
+### Parent Contract Bindings
+
+For MEV-Arbitrum integration, degenbot keeps generated Alloy/Rust bindings for selected parent
+`contracts/` executor, paymaster, flash-loan, callback, settlement, and routing surfaces under
+`rust/crates/contract_bindings`.
+
+```sh
+just gen-contract-bindings
+just check-contract-bindings
+```
+
+The generator builds the parent Foundry `src` tree into temporary artifacts, pins generated bindings
+to Alloy `2.0.5`, and excludes tests, scripts, fuzz corpus files, and unrelated contract artifacts.
+The Rust extension exposes the checked-in crate through `degenbot_rs::contract_bindings` and keeps
+selector parity tests against the hand-maintained hot-path mirrors in `degenbot_rs::types`.
+Stylus consumes the generated crate only from `native-test` parity tests; deployable WASM crates do
+not depend on the host-side Alloy binding graph.
 
 ### Available Functions
 

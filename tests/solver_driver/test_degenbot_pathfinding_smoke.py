@@ -30,6 +30,7 @@ POOL_WETH_USDC = "0x0000000000000000000000000000000000001001"
 POOL_USDC_WETH = "0x0000000000000000000000000000000000001002"
 POOL_WETH_USDT = "0x0000000000000000000000000000000000001003"
 POOL_USDT_WETH = "0x0000000000000000000000000000000000001004"
+V4_POOL_HASH = "0x" + "ab" * 32
 
 
 def _purge_degenbot_modules() -> None:
@@ -38,6 +39,35 @@ def _purge_degenbot_modules() -> None:
     for module_name in tuple(sys.modules):
         if module_name == "degenbot" or module_name.startswith("degenbot."):
             del sys.modules[module_name]
+
+
+def test_path_hash_is_stable_and_order_sensitive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _purge_degenbot_modules()
+
+    pathfinding_module = importlib.import_module("degenbot.pathfinding")
+    pools_module = importlib.import_module("degenbot.database.models.pools")
+
+    path_step = pathfinding_module.PathStep
+    deduplicate_paths = pathfinding_module.deduplicate_paths
+    path_hash = pathfinding_module.path_hash
+    uniswap_v2_pool_table = pools_module.UniswapV2PoolTable
+    uniswap_v4_pool_table = pools_module.UniswapV4PoolTable
+
+    path = (
+        path_step(address=POOL_WETH_USDC, type=uniswap_v2_pool_table),
+        path_step(address=POOL_USDC_WETH, type=uniswap_v4_pool_table, hash=V4_POOL_HASH),
+    )
+    same_path = tuple(path)
+    reverse_path = tuple(reversed(path))
+
+    assert path_hash(path) == path_hash(same_path)
+    assert path_hash(path) != path_hash(reverse_path)
+    assert len(path_hash(path)) == 64
+    assert tuple(deduplicate_paths((path, same_path, reverse_path))) == (path, reverse_path)
 
 
 def test_degenbot_find_paths_generates_arbitrum_two_pool_cycles(

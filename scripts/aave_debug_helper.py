@@ -13,12 +13,37 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import TypedDict, cast
 
 from sqlalchemy.orm import joinedload
 
 from degenbot.database import db_session
 from degenbot.database.models.aave import AaveV3Asset, AaveV3Contract, AaveV3Market
+from degenbot.exceptions import DegenbotValueError
 from degenbot.logging import logger
+from degenbot.provider.alchemy import AlchemyService, alchemy_endpoint_url
+
+
+class AaveMarketDebugInfo(TypedDict):
+    id: int
+    name: str
+    chain_id: int
+
+
+class AaveAssetDebugInfo(TypedDict):
+    underlying_symbol: str
+    a_token_address: str | None
+    a_token_revision: int | None
+    v_token_address: str | None
+    v_token_revision: int | None
+
+
+class AaveDebugInfo(TypedDict):
+    next_issue_id: str
+    market: AaveMarketDebugInfo | None
+    rpc_url: str | None
+    pool_revision: int | None
+    assets: list[AaveAssetDebugInfo]
 
 
 def get_next_issue_id(debug_report_path: Path = Path("debug/aave")) -> str:
@@ -63,41 +88,44 @@ def get_rpc_url(chain_id: int, config_path: Path = Path(".opencode/rpc-config.js
     Returns:
         RPC URL string or None if not found
     """
-    if not config_path.exists():
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            config = cast("dict[str, str]", json.load(f))
+
+        # Try chain_id as string first, then common names
+        chain_key = str(chain_id)
+        if chain_key in config:
+            return config[chain_key]
+
+        # Try common chain names
+        chain_names: dict[int, list[str]] = {
+            1: ["ethereum", "mainnet"],
+            137: ["polygon"],
+            42161: ["arbitrum"],
+            10: ["optimism"],
+            43114: ["avalanche"],
+            250: ["fantom"],
+            56: ["bsc", "bnb", "binance"],
+            8453: ["base"],
+            324: ["zksync", "zksync_era"],
+            59144: ["linea"],
+            1088: ["metis"],
+            100: ["gnosis", "xdai"],
+        }
+
+        for name in chain_names.get(chain_id, []):
+            if name in config:
+                return config[name]
+
+    try:
+        return alchemy_endpoint_url(chain_id, service=AlchemyService.HTTP_RPC)
+    except DegenbotValueError:
         return None
-
-    with config_path.open(encoding="utf-8") as f:
-        config = json.load(f)
-
-    # Try chain_id as string first, then common names
-    chain_key = str(chain_id)
-    if chain_key in config:
-        return config[chain_key]
-
-    # Try common chain names
-    chain_names = {
-        1: ["ethereum", "mainnet"],
-        137: ["polygon"],
-        42161: ["arbitrum"],
-        10: ["optimism"],
-        43114: ["avalanche"],
-        250: ["fantom"],
-        56: ["bsc", "bnb", "binance"],
-        8453: ["base"],
-        324: ["zksync", "zksync_era"],
-        59144: ["linea"],
-        1088: ["metis"],
-        100: ["gnosis", "xdai"],
-    }
-
-    for name in chain_names.get(chain_id, []):
-        if name in config:
-            return config[name]
 
     return None
 
 
-def get_aave_debug_info(market_id: int) -> dict:
+def get_aave_debug_info(market_id: int) -> AaveDebugInfo:
     """
     Gather comprehensive debug information for an Aave market investigation.
 
@@ -113,7 +141,7 @@ def get_aave_debug_info(market_id: int) -> dict:
         - assets: List of assets with their token revisions
     """
 
-    result = {
+    result: AaveDebugInfo = {
         "next_issue_id": get_next_issue_id(),
         "market": None,
         "rpc_url": None,
@@ -161,10 +189,13 @@ def get_aave_debug_info(market_id: int) -> dict:
         )
 
         for asset in assets:
-            asset_info = {
-                "underlying_symbol": (
-                    asset.underlying_token.symbol if asset.underlying_token else "Unknown"
-                ),
+            underlying_symbol = (
+                asset.underlying_token.symbol
+                if asset.underlying_token and asset.underlying_token.symbol
+                else "Unknown"
+            )
+            asset_info: AaveAssetDebugInfo = {
+                "underlying_symbol": underlying_symbol,
                 "a_token_address": (str(asset.a_token.address) if asset.a_token else None),
                 "a_token_revision": asset.a_token_revision,
                 "v_token_address": (str(asset.v_token.address) if asset.v_token else None),
@@ -175,15 +206,15 @@ def get_aave_debug_info(market_id: int) -> dict:
     return result
 
 
-def format_output(data: dict) -> str:
+def format_output(data: AaveDebugInfo) -> str:
     """Format the debug info as a readable string."""
-    lines = []
+    lines: list[str] = []
     lines.extend((f"Next Issue ID: {data['next_issue_id']}", ""))
 
-    if data["market"]:
+    if market := data["market"]:
         lines.extend((
-            f"Market: {data['market']['name']} (ID: {data['market']['id']})",
-            f"Chain ID: {data['market']['chain_id']}",
+            f"Market: {market['name']} (ID: {market['id']})",
+            f"Chain ID: {market['chain_id']}",
         ))
     lines.extend((
         f"RPC URL: {data['rpc_url'] or 'Not configured'}",

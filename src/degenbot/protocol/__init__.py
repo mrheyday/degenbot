@@ -1,15 +1,19 @@
 """Compatibility package for the former solver-driver protocol namespace."""
 
 from degenbot.protocol.models import (
+    Allowance,
+    Asset,
     Auction,
     BigIntStr,
     BuyTokenBalance,
+    Call,
     CompetitionSolution,
     DriverError,
     DriverQuoteRequest,
     DriverQuoteResponse,
     Interaction,
     JitOrder,
+    JitTradeOrder,
     Order,
     OrderClass,
     OrderKind,
@@ -24,15 +28,19 @@ from degenbot.protocol.models import (
 )
 
 __all__ = [
+    "Allowance",
+    "Asset",
     "Auction",
     "BigIntStr",
     "BuyTokenBalance",
+    "Call",
     "CompetitionSolution",
     "DriverError",
     "DriverQuoteRequest",
     "DriverQuoteResponse",
     "Interaction",
     "JitOrder",
+    "JitTradeOrder",
     "Order",
     "OrderClass",
     "OrderKind",

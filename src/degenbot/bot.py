@@ -9,7 +9,7 @@ from degenbot.checksum_cache import get_checksum_address
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.exceptions.base import DegenbotError
 from degenbot.logging import logger
-from degenbot.pathfinding import find_paths
+from degenbot.pathfinding import deduplicate_paths, find_paths
 from degenbot.registry import pool_registry
 
 if TYPE_CHECKING:
@@ -118,7 +118,6 @@ class DegenbotBot:
             token = token_manager.get_erc20token(get_checksum_address(input_token))
 
         strategy_list: list[ArbitrageStrategy] = []
-        seen: set[tuple[str, ...]] = set()
         find_paths_kwargs: dict[str, Any] = {
             "chain_id": chain_id,
             "start_tokens": [token.address],
@@ -129,9 +128,8 @@ class DegenbotBot:
         if pool_types is not None:
             find_paths_kwargs["pool_types"] = pool_types
 
-        for path in find_paths(**find_paths_kwargs):
+        for path in deduplicate_paths(find_paths(**find_paths_kwargs)):
             pools: list[Any] = []
-            path_key: list[str] = []
 
             for step in path:
                 pool = pool_registry.get(
@@ -144,15 +142,9 @@ class DegenbotBot:
                     pools = []
                     break
                 pools.append(pool)
-                path_key.append(f"{step.address.lower()}:{step.hash or ''}")
 
             if not pools:
                 continue
-
-            dedupe_key = tuple(path_key)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
 
             strategy_id = " -> ".join(pool.name for pool in pools)
             strategy: ArbitrageStrategy

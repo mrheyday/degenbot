@@ -35,6 +35,14 @@ build-rust-debug:
 build-rust-extension:
     env -u RUST_LOG uv run --no-project maturin build --release --manifest-path rust/Cargo.toml
 
+# Generate Alloy/Rust bindings from the parent mev-arbitrum Foundry contracts
+gen-contract-bindings contracts_root="../../contracts" bindings_path="rust/crates/contract_bindings":
+    env -u RUST_LOG uv run python -m degenbot.devtools.foundry_bindings generate --contracts-root "{{justfile_directory()}}/{{contracts_root}}" --bindings-path "{{justfile_directory()}}/{{bindings_path}}"
+
+# Check generated contract bindings are in sync with parent Foundry artifacts
+check-contract-bindings contracts_root="../../contracts" bindings_path="rust/crates/contract_bindings":
+    env -u RUST_LOG uv run python -m degenbot.devtools.foundry_bindings check --contracts-root "{{justfile_directory()}}/{{contracts_root}}" --bindings-path "{{justfile_directory()}}/{{bindings_path}}"
+
 # ========== Python Development ==========
 
 # Build and install Python extension in development mode

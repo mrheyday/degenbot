@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from degenbot.protocol import (
     Auction,
+    Call,
     Order,
     OrderClass,
     OrderKind,
@@ -171,6 +172,68 @@ class TestSolveResponse:
         s = wire["solutions"][0]
         assert s["gas"] == 500_000
         assert s["maxFeePerGas"] == "30000000000"
+
+    def test_solution_serializes_typed_interactions_and_trades(self) -> None:
+        sol = Solution.model_validate(
+            {
+                "id": 7,
+                "prices": {"0x" + "a" * 40: "1000000"},
+                "trades": [
+                    {
+                        "kind": "fulfillment",
+                        "order": "0x" + "b" * 56,
+                        "executedAmount": "1000000",
+                        "fee": "1000",
+                    }
+                ],
+                "interactions": [
+                    {
+                        "kind": "custom",
+                        "internalize": False,
+                        "target": "0x" + "c" * 40,
+                        "value": "0",
+                        "callData": "0x1234",
+                        "allowances": [
+                            {
+                                "token": "0x" + "d" * 40,
+                                "spender": "0x" + "e" * 40,
+                                "amount": "1000000",
+                            }
+                        ],
+                        "inputs": [{"token": "0x" + "d" * 40, "amount": "1000000"}],
+                        "outputs": [{"token": "0x" + "a" * 40, "amount": "999000"}],
+                    },
+                    {
+                        "kind": "liquidity",
+                        "internalize": True,
+                        "id": "pool-1",
+                        "inputToken": "0x" + "d" * 40,
+                        "outputToken": "0x" + "a" * 40,
+                        "inputAmount": "1000000",
+                        "outputAmount": "999000",
+                    },
+                ],
+                "preInteractions": [
+                    {
+                        "target": "0x" + "f" * 40,
+                        "value": "0",
+                        "callData": "0x",
+                    }
+                ],
+            },
+        )
+
+        assert isinstance(sol.pre_interactions[0], Call)
+        assert sol.trades[0].executed_amount == 1_000_000
+        assert sol.interactions[0].allowances[0].amount == 1_000_000
+        assert sol.interactions[1].output_amount == 999_000
+
+        wire = SolveResponse(solutions=[sol]).model_dump_wire()
+        solution = wire["solutions"][0]
+        assert solution["trades"][0]["executedAmount"] == "1000000"
+        assert solution["interactions"][0]["allowances"][0]["amount"] == "1000000"
+        assert solution["interactions"][1]["outputAmount"] == "999000"
+        assert solution["preInteractions"][0]["callData"] == "0x"
 
 
 # -- helpers ---------------------------------------------------------------

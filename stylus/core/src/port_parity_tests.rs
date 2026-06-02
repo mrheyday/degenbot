@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloy_primitives::{address, hex};
+use alloy_sol_types::SolCall;
 use stylus_sdk::alloy_primitives::{FixedBytes, U256, keccak256};
 
 use crate::{
@@ -1440,6 +1441,37 @@ fn interface_surfaces_executor_pathfinder_and_registry_selectors_match_solidity(
     assert_eq!(
         [0x42, 0xdd, 0x51, 0x9c],
         interface_surfaces::REPUTATION_GET_CLIENTS
+    );
+}
+
+#[test]
+fn generated_parent_bindings_match_stylus_executor_selectors() {
+    use degenbot_contract_bindings::executor::Executor;
+    use degenbot_contract_bindings::multi_hop_caller::MultiHopCaller;
+
+    assert_eq!(
+        Executor::executeNativeArbCall::SELECTOR,
+        interface_surfaces::EXECUTE_NATIVE_ARB
+    );
+    assert_eq!(
+        Executor::matchInternalCall::SELECTOR,
+        interface_surfaces::MATCH_INTERNAL
+    );
+    assert_eq!(
+        Executor::composeFourLegCall::SELECTOR,
+        interface_surfaces::COMPOSE_FOUR_LEG
+    );
+    assert_eq!(
+        Executor::triggerCoWFlashLoanRouterCall::SELECTOR,
+        interface_surfaces::TRIGGER_COW_FLASH_LOAN_ROUTER
+    );
+    assert_eq!(
+        Executor::transferToSettlementCall::SELECTOR,
+        interface_surfaces::TRANSFER_TO_SETTLEMENT
+    );
+    assert_eq!(
+        MultiHopCaller::swapWithAutoSlippageCall::SELECTOR,
+        [0x98, 0xb6, 0xd7, 0xda]
     );
 }
 

@@ -1,15 +1,19 @@
 """Compatibility exports for CoW Solver Engine protocol models."""
 
 from degenbot.cow.models import (
+    Allowance,
+    Asset,
     Auction,
     BigIntStr,
     BuyTokenBalance,
+    Call,
     CompetitionSolution,
     DriverError,
     DriverQuoteRequest,
     DriverQuoteResponse,
     Interaction,
     JitOrder,
+    JitTradeOrder,
     Order,
     OrderClass,
     OrderKind,
@@ -24,15 +28,19 @@ from degenbot.cow.models import (
 )
 
 __all__ = [
+    "Allowance",
+    "Asset",
     "Auction",
     "BigIntStr",
     "BuyTokenBalance",
+    "Call",
     "CompetitionSolution",
     "DriverError",
     "DriverQuoteRequest",
     "DriverQuoteResponse",
     "Interaction",
     "JitOrder",
+    "JitTradeOrder",
     "Order",
     "OrderClass",
     "OrderKind",

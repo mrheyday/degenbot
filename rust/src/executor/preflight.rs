@@ -25,10 +25,9 @@
 //! ## Native-currency special case
 //!
 //! When `plan.profit_token == address(0)` the plan is a pure-ETH path. We
-//! still execute the plan tx against CacheDB to catch reverts, but return
-//! `plan.expected_balance_delta_floor` instead of computing a real native
-//! delta — REVM's account-info read requires a different DB access pattern
-//! than the ERC-20 path and the on-chain assertion already covers shortfall.
+//! read the signer account balance directly from the REVM DB before and
+//! after the committed plan transaction, so native paths get the same
+//! measured-delta treatment as ERC-20 paths.
 //!
 //! ## Threading
 //!
@@ -47,12 +46,12 @@ use alloy::sol;
 use alloy::sol_types::SolCall;
 
 use revm::context::result::{ExecResultAndState, ExecutionResult};
-use revm::context::TxEnv;
+use revm::context::{ContextTr, TxEnv};
 use revm::database::CacheDB;
 use revm::database_interface::{DBErrorMarker, Database, DatabaseRef};
 use revm::primitives::{StorageKey, StorageValue, TxKind, B256, KECCAK_EMPTY};
 use revm::state::{AccountInfo, Bytecode};
-use revm::{Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext};
+use revm::{handler::EvmTr, Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext};
 use tokio::runtime::Handle;
 
 use super::PreflightError;
@@ -72,8 +71,7 @@ const BALANCE_OF_GAS_LIMIT: u64 = 100_000;
 /// Run the REVM preflight for `plan` from `from_address` over a fork of the
 /// latest block on `provider`.
 ///
-/// Returns the simulated balance delta on `plan.profit_token` (or
-/// `plan.expected_balance_delta_floor` for native-ETH plans). Errors with
+/// Returns the simulated balance delta on `plan.profit_token`. Errors with
 /// [`PreflightError::SimulationReverted`] when the plan tx reverts, with
 /// [`PreflightError::ForkFailed`] when the EVM/db construction fails, and
 /// with [`PreflightError::Unavailable`] when the RPC layer is unreachable.
@@ -127,11 +125,13 @@ where
         .with_db(cache_db)
         .build_mainnet();
 
-    // Native-ETH plan: still run the plan tx to catch reverts, but trust
-    // the strategist's declared floor instead of computing a real delta.
     if plan.profit_token == NATIVE_TOKEN {
+        let pre_balance =
+            read_native_balance(&mut evm, from_address).map_err(map_balance_err("pre"))?;
         execute_plan_tx(&mut evm, plan, from_address)?;
-        return Ok(plan.expected_balance_delta_floor);
+        let post_balance =
+            read_native_balance(&mut evm, from_address).map_err(map_balance_err("post"))?;
+        return Ok(u256_diff_to_i256(post_balance, pre_balance));
     }
 
     let pre_balance = read_erc20_balance(&mut evm, plan.profit_token, from_address)
@@ -305,6 +305,22 @@ where
             Err(BalanceReadError::Reverted(format!("halt: {reason:?}")))
         }
     }
+}
+
+/// Read native balance directly from the EVM DB/journal.
+fn read_native_balance<DB>(
+    evm: &mut PreflightEvm<DB>,
+    owner: Address,
+) -> Result<U256, BalanceReadError>
+where
+    DB: Database,
+    <DB as Database>::Error: std::fmt::Debug,
+{
+    evm.ctx()
+        .db_mut()
+        .basic(owner)
+        .map(|account| account.map_or(U256::ZERO, |info| info.balance))
+        .map_err(|e| BalanceReadError::Evm(format!("native balance: {e:?}")))
 }
 
 /// Compute `post - pre` as an `I256`. On magnitudes outside the I256 range
@@ -564,6 +580,24 @@ mod tests {
 
         let plan = dummy_plan(target, address!("000000000000000000000000000000000000beef"));
         execute_plan_tx(&mut evm, &plan, caller).expect("plan tx is no-op success");
+    }
+
+    #[test]
+    fn native_balance_delta_reflects_value_sent_by_plan() {
+        let caller = address!("00000000000000000000000000000000000000a3");
+        let target = address!("000000000000000000000000000000000000c0de");
+        let mut evm = build_offline_evm(caller, target, STUB_RETURN_ZERO);
+        let mut plan = dummy_plan(target, NATIVE_TOKEN);
+        plan.value = U256::from(7_u64);
+
+        let pre = read_native_balance(&mut evm, caller).expect("pre native balance");
+        execute_plan_tx(&mut evm, &plan, caller).expect("plan sends native value");
+        let post = read_native_balance(&mut evm, caller).expect("post native balance");
+
+        assert_eq!(
+            u256_diff_to_i256(post, pre),
+            I256::try_from(-7_i64).unwrap()
+        );
     }
 
     #[test]

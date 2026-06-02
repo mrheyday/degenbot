@@ -32,6 +32,18 @@ impl LaneEndpoints {
             Lane::Timeboost => self.timeboost_http.as_deref().unwrap_or(&self.default_http),
         }
     }
+
+    /// Returns true when the lane has a dedicated configured endpoint.
+    /// Default is always dedicated; optional lanes are dedicated only when
+    /// their override URL is present.
+    pub fn has_dedicated_endpoint(&self, lane: &Lane) -> bool {
+        match lane {
+            Lane::Default => true,
+            Lane::PrivateRelay => self.private_relay_http.is_some(),
+            Lane::Kairos => self.kairos_http.is_some(),
+            Lane::Timeboost => self.timeboost_http.is_some(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -61,5 +73,20 @@ mod tests {
         assert_eq!(eps.endpoint_for(&Lane::PrivateRelay), "https://default");
         assert_eq!(eps.endpoint_for(&Lane::Kairos), "https://default");
         assert_eq!(eps.endpoint_for(&Lane::Timeboost), "https://default");
+    }
+
+    #[test]
+    fn reports_whether_lane_has_dedicated_provider() {
+        let eps = LaneEndpoints {
+            default_http: "https://default".into(),
+            private_relay_http: Some("https://private".into()),
+            kairos_http: None,
+            timeboost_http: Some("https://timeboost".into()),
+        };
+
+        assert!(eps.has_dedicated_endpoint(&Lane::Default));
+        assert!(eps.has_dedicated_endpoint(&Lane::PrivateRelay));
+        assert!(!eps.has_dedicated_endpoint(&Lane::Kairos));
+        assert!(eps.has_dedicated_endpoint(&Lane::Timeboost));
     }
 }
