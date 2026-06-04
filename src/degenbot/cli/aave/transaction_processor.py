@@ -12,9 +12,9 @@ This module contains the main transaction processing orchestrator that handles:
 """
 
 from operator import itemgetter
+from typing import TYPE_CHECKING
 
 import eth_abi.abi
-from eth_typing import ChecksumAddress
 from sqlalchemy import select
 
 from degenbot.aave.enrichment import ScaledEventEnricher
@@ -67,6 +67,9 @@ from degenbot.database.models.aave import AaveV3User
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
+
+if TYPE_CHECKING:
+    from eth_typing import ChecksumAddress
 
 
 def _process_transaction(tx_context: TransactionContext) -> None:

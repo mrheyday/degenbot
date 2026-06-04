@@ -35,15 +35,29 @@ from degenbot.adapters.ipc import (  # pylint: disable=useless-import-alias  # p
     POOL_ID_REQUIRED_DEX_KINDS,
     RECOGNIZED_DEX_KINDS,
 )
+from degenbot.ops_solver.execution_policy import (
+    execution_policy_context_from_plan,
+    normalize_transport,
+    validate_execution_policy,
+)
 
 type JsonObject = dict[str, Any]
-REPO_ROOT = Path(__file__).resolve().parents[4]
+DEGENBOT_REPO_ROOT = Path(__file__).resolve().parents[3]
+WORKSPACE_ROOT = next(
+    (
+        root
+        for root in (DEGENBOT_REPO_ROOT, *DEGENBOT_REPO_ROOT.parents)
+        if (root / "vendor/degenbot/src/degenbot").is_dir()
+    ),
+    DEGENBOT_REPO_ROOT,
+)
 ARBITRUM_CHAIN_ID = 42161
 ADDRESS_HEX_LEN = 42
 BYTES32_HEX_LEN = 66
 PAIR_TOKEN_COUNT = 2
 V2_TOKEN_SLOTS = 2
 V4_POOL_KEY_ABI_TYPES = ("address", "address", "uint24", "int24", "address")
+STRICT_BOT_EXECUTION_POLICY_ID = "zero_capital_strict_v1"
 
 
 @dataclass(frozen=True)
@@ -113,6 +127,12 @@ class BotBestOpportunityRequest:
     max_depth: int | None = None
     max_input: int | None = None
     min_rate_of_exchange: Fraction | None = None
+    strict_execution: bool = False
+    execute_with_sig: bool = False
+    transport: str = "private_relay"
+    private_submission: bool | None = None
+    sponsored_execution: bool = False
+    require_preflight: bool = True
 
 
 class DegenbotSimulator(Protocol):
@@ -169,14 +189,14 @@ def resolve_degenbot_source_path(source_path: Path) -> Path:
 
     candidates = (
         Path.cwd() / source_path,
-        REPO_ROOT / source_path,
-        REPO_ROOT / "solver" / source_path,
+        WORKSPACE_ROOT / source_path,
+        DEGENBOT_REPO_ROOT / source_path,
     )
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
 
-    return (REPO_ROOT / source_path).resolve()
+    return (WORKSPACE_ROOT / source_path).resolve()
 
 
 def load_degenbot_runtime(source_path: Path) -> DegenbotRuntime:
@@ -452,6 +472,12 @@ def parse_best_opportunity_request(payload: JsonObject) -> BotBestOpportunityReq
         raise SimulationInputError(msg)
     max_input = _optional_positive_int(payload, "max_input")
     min_rate = _optional_fraction(payload, "min_rate_of_exchange")
+    strict_execution = _bool_field(payload, "strict_execution", default=False)
+    execute_with_sig = _bool_field(payload, "execute_with_sig", default=False)
+    transport = _normalize_best_opportunity_transport(payload.get("transport", "private_relay"))
+    private_submission = _optional_bool_field(payload, "private_submission")
+    sponsored_execution = _bool_field(payload, "sponsored_execution", default=False)
+    require_preflight = _bool_field(payload, "require_preflight", default=True)
 
     return BotBestOpportunityRequest(
         chain_id=chain_id,
@@ -462,6 +488,12 @@ def parse_best_opportunity_request(payload: JsonObject) -> BotBestOpportunityReq
         max_depth=max_depth,
         max_input=max_input,
         min_rate_of_exchange=min_rate,
+        strict_execution=strict_execution,
+        execute_with_sig=execute_with_sig,
+        transport=transport,
+        private_submission=private_submission,
+        sponsored_execution=sponsored_execution,
+        require_preflight=require_preflight,
     )
 
 
@@ -512,6 +544,37 @@ def _optional_fraction(payload: JsonObject, key: str) -> Fraction | None:
     return parsed
 
 
+def _bool_field(payload: JsonObject, key: str, *, default: bool) -> bool:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes"}:
+            return True
+        if lowered in {"0", "false", "no"}:
+            return False
+    msg = f"BestOpportunity.{key} must be boolean"
+    raise SimulationInputError(msg)
+
+
+def _optional_bool_field(payload: JsonObject, key: str) -> bool | None:
+    if key not in payload or payload[key] is None:
+        return None
+    return _bool_field(payload, key, default=False)
+
+
+def _normalize_best_opportunity_transport(value: object) -> str:
+    if not isinstance(value, str):
+        msg = "BestOpportunity.transport must be a non-empty string"
+        raise SimulationInputError(msg)
+    normalized = normalize_transport(value)
+    if normalized == "":
+        msg = "BestOpportunity.transport must be a non-empty string"
+        raise SimulationInputError(msg)
+    return normalized
+
+
 def encode_opportunity_from_simulation(result: SimulationResult) -> str:
     """Encode a successful simulation as an externally-tagged Opportunity."""
     first = result.path[0]
@@ -557,6 +620,17 @@ def encode_opportunity_from_bot(request: BotBestOpportunityRequest, opportunity:
     profit_token = _token_address(getattr(result, "profit_token", None)) or input_token
     now_ns = time.time_ns()
     strategy_id = str(getattr(opportunity, "strategy_id", "degenbot"))
+    wire_path = [_swap_step_to_wire(step) for step in path]
+    route_hash = _route_hash_for_bot_opportunity(
+        request=request,
+        strategy_id=strategy_id,
+        input_token=input_token,
+        profit_token=profit_token,
+        input_amount=input_amount,
+        profit_amount=profit_amount,
+        state_block=_optional_state_block(result),
+        path=wire_path,
+    )
     payload: JsonObject = {
         "id": f"bot-{now_ns}",
         "detected_at_ns": str(now_ns),
@@ -568,12 +642,87 @@ def encode_opportunity_from_bot(request: BotBestOpportunityRequest, opportunity:
         "estimated_profit_wei": str(profit_amount),
         "flash_token": input_token,
         "flash_amount": str(input_amount),
-        "path": [_swap_step_to_wire(step) for step in path],
+        "path": wire_path,
         "pool_addresses": [step.pool for step in path],
         "strategy_id": strategy_id,
         "state_block": _optional_state_block(result),
+        "route_hash": route_hash,
     }
+    if request.strict_execution:
+        payload["execution_policy"] = _strict_execution_policy_payload(
+            request=request,
+            route_hash=route_hash,
+            strategy_id=strategy_id,
+            flash_amount_wei=input_amount,
+        )
     return json.dumps({"Opportunity": payload}, separators=(",", ":"))
+
+
+def _route_hash_for_bot_opportunity(
+    *,
+    request: BotBestOpportunityRequest,
+    strategy_id: str,
+    input_token: str,
+    profit_token: str,
+    input_amount: int,
+    profit_amount: int,
+    state_block: str | None,
+    path: list[JsonObject],
+) -> str:
+    route = {
+        "chain_id": request.chain_id,
+        "strategy_id": strategy_id,
+        "token_in": input_token,
+        "token_out": profit_token,
+        "amount_in": str(input_amount),
+        "expected_amount_out": str(input_amount + profit_amount),
+        "estimated_profit_wei": str(profit_amount),
+        "state_block": state_block,
+        "path": path,
+    }
+    encoded = json.dumps(route, sort_keys=True, separators=(",", ":"))
+    digest = Web3.keccak(text=encoded).hex()
+    return digest if digest.startswith("0x") else f"0x{digest}"
+
+
+def _strict_execution_policy_payload(
+    *,
+    request: BotBestOpportunityRequest,
+    route_hash: str,
+    strategy_id: str,
+    flash_amount_wei: int,
+) -> JsonObject:
+    plan = {
+        "trace_id": f"bot:{strategy_id}:{route_hash}",
+        "chain_id": request.chain_id,
+        "min_profit_wei": str(request.min_profit),
+        "require_preflight": request.require_preflight,
+        "broadcast_lane": request.transport,
+    }
+    context = execution_policy_context_from_plan(
+        plan,
+        execute_with_sig=request.execute_with_sig,
+        flash_amount_wei=flash_amount_wei,
+        sponsored_execution=request.sponsored_execution,
+        private_submission=request.private_submission,
+        transport=request.transport,
+    )
+    violations = validate_execution_policy(context)
+    if violations:
+        codes = ", ".join(violation.code for violation in violations)
+        msg = f"strict bot execution policy rejected {context.trace_id}: {codes}"
+        raise SimulationUnavailableError(msg)
+    return {
+        "policy_id": STRICT_BOT_EXECUTION_POLICY_ID,
+        "strict": True,
+        "admitted": True,
+        "transport": context.transport,
+        "private_submission": context.private_submission,
+        "sponsored_execution": context.sponsored_execution,
+        "execute_with_sig": context.execute_with_sig,
+        "require_preflight": context.require_preflight,
+        "violations": [],
+    }
 
 
 def _swap_steps_from_bot_opportunity(opportunity: object) -> tuple[SwapStep, ...]:

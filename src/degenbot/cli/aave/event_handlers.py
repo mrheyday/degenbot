@@ -4,6 +4,7 @@ import eth_abi.abi
 from eth_typing import ChecksumAddress
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from typing_extensions import TypedDict
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
@@ -33,6 +34,27 @@ from degenbot.exceptions.base import DegenbotValueError
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
 from degenbot.provider.interface import ProviderAdapter
+
+
+class _ReserveConfigurationBitmap(TypedDict):
+    ltv: int
+    liquidation_threshold: int
+    liquidation_bonus: int
+    decimals: int
+    is_active: bool
+    is_frozen: bool
+    borrowing_enabled: bool
+    stable_rate_borrowing_enabled: bool
+    reserve_factor: int
+    borrow_cap: int
+    supply_cap: int
+    debt_ceiling: int
+    liquidation_protocol_fee: int
+    unbacked_mint_cap: int
+    e_mode_category_id: int | None
+    flash_loan_enabled: bool
+    isolation_mode: bool
+    borrowable_in_isolation: bool
 
 
 def _process_collateral_configuration_changed_event(
@@ -126,7 +148,7 @@ def _process_collateral_configuration_changed_event(
     return config
 
 
-def _decode_reserve_configuration_bitmap(config_bitmap: int) -> dict[str, int | bool | None]:
+def _decode_reserve_configuration_bitmap(config_bitmap: int) -> _ReserveConfigurationBitmap:
     """Decode Aave reserve configuration bitmap into human-readable values."""
     # LTV: bits 0-15
     ltv = config_bitmap & 0xFFFF

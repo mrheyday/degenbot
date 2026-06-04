@@ -23,7 +23,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 
 def _find_repo_root() -> Path:
@@ -243,6 +243,7 @@ def collect_contract_findings(
     """Query the live contract object and build deterministic verification findings."""
 
     findings: list[Finding] = []
+    contract_any = cast("Any", contract)
     for expected in expected_calls:
         actual = str(getattr(contract, expected.getter)())
         findings.append(
@@ -254,13 +255,13 @@ def collect_contract_findings(
             )
         )
 
-    paused = bool(getattr(contract, "paused")())
+    paused = bool(contract_any.paused())
     findings.append(
         Finding(name="paused", expected="False", actual=str(paused), ok=paused is False)
     )
 
     for delegatee in expected_delegatees:
-        allowed = bool(getattr(contract, "delegatees")(delegatee))
+        allowed = bool(contract_any.delegatees(delegatee))
         findings.append(
             Finding(
                 name=f"delegatees[{delegatee}]",

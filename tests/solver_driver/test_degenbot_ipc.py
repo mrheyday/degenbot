@@ -45,7 +45,23 @@ def test_decode_control_message_accepts_external_tags() -> None:
 
 
 def test_resolve_degenbot_source_path_from_repo_relative_path() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[4]
+
+    assert (
+        resolve_degenbot_source_path(Path("vendor/degenbot"))
+        == (repo_root / "vendor/degenbot").resolve()
+    )
+
+
+def test_resolve_degenbot_source_path_from_solver_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    solver_dir = repo_root / "solver"
+    if not solver_dir.is_dir():
+        pytest.skip("parent solver checkout is unavailable")
+
+    monkeypatch.chdir(solver_dir)
 
     assert (
         resolve_degenbot_source_path(Path("vendor/degenbot"))
@@ -215,6 +231,11 @@ def test_parse_best_opportunity_request_accepts_policy_fields() -> None:
         "max_depth": 4,
         "max_input": "1000000",
         "min_rate_of_exchange": "9/10",
+        "strict_execution": True,
+        "execute_with_sig": True,
+        "transport": "PrivateRelay",
+        "private_submission": True,
+        "sponsored_execution": True,
     })
 
     assert request == BotBestOpportunityRequest(
@@ -226,6 +247,11 @@ def test_parse_best_opportunity_request_accepts_policy_fields() -> None:
         max_depth=4,
         max_input=1_000_000,
         min_rate_of_exchange=Fraction(9, 10),
+        strict_execution=True,
+        execute_with_sig=True,
+        transport="private_relay",
+        private_submission=True,
+        sponsored_execution=True,
     )
 
 
@@ -309,6 +335,109 @@ def test_encode_opportunity_from_bot_builds_executable_v3_native_arb_path() -> N
             "fee": 500,
         }
     ]
+
+
+def test_encode_opportunity_from_bot_seals_strict_execution_policy() -> None:
+    class Token:
+        def __init__(self, address: str) -> None:
+            self.address = address
+
+    pool = type("UniswapV3Pool", (), {})()
+    pool.address = "0x1111111111111111111111111111111111111111"
+    pool.token0 = Token(_WETH)
+    pool.token1 = Token(_USDC)
+    pool.fee = 500
+    amounts = SimpleNamespace(
+        pool=pool.address,
+        amount_in=1_000,
+        amount_out=1_100,
+        amount_specified=1_000,
+        zero_for_one=True,
+    )
+    result = SimpleNamespace(
+        input_token=Token(_WETH),
+        profit_token=Token(_WETH),
+        input_amount=1_000,
+        profit_amount=100,
+        swap_amounts=(amounts,),
+        state_block=123,
+    )
+    opportunity = SimpleNamespace(strategy_id="weth-cycle", result=result, swap_pools=(pool,))
+    request = BotBestOpportunityRequest(
+        chain_id=42161,
+        input_token=_WETH,
+        from_address="0x000000000000000000000000000000000000dEaD",
+        min_profit=100,
+        strict_execution=True,
+        execute_with_sig=True,
+        transport="PrivateRelay",
+        private_submission=True,
+        sponsored_execution=True,
+    )
+
+    decoded = json.loads(encode_opportunity_from_bot(request, opportunity))
+    repeat_decoded = json.loads(encode_opportunity_from_bot(request, opportunity))
+    opp = decoded["Opportunity"]
+
+    assert opp["route_hash"].startswith("0x")
+    assert len(opp["route_hash"]) == 66
+    assert opp["route_hash"] == repeat_decoded["Opportunity"]["route_hash"]
+    assert opp["execution_policy"] == {
+        "policy_id": "zero_capital_strict_v1",
+        "strict": True,
+        "admitted": True,
+        "transport": "private_relay",
+        "private_submission": True,
+        "sponsored_execution": True,
+        "execute_with_sig": True,
+        "require_preflight": True,
+        "violations": [],
+    }
+
+
+def test_encode_opportunity_from_bot_rejects_failed_strict_execution_policy() -> None:
+    class Token:
+        def __init__(self, address: str) -> None:
+            self.address = address
+
+    pool = type("UniswapV3Pool", (), {})()
+    pool.address = "0x1111111111111111111111111111111111111111"
+    pool.token0 = Token(_WETH)
+    pool.token1 = Token(_USDC)
+    pool.fee = 500
+    amounts = SimpleNamespace(
+        pool=pool.address,
+        amount_in=1_000,
+        amount_out=1_100,
+        amount_specified=1_000,
+        zero_for_one=True,
+    )
+    result = SimpleNamespace(
+        input_token=Token(_WETH),
+        profit_token=Token(_WETH),
+        input_amount=1_000,
+        profit_amount=100,
+        swap_amounts=(amounts,),
+        state_block=123,
+    )
+    opportunity = SimpleNamespace(strategy_id="weth-cycle", result=result, swap_pools=(pool,))
+    request = BotBestOpportunityRequest(
+        chain_id=42161,
+        input_token=_WETH,
+        from_address="0x000000000000000000000000000000000000dEaD",
+        min_profit=100,
+        strict_execution=True,
+        execute_with_sig=False,
+        transport="public_rpc",
+        private_submission=False,
+        sponsored_execution=False,
+    )
+
+    with pytest.raises(
+        SimulationUnavailableError,
+        match="missing_eip7702_delegation, unsupported_transport, public_submission, unsponsored_execution",
+    ):
+        encode_opportunity_from_bot(request, opportunity)
 
 
 def test_registry_subscription_source_matches_multitoken_pool_pairs(

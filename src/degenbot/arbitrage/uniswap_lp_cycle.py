@@ -504,16 +504,19 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
                         p1_zfo = p1.token0 == self.input_token
                         p1_state = cast("UniswapV3PoolState | None", state_overrides.get(p1))
                         p1_json = p1.to_v3_snapshot_json(p1_state)
-                        p2_state = cast("UniswapV2PoolState | None", state_overrides.get(p2)) or p2.state
+                        p2_v2_state = (
+                            cast("UniswapV2PoolState | None", state_overrides.get(p2))
+                            or p2.state
+                        )
                         r_in = (
-                            p2_state.reserves_token0
+                            p2_v2_state.reserves_token0
                             if p2.token0 == p1.token1
-                            else p2_state.reserves_token1
+                            else p2_v2_state.reserves_token1
                         )
                         r_out = (
-                            p2_state.reserves_token1
+                            p2_v2_state.reserves_token1
                             if p2.token0 == p1.token1
-                            else p2_state.reserves_token0
+                            else p2_v2_state.reserves_token0
                         )
                         fee_bps = _v2_fee_bps(p2, p1.token1)
                         res_str = rust_optimal_input_v3(
