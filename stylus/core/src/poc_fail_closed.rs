@@ -1,6 +1,6 @@
 //! Stylus parity for Solidity research POC safety gates.
 //!
-//! Five of the six `contracts/src/poc` artifacts are intentionally fail-closed.
+//! Five of the six `contracts/poc` artifacts are intentionally fail-closed.
 //! The Comet artifact is an owner-gated research primitive, so this module ports
 //! its deterministic address and parameter guards while leaving token movement
 //! behind the runtime migration gate.

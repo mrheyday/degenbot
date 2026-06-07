@@ -56,14 +56,17 @@ class IncompleteSwap(LiquidityPoolError):
     Raised if a swap calculation would not consume the input or deliver the requested output.
     """
 
+    __module__ = "degenbot.exceptions.liquidity_pool"
+
     def __init__(self, amount_in: int, amount_out: int) -> None:
         self.amount_in = amount_in
         self.amount_out = amount_out
         super().__init__(message="Insufficient liquidity to swap for the requested amount.")
+        self.args = (amount_in, amount_out)
 
     def __reduce__(self) -> tuple[Any, ...]:
         # Pickling will raise an exception if a reduction method is not defined
-        return self.__class__, (self.amount_in, self.amount_out)
+        return IncompleteSwap, (self.amount_in, self.amount_out)
 
 
 class LateUpdateError(LiquidityPoolError):
@@ -80,6 +83,7 @@ class NoPoolStateAvailable(LiquidityPoolError):
 
     def __init__(self, block: BlockNumber) -> None:
         super().__init__(message=f"No pool state known prior to block {block}")
+        self.args = (block,)
 
 
 class InvalidSwapInputAmount(LiquidityPoolError):
@@ -92,21 +96,24 @@ class InvalidSwapInputAmount(LiquidityPoolError):
 
 
 class PossibleInaccurateResult(LiquidityPoolError):
-    def __init__(self, amount_in: int, amount_out: int, hooks: set["Hooks"]) -> None:
-        """
-        Raised if a pool has an active hook that might invalidate the calculated result.
-        """
+    """
+    Raised if a pool has an active hook that might invalidate the calculated result.
+    """
 
+    __module__ = "degenbot.exceptions.liquidity_pool"
+
+    def __init__(self, amount_in: int, amount_out: int, hooks: set["Hooks"]) -> None:
         self.amount_in = amount_in
         self.amount_out = amount_out
         self.hooks = hooks
         super().__init__(
             message="The pool has one or more hooks that might invalidate the calculated result."
         )
+        self.args = (amount_in, amount_out, hooks)
 
     def __reduce__(self) -> tuple[Any, ...]:
         # Pickling will raise an exception if a reduction method is not defined
-        return self.__class__, (self.amount_in, self.amount_out, self.hooks)
+        return PossibleInaccurateResult, (self.amount_in, self.amount_out, self.hooks)
 
 
 class UnknownPool(LiquidityPoolError):

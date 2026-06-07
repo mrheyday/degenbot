@@ -3,8 +3,6 @@ from fractions import Fraction
 from types import SimpleNamespace
 from typing import Any
 
-from degenbot.bot import BotScanConfig, DegenbotBot
-
 
 @dataclass(frozen=True, slots=True)
 class _Result:
@@ -33,6 +31,8 @@ class _Strategy:
 
 
 def test_bot_ranks_by_profit_then_block_then_id() -> None:
+    from degenbot.bot import DegenbotBot
+
     pool = object()
     bot = DegenbotBot(
         strategies=[
@@ -44,6 +44,8 @@ def test_bot_ranks_by_profit_then_block_then_id() -> None:
     for strategy in bot.strategies:
         strategy.swap_pools = (pool,)
 
+    from degenbot.bot import BotScanConfig
+
     best = bot.best(config=BotScanConfig(from_address="0x000000000000000000000000000000000000dEaD"))
     assert best is not None
     assert best.strategy_id == "a"
@@ -53,6 +55,8 @@ def test_bot_ranks_by_profit_then_block_then_id() -> None:
 
 
 def test_bot_applies_policy_and_forwards_kwargs() -> None:
+    from degenbot.bot import BotScanConfig, DegenbotBot
+
     strategy = _Strategy("one", _Result("one", 7, 12, (4, 5), 42), ("payload",))
     bot = DegenbotBot(strategies=[strategy])
     state_override = object()
@@ -86,6 +90,8 @@ def test_bot_applies_policy_and_forwards_kwargs() -> None:
 
 
 def test_bot_from_pathfinding_builds_strategies(monkeypatch) -> None:
+    from degenbot.bot import DegenbotBot
+
     class _Token:
         address = "0x0000000000000000000000000000000000000001"
 

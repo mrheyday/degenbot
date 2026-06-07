@@ -1,14 +1,12 @@
 import pickle
 
-from degenbot.exceptions.arbitrage import NoSolverSolution
-from degenbot.exceptions.liquidity_pool import IncompleteSwap, PossibleInaccurateResult
-
 
 def test_no_solver_solution_pickling() -> None:
     """
     Test that the `NoSolverSolution` exception's `__reduce__` method allows the exception to be
     pickled and unpickled correctly.
     """
+    from degenbot.exceptions.arbitrage import NoSolverSolution
 
     # Create an instance with a custom message
     original_message = "Custom solver error message"
@@ -32,6 +30,8 @@ def test_no_solver_solution_default_message_pickling() -> None:
     """
     Test that NoSolverSolution exception with default message can be pickled and unpickled.
     """
+    from degenbot.exceptions.arbitrage import NoSolverSolution
+
     # Create an instance with the default message
     original_exception = NoSolverSolution()
 
@@ -54,6 +54,8 @@ def test_incomplete_swap_pickling() -> None:
     Test that the `IncompleteSwap` exception's `__reduce__` method allows the exception to be
     pickled and unpickled correctly.
     """
+    from degenbot.exceptions.liquidity_pool import IncompleteSwap
+
     # Create an instance with custom amount_in and amount_out values
     original_amount_in = 1000
     original_amount_out = 500
@@ -81,6 +83,8 @@ def test_possible_inaccurate_result_pickling() -> None:
     Test that the `PossibleInaccurateResult` exception's `__reduce__` method allows the exception to
     be pickled and unpickled correctly.
     """
+    from degenbot.exceptions.liquidity_pool import PossibleInaccurateResult
+
     # Create an instance with custom amount_in, amount_out, and hooks values
     original_amount_in = 2000
     original_amount_out = 1000

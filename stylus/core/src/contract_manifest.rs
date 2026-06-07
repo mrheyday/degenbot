@@ -149,12 +149,12 @@ pub const LIBRARY_SOURCES: &[&str] = &[
 ];
 
 pub const POC_SOURCES: &[&str] = &[
-    "contracts/src/poc/CometLiquidatorPOC.sol",
-    "contracts/src/poc/CompoundSiloLiquidationPOC.sol",
-    "contracts/src/poc/DolomiteGenericFlashLiquidationPOC.sol",
-    "contracts/src/poc/EulerV2EvcFlashLiquidationPOC.sol",
-    "contracts/src/poc/PendleLimitOrderV4ArbPOC.sol",
-    "contracts/src/poc/PendlePySyAtomicArbPOC.sol",
+    "contracts/poc/CometLiquidatorPOC.sol",
+    "contracts/poc/CompoundSiloLiquidationPOC.sol",
+    "contracts/poc/DolomiteGenericFlashLiquidationPOC.sol",
+    "contracts/poc/EulerV2EvcFlashLiquidationPOC.sol",
+    "contracts/poc/PendleLimitOrderV4ArbPOC.sol",
+    "contracts/poc/PendlePySyAtomicArbPOC.sol",
 ];
 
 pub const REVERSE_SOURCES: &[&str] = &[
