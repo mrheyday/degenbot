@@ -14,6 +14,7 @@ Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve StableSwa
   - [Uniswap V4 Liquidity Pools](#uniswap-v4-liquidity-pools)
   - [Forking With Anvil](#forking-with-anvil)
   - [Uniswap Arbitrage](#uniswap-arbitrage)
+  - [High-Performance Arbitrage Optimizer](#high-performance-arbitrage-optimizer)
   - [Chainlink Price Feeds](#chainlink-price-feeds)
 - [CLI Reference](#cli-reference)
 - [Bot](#bot)
@@ -29,7 +30,7 @@ Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve StableSwa
 
 Degenbot is a set of Python classes that abstract many of the implementation details of Uniswap liquidity pools and their underlying ERC-20 tokens. It uses [web3.py](https://github.com/ethereum/web3.py/) for communication with an EVM blockchain through the standard JSON-RPC interface.
 
-These classes serve as building blocks for the lessons published by [BowTiedDevil](https://twitter.com/BowTiedDevil) on [Degen Code](https://www.degencode.com/).
+These classes serve as building blocks for the lessons published by [BowTiedDevil](https://twitter.com/BowTiedDevil) on [Degen Code](https://www.degencode.com/). This fork additionally carries the MEV-Arbitrum execution overlay, Rust solver acceleration, and offline simulation surfaces used by the parent solver system.
 
 ## Installation
 
@@ -47,7 +48,7 @@ pip install degenbot
 ### From Source
 
 ```bash
-git clone https://github.com/BowTiedDevil/degenbot.git
+git clone https://github.com/mrheyday/degenbot.git
 cd degenbot
 uv sync  # or: pip install -e .
 ```
@@ -109,6 +110,8 @@ print(f"Output: {amount_out}")
 |---------|-------------|
 | Chainlink Price Feeds | Oracle price data |
 | Anvil Forking | Local forked blockchain for testing |
+| Offline Provider | Deterministic in-memory provider and fork-test fixtures for no-RPC test paths |
+| Arbitrage Optimizers | Rust-accelerated V2/V3 path solvers with Python fallbacks for broader AMM coverage |
 
 ## Examples
 
@@ -456,6 +459,64 @@ ArbitrageCalculationResult(
     state_block=22676748
 )
 ```
+
+### High-Performance Arbitrage Optimizer
+
+The `degenbot.arbitrage.optimizers` package provides a unified solver API for production path
+scoring. `ArbSolver` dispatches to the fastest supported method for the submitted hop sequence:
+Rust-accelerated Mobius solvers for constant-product and single-range V3 paths, piecewise V3
+handling for multi-range paths, Solidly stable and Balancer weighted solvers, and Brent fallback
+when a closed-form method is not available.
+
+```python
+from fractions import Fraction
+
+from degenbot.arbitrage.optimizers.solver import ArbSolver, Hop, SolveInput
+
+solver = ArbSolver()
+
+hops = (
+    Hop(
+        reserve_in=2_000_000 * 10**6,
+        reserve_out=1_000 * 10**18,
+        fee=Fraction(3, 1000),
+    ),
+    Hop(
+        reserve_in=1_500_000 * 10**6,
+        reserve_out=800 * 10**18,
+        fee=Fraction(3, 1000),
+    ),
+)
+
+result = solver.solve(SolveInput(hops=hops))
+if result.success:
+    print(result.optimal_input, result.profit)
+```
+
+For hot loops, register pool state once per block and solve by integer pool IDs. This avoids
+constructing Python hop objects on every candidate path.
+
+```python
+pool_a = solver.register_pool(
+    reserve_in=2_000_000 * 10**6,
+    reserve_out=1_000 * 10**18,
+    fee=Fraction(3, 1000),
+)
+pool_b = solver.register_pool(
+    reserve_in=1_500_000 * 10**6,
+    reserve_out=800 * 10**18,
+    fee=Fraction(3, 1000),
+)
+
+fast_result = solver.solve_cached([pool_a, pool_b])
+```
+
+The optimizer produces deterministic sizing and profit estimates. It does not sign, submit, or
+protect execution by itself; production callers must still perform route sealing, simulation,
+profit gating, calldata construction, and private or public submission according to their own
+execution policy. See [`plans/arbitrage-optimizer/README.md`](plans/arbitrage-optimizer/README.md)
+and [`plans/arbitrage-optimizer/PRODUCTION_GUIDE.md`](plans/arbitrage-optimizer/PRODUCTION_GUIDE.md)
+for the full optimizer notes.
 
 ### Chainlink Price Feeds
 
@@ -863,6 +924,7 @@ Additional documentation is available in the [`docs/`](docs/) directory:
 
 - **[Aave V3](docs/aave/)**: Comprehensive control flow diagrams and amount transformations for Aave operations
 - **[Arbitrage](docs/arbitrage/)**: Multi-pool cycle testing documentation
+- **[Arbitrage Optimizer](plans/arbitrage-optimizer/README.md)**: Rust-accelerated path sizing, solver dispatch, and production usage notes
 - **[CLI](docs/cli/)**: Detailed CLI command reference
 - **[Configuration](docs/config.md)**: Configuration options
 
@@ -991,12 +1053,12 @@ Arbitrum is wired across the existing upstream protocol surface:
 
 ## Contributing
 
-Contributions are welcome! Please submit issues and pull requests to the [GitHub repository](https://github.com/BowTiedDevil/degenbot).
+Contributions are welcome! Please submit issues and pull requests to the [GitHub repository](https://github.com/mrheyday/degenbot).
 
 ### Development Setup
 
 ```bash
-git clone https://github.com/BowTiedDevil/degenbot.git
+git clone https://github.com/mrheyday/degenbot.git
 cd degenbot
 uv sync
 
