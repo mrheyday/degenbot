@@ -65,6 +65,14 @@ class NoSolverSolution(ArbitrageError):
         return self.__class__, (self.message,)
 
 
+def _rebuild_optimization_error(
+    message: str,
+    iterations: int,
+    method: str | None,
+) -> "OptimizationError":
+    return OptimizationError(message, iterations=iterations, method=method)
+
+
 class OptimizationError(ArbitrageError):
     """
     Raised when an optimizer fails to find a profitable solution,
@@ -94,4 +102,4 @@ class OptimizationError(ArbitrageError):
 
     def __reduce__(self) -> tuple[Any, ...]:
         # Pickling support for multiprocessing
-        return self.__class__, (self.message, self.iterations, self.method)
+        return _rebuild_optimization_error, (self.message, self.iterations, self.method)

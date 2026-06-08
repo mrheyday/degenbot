@@ -1,9 +1,34 @@
 import dataclasses
+from typing import Protocol, runtime_checkable
 
 from eth_typing import HexAddress
 
 from degenbot.types.abstract import AbstractPoolState
+from degenbot.types.aliases import BlockNumber
 from degenbot.types.concrete import PoolStateMessage
+
+
+@runtime_checkable
+class CurveDataProvider(Protocol):
+    """On-chain data access used by Curve per-block caches."""
+
+    def virtual_price(self, block_number: BlockNumber) -> int: ...
+
+    def base_virtual_price(self, block_number: BlockNumber) -> int: ...
+
+    def base_cache_updated(self, block_number: BlockNumber) -> int: ...
+
+    def admin_balances(self, block_number: BlockNumber) -> tuple[int, ...]: ...
+
+    def d(self, block_number: BlockNumber) -> int: ...
+
+    def gamma(self, block_number: BlockNumber) -> int: ...
+
+    def price_scale(self, block_number: BlockNumber) -> tuple[int, ...]: ...
+
+    def block_timestamp(self, block_number: BlockNumber) -> int: ...
+
+    def redemption_price(self, block_number: BlockNumber) -> int: ...
 
 
 @dataclasses.dataclass(slots=True, frozen=True, kw_only=True)

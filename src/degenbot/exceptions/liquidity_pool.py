@@ -16,6 +16,27 @@ class LiquidityPoolError(DegenbotError):
     """
 
 
+class MissingCurveData(LiquidityPoolError):
+    """
+    Raised when Curve per-block data cannot be resolved from cache or provider.
+    """
+
+    def __init__(
+        self,
+        address: ChecksumAddress | str,
+        field: str,
+        detail: str | None = None,
+    ) -> None:
+        self.address = address
+        self.field = field
+        self.detail = detail
+
+        message = f"Missing Curve data for {field} at {address}."
+        if detail:
+            message = f"{message} {detail}"
+        super().__init__(message=message)
+
+
 # 2nd level exceptions for Liquidity Pool classes
 class AddressMismatch(LiquidityPoolError):
     """

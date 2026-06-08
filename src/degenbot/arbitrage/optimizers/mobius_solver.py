@@ -196,7 +196,7 @@ class MobiusSolver(Solver):
 
         try:
             result = self._rust_solver.solve_raw(int_hops_flat, max_input_float)
-        except (ValueError, TypeError) as e:
+        except (OverflowError, ValueError, TypeError) as e:
             raise OptimizationError(
                 message=f"Rust solve_raw failed: {e}",
                 iterations=0,

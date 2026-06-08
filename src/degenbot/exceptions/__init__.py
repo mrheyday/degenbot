@@ -21,6 +21,7 @@ from degenbot.exceptions.fetching import (
     FetchingError,
     LogFetchingTimeout,
 )
+from degenbot.exceptions.liquidity_pool import MissingCurveData
 
 from . import (
     anvil,
@@ -32,6 +33,7 @@ from . import (
     fetching,
     liquidity_pool,
     manager,
+    pool,
     registry,
 )
 
@@ -49,6 +51,7 @@ __all__ = (
     "InvalidForwardAmount",
     "InvalidSwapPathError",
     "LogFetchingTimeout",
+    "MissingCurveData",
     "NoLiquidity",
     "NoSolverSolution",
     "OptimizationError",
@@ -64,5 +67,6 @@ __all__ = (
     "fetching",
     "liquidity_pool",
     "manager",
+    "pool",
     "registry",
 )

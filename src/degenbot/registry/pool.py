@@ -4,7 +4,6 @@ from hexbytes import HexBytes
 
 import degenbot.exceptions
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.exceptions.registry import RegistryAlreadyInitialized
 from degenbot.types.abstract import AbstractLiquidityPool, AbstractRegistry
 from degenbot.types.aliases import ChainId
 
@@ -16,7 +15,7 @@ PoolId = bytes | str
 Address = bytes | str
 
 
-class _UniswapV4PoolManagerRegistry(AbstractRegistry):
+class ManagedPoolRegistry(AbstractRegistry):
     """
     The Uniswap V4 singleton design breaks the fundamental assumption of the PoolRegistry: that each
     liquidity pool can be uniquely identified by a chain ID and contract address. This private class
@@ -85,6 +84,12 @@ class _UniswapV4PoolManagerRegistry(AbstractRegistry):
             None,
         )
 
+    def reset(self) -> None:
+        self._all_v4_pools.clear()
+
+    def _reset(self) -> None:
+        self.reset()
+
 
 class PoolRegistry(AbstractRegistry):
     instance: Self | None = None
@@ -93,12 +98,9 @@ class PoolRegistry(AbstractRegistry):
     def get_instance(cls) -> Self | None:
         return cls.instance
 
-    def __init__(self) -> None:
-        if type(self).instance is not None:
-            raise RegistryAlreadyInitialized(
-                message="A registry has already been initialized. Access it using the pool_registry.get_instance() class method"
-            )
-        type(self).instance = self
+    def __init__(self, managed_pool_registry: ManagedPoolRegistry | None = None) -> None:
+        if type(self).instance is None:
+            type(self).instance = self
 
         self._all_pools: dict[
             tuple[
@@ -107,7 +109,7 @@ class PoolRegistry(AbstractRegistry):
             ],
             AbstractLiquidityPool,
         ] = {}
-        self._v4_pool_registry = _UniswapV4PoolManagerRegistry()
+        self._v4_pool_registry = managed_pool_registry or ManagedPoolRegistry()
 
     def get(
         self,
@@ -171,3 +173,7 @@ class PoolRegistry(AbstractRegistry):
                 ),
                 None,
             )
+
+    def _reset(self) -> None:
+        self._all_pools.clear()
+        self._v4_pool_registry.reset()

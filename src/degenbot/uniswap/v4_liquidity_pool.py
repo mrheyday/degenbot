@@ -161,6 +161,29 @@ def get_pool_from_database(
     )
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _V4PoolDbValues:
+    currency0_address: ChecksumAddress | str
+    currency1_address: ChecksumAddress | str
+    hook_address: ChecksumAddress | str
+    tick_spacing: int
+    fee: int
+    state_view_address: ChecksumAddress | str
+
+
+def _extract_pool_db_values(pool_from_db: UniswapV4PoolTableBase) -> _V4PoolDbValues:
+    if pool_from_db.fee_currency0 != pool_from_db.fee_currency1:
+        raise DegenbotValueError(message="V4 pool has mismatched token fees in database.")
+    return _V4PoolDbValues(
+        currency0_address=pool_from_db.currency0.address,
+        currency1_address=pool_from_db.currency1.address,
+        hook_address=pool_from_db.hooks,
+        tick_spacing=pool_from_db.tick_spacing,
+        fee=pool_from_db.fee_currency0,
+        state_view_address=pool_from_db.manager.state_view,
+    )
+
+
 class UniswapV4Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
     _state_mgr: ConcentratedLiquidityStateManager[UniswapV4PoolState]
 
@@ -213,18 +236,18 @@ class UniswapV4Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
             pool_manager_address=self._pool_manager_address,
             chain_id=self.chain_id,
         )
-        if pool_from_db is not None:
-            currency0_address = pool_from_db.currency0.address
-            currency1_address = pool_from_db.currency1.address
-            self.hook_address = get_checksum_address(pool_from_db.hooks)
-            tick_spacing = pool_from_db.tick_spacing
-            assert pool_from_db.fee_currency0 == pool_from_db.fee_currency1
-            fee = pool_from_db.fee_currency0
-            state_view_address = pool_from_db.manager.state_view
+        pool_db_values = _extract_pool_db_values(pool_from_db) if pool_from_db is not None else None
+        if pool_db_values is not None:
+            currency0_address = pool_db_values.currency0_address
+            currency1_address = pool_db_values.currency1_address
+            self.hook_address = get_checksum_address(pool_db_values.hook_address)
+            tick_spacing = pool_db_values.tick_spacing
+            fee = pool_db_values.fee
+            state_view_address = pool_db_values.state_view_address
         else:
             if state_view_address is None:
                 raise DegenbotValueError(
-                    message="A state view contract address must be provided for a pool not in the database."  # noqa: E501
+                    message="A state view contract address must be provided for a pool not in the database."
                 )
             if fee is None:
                 raise DegenbotValueError(
@@ -1189,7 +1212,7 @@ class UniswapV4Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
         self,
         token_in: ChecksumAddress,
         amount_in: int,
-        token_out: ChecksumAddress,  # noqa: ARG002
+        token_out: ChecksumAddress,
         state_override: UniswapV4PoolState | None = None,
     ) -> SimulationResult:
         if token_in == self.token0.address:
@@ -1212,12 +1235,12 @@ class UniswapV4Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
             final_state=initial_state,
         )
 
-    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001, ARG002
+    def extract_fee(self, zero_for_one: bool) -> Fraction:
         return Fraction(self.fee, self.FEE_DENOMINATOR)
 
     def to_hop_state(
         self,
-        zero_for_one: bool,  # noqa: FBT001
+        zero_for_one: bool,
         state_override: UniswapV4PoolState | None = None,
     ) -> HopType:
         return super().to_hop_state(zero_for_one=zero_for_one, state_override=state_override)  # type: ignore[misc, no-any-return]

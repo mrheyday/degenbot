@@ -243,6 +243,10 @@ class OfflineProvider:
 
         return HexBytes(result)
 
+    def call_raw(self, tx: dict[str, Any], block: int | None = None) -> HexBytes:
+        """Execute an eth_call using a web3-style transaction mapping."""
+        return self.call(tx["to"], tx["data"], block_number=block)
+
     def get_code(
         self,
         address: str,
@@ -400,6 +404,9 @@ class OfflineProvider:
         OfflineProvider is always considered connected.
         """
         return True
+
+    def close(self) -> None:
+        """Close provider resources."""
 
     def __repr__(self) -> str:
         return f"OfflineProvider(chain_id={self._chain_id}, blocks={len(self._block_numbers)})"

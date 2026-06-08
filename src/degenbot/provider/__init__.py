@@ -35,10 +35,15 @@ from typing import Any, Self
 from hexbytes import HexBytes
 
 from degenbot.degenbot_rs import AlloyProvider as _AlloyProvider
-from degenbot.provider.interface import (
-    EthereumProvider,
-    ProviderAdapter,
+from degenbot.provider.async_adapter import AsyncProviderAdapter
+from degenbot.provider.async_provider import AsyncAlloyProvider
+from degenbot.provider.interface import EthereumProvider, ProviderAdapter
+from degenbot.provider.offline_provider import (
+    BlockNotRecordedError,
+    OfflineDataMissing,
+    OfflineProvider,
 )
+from degenbot.provider.protocols import AsyncProviderBackend, ProviderBackend
 from degenbot.types.aliases import BlockNumber
 
 
@@ -202,6 +207,10 @@ class AlloyProvider:
         """
         return self._provider.call(to, data, block_number)
 
+    def call_raw(self, tx: dict[str, Any], block: int | None = None) -> HexBytes:
+        """Execute an eth_call using a web3-style transaction mapping."""
+        return self.call(tx["to"], tx["data"], block_number=block)
+
     def get_logs(
         self,
         filter_param: LogFilter | None = None,
@@ -359,7 +368,14 @@ class AlloyProvider:
 
 __all__ = [
     "AlloyProvider",
+    "AsyncAlloyProvider",
+    "AsyncProviderAdapter",
+    "AsyncProviderBackend",
+    "BlockNotRecordedError",
     "EthereumProvider",
     "LogFilter",
+    "OfflineDataMissing",
+    "OfflineProvider",
     "ProviderAdapter",
+    "ProviderBackend",
 ]

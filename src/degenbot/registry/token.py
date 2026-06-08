@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Self
 
 import degenbot.exceptions
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.exceptions.registry import RegistryAlreadyInitialized
 from degenbot.types.aliases import ChainId
 
 if TYPE_CHECKING:
@@ -20,11 +19,8 @@ class TokenRegistry:
         return cls.instance
 
     def __init__(self) -> None:
-        if self.__class__.instance is not None:
-            raise RegistryAlreadyInitialized(
-                message="A registry has already been initialized. Access it using the get_instance() class method"
-            )
-        self.__class__.instance = self
+        if self.__class__.instance is None:
+            self.__class__.instance = self
 
         self._all_tokens: dict[
             tuple[
@@ -50,3 +46,6 @@ class TokenRegistry:
 
         with contextlib.suppress(KeyError):
             del self._all_tokens[chain_id, token_address]
+
+    def _reset(self) -> None:
+        self._all_tokens.clear()

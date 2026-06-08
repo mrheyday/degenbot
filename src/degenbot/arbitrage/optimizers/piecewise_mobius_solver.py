@@ -826,7 +826,12 @@ class PiecewiseMobiusSolver(Solver):
         self,
         v3_hop: BoundedProductHop,
     ) -> Any:
-        assert v3_hop.tick_ranges is not None
+        if v3_hop.tick_ranges is None:
+            raise OptimizationError(
+                message="Cannot build Rust sequence: hop missing tick_ranges",
+                iterations=0,
+                method=SolverMethod.PIECEWISE_MOBIUS.name,
+            )
         zero_for_one = _infer_zero_for_one(v3_hop)
 
         # Create cache key from hop identity + tick data
@@ -883,6 +888,12 @@ class PiecewiseMobiusSolver(Solver):
             if hop.invariant == PoolInvariant.BOUNDED_PRODUCT and isinstance(
                 hop, BoundedProductHop
             ):
+                if hop.tick_ranges is None:
+                    raise OptimizationError(
+                        message="V3-V3 hop missing tick_ranges (sparse or V4 pool)",
+                        iterations=0,
+                        method=SolverMethod.PIECEWISE_MOBIUS.name,
+                    )
                 v3_hops.append(hop)
             else:
                 raise OptimizationError(

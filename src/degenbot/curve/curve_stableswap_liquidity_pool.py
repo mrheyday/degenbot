@@ -32,6 +32,7 @@ from degenbot.curve.deployments import (
     CURVE_V1_METAREGISTRY_ADDRESS,
     CURVE_V1_REGISTRY_ADDRESS,
 )
+from degenbot.curve.per_block_cache import PerBlockCache
 from degenbot.curve.types import CurveStableswapPoolState, CurveStableSwapPoolStateUpdated
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.exceptions import DegenbotValueError
@@ -53,6 +54,132 @@ from degenbot.types.concrete import (
 )
 from degenbot.types.hop_types import CurveStableswapHop, HopType, PoolInvariant
 from degenbot.types.pool_protocols import SimulationResult
+
+
+class _CurvePoolDataProvider:
+    """Resolve Curve per-block data from the owning pool's active provider."""
+
+    def __init__(self, pool: "CurveStableswapPool") -> None:
+        self._pool = pool
+
+    def _provider(self) -> ProviderAdapter:
+        return self._pool._get_provider_for_chain()  # noqa: SLF001
+
+    def block_timestamp(self, block_number: BlockNumber) -> int:
+        block = self._provider().get_block(block_number)
+        if block is None:
+            msg = f"Block {block_number} is unavailable"
+            raise DegenbotValueError(message=msg)
+        return int(block["timestamp"])
+
+    def d(self, block_number: BlockNumber) -> int:
+        (result,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=self._pool.address,
+                data=Web3.keccak(text="D()")[:4],
+                block=block_number,
+            ),
+        )
+        return result
+
+    def gamma(self, block_number: BlockNumber) -> int:
+        (result,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=self._pool.address,
+                data=Web3.keccak(text="gamma()")[:4],
+                block=block_number,
+            ),
+        )
+        return result
+
+    def price_scale(self, block_number: BlockNumber) -> tuple[int, ...]:
+        values: list[int] = []
+        for token_index in range(len(self._pool.tokens) - 1):
+            (price_scale,) = eth_abi.abi.decode(
+                types=["uint256"],
+                data=self._provider().call(
+                    to=self._pool.address,
+                    data=Web3.keccak(text="price_scale(uint256)")[:4]
+                    + eth_abi.abi.encode(types=["uint256"], args=[token_index]),
+                    block=block_number,
+                ),
+            )
+            values.append(price_scale)
+        return tuple(values)
+
+    def admin_balances(self, block_number: BlockNumber) -> tuple[int, ...]:
+        values: list[int] = []
+        for token_index, _ in enumerate(self._pool.tokens):
+            (admin_balance,) = raw_call(
+                self._provider(),
+                address=self._pool.address,
+                calldata=encode_function_calldata(
+                    function_prototype="admin_balances(uint256)",
+                    function_arguments=[token_index],
+                ),
+                return_types=["uint256"],
+                block_identifier=block_number,
+            )
+            values.append(admin_balance)
+        return tuple(values)
+
+    def redemption_price(self, block_number: BlockNumber) -> int:
+        (snap_contract_address,) = eth_abi.abi.decode(
+            types=["address"],
+            data=self._provider().call(
+                to=self._pool.address,
+                data=Web3.keccak(text="redemption_price_snap()")[:4],
+                block=block_number,
+            ),
+        )
+        (rate,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=get_checksum_address(snap_contract_address),
+                data=Web3.keccak(text="snappedRedemptionPrice()")[:4],
+                block=block_number,
+            ),
+        )
+        return rate // 10**9
+
+    def base_cache_updated(self, block_number: BlockNumber) -> int:
+        (result,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=self._pool.address,
+                data=Web3.keccak(text="base_cache_updated()")[:4],
+                block=block_number,
+            ),
+        )
+        return result
+
+    def base_virtual_price(self, block_number: BlockNumber) -> int:
+        (result,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=self._pool.address,
+                data=Web3.keccak(text="base_virtual_price()")[:4],
+                block=block_number,
+            ),
+        )
+        return result
+
+    def virtual_price(self, block_number: BlockNumber) -> int:
+        if self._pool.base_pool is not None:
+            target = self._pool.base_pool.address
+        else:
+            target = self._pool.address
+        (result,) = eth_abi.abi.decode(
+            types=["uint256"],
+            data=self._provider().call(
+                to=target,
+                data=Web3.keccak(text="get_virtual_price()")[:4],
+                block=block_number,
+            ),
+        )
+        return result
 
 
 class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
@@ -532,24 +659,6 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         self._block_timestamps: BoundedCache[BlockNumber, int] = BoundedCache(
             max_items=state_cache_depth
         )
-        self._cached_admin_balances: BoundedCache[BlockNumber, tuple[int, ...]] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_base_cache_updated: BoundedCache[BlockNumber, int] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_base_virtual_price: BoundedCache[BlockNumber, int] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_contract_D: BoundedCache[BlockNumber, int] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_gamma: BoundedCache[BlockNumber, int] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_price_scale: BoundedCache[BlockNumber, tuple[int, ...]] = BoundedCache(
-            max_items=state_cache_depth
-        )
         self._cached_rates_from_aeth: BoundedCache[BlockNumber, int] = BoundedCache(
             max_items=state_cache_depth
         )
@@ -566,12 +675,6 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             max_items=state_cache_depth
         )
         self._cached_rates_from_ytokens: BoundedCache[BlockNumber, tuple[int, ...]] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_scaled_redemption_price: BoundedCache[BlockNumber, int] = BoundedCache(
-            max_items=state_cache_depth
-        )
-        self._cached_virtual_price: BoundedCache[BlockNumber, int] = BoundedCache(
             max_items=state_cache_depth
         )
 
@@ -611,6 +714,14 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             self.base_pool = base_pool
             self.tokens_underlying = (self.tokens[0], *self.base_pool.tokens)
 
+        self._per_block_cache = PerBlockCache(
+            data_provider=_CurvePoolDataProvider(self),
+            address=self.address,
+            base_pool_is_set=self.base_pool is not None,
+            state_cache_depth=state_cache_depth,
+        )
+
+        if self.base_pool is not None:
             self.base_cache_updated: int | None = None
             with contextlib.suppress(web3.exceptions.ContractLogicError):
                 self.base_cache_updated = self._get_base_cache_updated(block_number=state_block)
@@ -699,6 +810,8 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         # Provider will be fetched from connection_manager when needed
         state["_provider"] = None
         self.__dict__ = state
+        if hasattr(self, "_per_block_cache"):
+            self._per_block_cache.set_data_provider(_CurvePoolDataProvider(self))
 
     def __repr__(self) -> str:  # pragma: no cover
         token_string = "-".join([token.symbol for token in self.tokens])
@@ -861,36 +974,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         return dy, dy_0 - dy, total_supply
 
     def _get_scaled_redemption_price(self, block_number: BlockNumber) -> int:
-        with contextlib.suppress(KeyError):
-            return self._cached_scaled_redemption_price[block_number]
-
-        redemption_price_scale = 10**9
-
-        # Fetch current provider from connection manager to handle provider updates
-        provider = self._get_provider_for_chain()
-
-        snap_contract_address: str
-        (snap_contract_address,) = eth_abi.abi.decode(
-            types=["address"],
-            data=provider.call(
-                to=self.address,
-                data=Web3.keccak(text="redemption_price_snap()")[:4],
-                block=block_number,
-            ),
-        )
-
-        rate: int
-        (rate,) = eth_abi.abi.decode(
-            types=["uint256"],
-            data=provider.call(
-                to=get_checksum_address(snap_contract_address),
-                data=Web3.keccak(text="snappedRedemptionPrice()")[:4],
-                block=block_number,
-            ),
-        )
-        result = rate // redemption_price_scale
-        self._cached_scaled_redemption_price[block_number] = result
-        return result
+        return self._per_block_cache.get_cached_scaled_redemption_price(block_number)
 
     def get_dy(
         self,
@@ -985,56 +1069,13 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         if self.address == "0x80466c64868E1ab14a1Ddf27A676C3fcBE638Fe5":
 
             def _d(block_number: BlockNumber) -> int:
-                with contextlib.suppress(KeyError):
-                    return self._cached_contract_D[block_number]
-
-                d: int
-                (d,) = eth_abi.abi.decode(
-                    types=["uint256"],
-                    data=provider.call(
-                        to=self.address,
-                        data=Web3.keccak(text="D()")[:4],
-                        block=block_number,
-                    ),
-                )
-                self._cached_contract_D[block_number] = d
-                return d
+                return self._per_block_cache.get_cached_contract_d(block_number)
 
             def _gamma(block_number: BlockNumber) -> int:
-                with contextlib.suppress(KeyError):
-                    return self._cached_gamma[block_number]
-
-                gamma: int
-                (gamma,) = eth_abi.abi.decode(
-                    types=["uint256"],
-                    data=provider.call(
-                        to=self.address,
-                        data=Web3.keccak(text="gamma()")[:4],
-                        block=block_number,
-                    ),
-                )
-                self._cached_gamma[block_number] = gamma
-                return gamma
+                return self._per_block_cache.get_cached_gamma(block_number)
 
             def _price_scale(block_number: BlockNumber) -> tuple[int, ...]:
-                with contextlib.suppress(KeyError):
-                    return self._cached_price_scale[block_number]
-
-                n_coins = len(self.tokens)
-
-                price_scale = [0] * (n_coins - 1)
-                for token_index in range(n_coins - 1):
-                    (price_scale[token_index],) = eth_abi.abi.decode(
-                        types=["uint256"],
-                        data=provider.call(
-                            to=self.address,
-                            data=Web3.keccak(text="price_scale(uint256)")[:4]
-                            + eth_abi.abi.encode(types=["uint256"], args=[token_index]),
-                            block=block_number,
-                        ),
-                    )
-                self._cached_price_scale[block_number] = tuple(price_scale)
-                return tuple(price_scale)
+                return self._per_block_cache.get_cached_price_scale(block_number)
 
             def _newton_y(ann: int, gamma: int, xp: Sequence[int], d: int, token_index: int) -> int:
                 """
@@ -1643,99 +1684,21 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         return dy
 
     def _get_base_cache_updated(self, block_number: BlockNumber) -> int:
-        with contextlib.suppress(KeyError):
-            return self._cached_base_cache_updated[block_number]
-
-        # Fetch current provider from connection manager to handle provider updates
-        provider = self._get_provider_for_chain()
-
-        base_cache_updated: int
-        (base_cache_updated,) = eth_abi.abi.decode(
-            types=["uint256"],
-            data=provider.call(
-                to=self.address,
-                data=Web3.keccak(text="base_cache_updated()")[:4],
-                block=block_number,
-            ),
-        )
-        self._cached_base_cache_updated[block_number] = base_cache_updated
-        return base_cache_updated
+        return self._per_block_cache.get_cached_base_cache_updated(block_number)
 
     def _get_base_virtual_price(self, block_number: BlockNumber) -> int:
-        with contextlib.suppress(KeyError):
-            return self._cached_base_virtual_price[block_number]
-
-        # Fetch current provider from connection manager to handle provider updates
-        provider = self._get_provider_for_chain()
-
-        base_virtual_price: int
-        (base_virtual_price,) = eth_abi.abi.decode(
-            types=["uint256"],
-            data=provider.call(
-                to=self.address,
-                data=Web3.keccak(text="base_virtual_price()")[:4],
-                block=block_number,
-            ),
-        )
-        self._cached_base_virtual_price[block_number] = base_virtual_price
-        return base_virtual_price
+        return self._per_block_cache.get_cached_base_virtual_price(block_number)
 
     def _get_virtual_price(self, block_number: BlockNumber) -> int:
         if TYPE_CHECKING:
             assert self.base_pool is not None
 
-        with contextlib.suppress(KeyError):
-            return self._cached_virtual_price[block_number]
-
-        base_cache_expires = 10 * 60  # 10 minutes
-
-        # Fetch current provider from connection manager to handle provider updates
-        provider = self._get_provider_for_chain()
-        self._block_timestamps[block_number] = provider.get_block(block_identifier=block_number)[
-            "timestamp"
-        ]
-
-        base_virtual_price: int
-        if (
-            self.base_cache_updated is None
-            or self._block_timestamps[block_number] > self.base_cache_updated + base_cache_expires
-        ):
-            (base_virtual_price,) = eth_abi.abi.decode(
-                types=["uint256"],
-                data=provider.call(
-                    to=self.base_pool.address,
-                    data=Web3.keccak(text="get_virtual_price()")[:4],
-                    block=block_number,
-                ),
-            )
-        else:
-            base_virtual_price = self.base_virtual_price
-
-        self._cached_virtual_price[block_number] = base_virtual_price
+        base_virtual_price = self._per_block_cache.get_cached_virtual_price(block_number)
         self.base_virtual_price = base_virtual_price
         return base_virtual_price
 
     def _get_admin_balances(self, block_number: BlockNumber) -> tuple[int, ...]:
-        with contextlib.suppress(KeyError):
-            return self._cached_admin_balances[block_number]
-
-        admin_balances: list[int] = []
-        for token_index, _ in enumerate(self.tokens):
-            admin_balance: int
-            (admin_balance,) = raw_call(
-                connection_manager.get_provider(chain_id=self.chain_id),
-                address=self.address,
-                calldata=encode_function_calldata(
-                    function_prototype="admin_balances(uint256)",
-                    function_arguments=[token_index],
-                ),
-                return_types=["uint256"],
-                block_identifier=block_number,
-            )
-            admin_balances.append(admin_balance)
-
-        self._cached_admin_balances[block_number] = tuple(admin_balances)
-        return tuple(admin_balances)
+        return self._per_block_cache.get_cached_admin_balances(block_number)
 
     def _get_d(self, _xp: Sequence[int], _amp: int) -> int:
         """
@@ -2240,7 +2203,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         if self._provider_from_connection_manager:
             try:
                 return connection_manager.get_provider(self._chain_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # No provider available from connection_manager (e.g., multiprocessing)
                 pass
         # Use cached provider if available
@@ -2408,12 +2371,12 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             final_state=initial_state,
         )
 
-    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001
+    def extract_fee(self, zero_for_one: bool) -> Fraction:
         return Fraction(self.fee, self.FEE_DENOMINATOR)
 
     def to_hop_state(
         self,
-        zero_for_one: bool,  # noqa: FBT001
+        zero_for_one: bool,
         state_override: CurveStableswapPoolState | None = None,
     ) -> HopType:
         """Create a hop state for this pool.

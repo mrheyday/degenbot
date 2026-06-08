@@ -115,7 +115,8 @@ class ArbSolver(Solver):
         construction on the solve path.
         """
         if self._pool_cache is None:
-            raise RuntimeError("Pool cache requires the Rust extension (degenbot_rs)")
+            msg = "Pool cache requires the Rust extension (degenbot_rs)"
+            raise RuntimeError(msg)
         return self._pool_cache
 
     def register_pool(
@@ -201,7 +202,7 @@ class ArbSolver(Solver):
 
         try:
             result = cache.solve(path, max_input_float)
-        except (ValueError, TypeError) as e:
+        except (OverflowError, ValueError, TypeError) as e:
             raise OptimizationError(
                 message=f"Pool cache solve failed: {e}",
                 iterations=0,
@@ -273,7 +274,7 @@ class ArbSolver(Solver):
                 continue
             try:
                 return solver.solve(solve_input)
-            except OptimizationError:
+            except (OptimizationError, OverflowError):
                 continue
 
         raise OptimizationError(

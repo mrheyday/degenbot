@@ -107,6 +107,29 @@ def get_pool_from_database(
     )  # type: ignore[return-value]
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _V3PoolDbValues:
+    token0_address: ChecksumAddress | str
+    token1_address: ChecksumAddress | str
+    factory_address: ChecksumAddress | str
+    deployer_address: ChecksumAddress | str | None
+    fee: int
+    tick_spacing: int
+
+
+def _extract_pool_db_values(pool_from_db: UniswapV3PoolTableBase) -> _V3PoolDbValues:
+    if pool_from_db.fee_token0 != pool_from_db.fee_token1:
+        raise DegenbotValueError(message="V3 pool has mismatched token fees in database.")
+    return _V3PoolDbValues(
+        token0_address=pool_from_db.token0.address,
+        token1_address=pool_from_db.token1.address,
+        factory_address=pool_from_db.exchange.factory,
+        deployer_address=pool_from_db.exchange.deployer,
+        fee=pool_from_db.fee_token0,
+        tick_spacing=pool_from_db.tick_spacing,
+    )
+
+
 class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
     type PoolState = UniswapV3PoolState
     _state: PoolState
@@ -207,22 +230,19 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
         self._initial_state_block = state_block
 
         pool_from_db = get_pool_from_database(address=self.address, chain_id=self.chain_id)
+        pool_db_values = _extract_pool_db_values(pool_from_db) if pool_from_db is not None else None
 
         token0_address: ChecksumAddress | str
         token1_address: ChecksumAddress | str
         factory_address: ChecksumAddress | str
 
-        if pool_from_db is not None:
-            token0_address = pool_from_db.token0.address
-            token1_address = pool_from_db.token1.address
-
-            factory_address = pool_from_db.exchange.factory
-            deployer_address = pool_from_db.exchange.deployer
-
-            assert pool_from_db.fee_token0 == pool_from_db.fee_token1
-            self.fee = pool_from_db.fee_token0
-
-            self.tick_spacing = pool_from_db.tick_spacing
+        if pool_db_values is not None:
+            token0_address = pool_db_values.token0_address
+            token1_address = pool_db_values.token1_address
+            factory_address = pool_db_values.factory_address
+            deployer_address = pool_db_values.deployer_address
+            self.fee = pool_db_values.fee
+            self.tick_spacing = pool_db_values.tick_spacing
         else:
             try:
                 factory_address, (token0_address, token1_address), self.fee, self.tick_spacing = (
@@ -790,7 +810,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
         if self._provider_from_connection_manager:
             try:
                 return connection_manager.get_provider(self._chain_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Fall back to cached provider if connection_manager doesn't have one
                 # (e.g., in multiprocessing context)
                 return self._provider
@@ -1326,7 +1346,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
         self,
         token_in: ChecksumAddress,
         amount_in: int,
-        token_out: ChecksumAddress,  # noqa: ARG002
+        token_out: ChecksumAddress,
         state_override: UniswapV3PoolState | None = None,
     ) -> SimulationResult:
         if token_in == self.token0.address:
@@ -1352,7 +1372,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
 
     def simulate_swap_for_output(
         self,
-        token_in: ChecksumAddress,  # noqa: ARG002
+        token_in: ChecksumAddress,
         token_out: ChecksumAddress,
         amount_out: int,
         state_override: UniswapV3PoolState | None = None,
@@ -1378,7 +1398,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
             final_state=result.final_state,
         )
 
-    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001, ARG002
+    def extract_fee(self, zero_for_one: bool) -> Fraction:
         return Fraction(self.fee, self.FEE_DENOMINATOR)
 
     _TICK_RANGE_CACHE: dict[tuple[str, int, bool], tuple[tuple[V3TickRangeInfo, ...], int] | None]
@@ -1386,7 +1406,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
 
     def _get_tick_ranges(
         self,
-        zero_for_one: bool,  # noqa: FBT001
+        zero_for_one: bool,
         max_ranges: int = 3,
     ) -> tuple[tuple[V3TickRangeInfo, ...], int] | None:
         if not hasattr(self, "_TICK_RANGE_CACHE"):
@@ -1447,7 +1467,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
         except StopIteration:
             pass
 
-        if len(initialized_ticks) < 2:  # noqa: PLR2004
+        if len(initialized_ticks) < 2:
             return None
 
         ranges: list[V3TickRangeInfo] = []
@@ -1487,10 +1507,10 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
 
     def to_hop_state(
         self,
-        zero_for_one: bool,  # noqa: FBT001
+        zero_for_one: bool,
         state_override: UniswapV3PoolState | None = None,
     ) -> HopType:
-        from degenbot.uniswap.v3_libraries.functions import v3_virtual_reserves  # noqa: PLC0415
+        from degenbot.uniswap.v3_libraries.functions import v3_virtual_reserves
 
         state = state_override or self.state
         fee = self.extract_fee(zero_for_one=zero_for_one)

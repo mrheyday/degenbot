@@ -60,6 +60,7 @@ pub mod fixed_abi;
 pub mod hex_utils;
 pub mod matching;
 pub mod monitor;
+pub mod optimizers;
 pub mod provider;
 pub mod provider_py;
 pub mod py_cache;
@@ -136,6 +137,9 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Simulation module
     simulation_py::add_simulation_module(m)?;
+
+    // Möbius optimizer module
+    optimizers::mobius_py::add_mobius_module(m)?;
 
     // Async modules
     m.add_class::<async_provider::PyAsyncAlloyProvider>()?;

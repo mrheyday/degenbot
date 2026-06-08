@@ -231,7 +231,7 @@ class SushiswapV3PoolTable(UniswapV3PoolTableBase):
     pool_id: Mapped[PrimaryForeignKeyPoolId]
 
 
-class CamelotV3PoolTable(AbstractUniswapV3Pool):
+class CamelotV3PoolTable(UniswapV3PoolTableBase):
     __tablename__ = "camelot_v3_pools"
     __mapper_args__ = {  # noqa: RUF012
         "polymorphic_identity": "camelot_v3",
