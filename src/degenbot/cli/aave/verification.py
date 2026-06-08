@@ -50,7 +50,7 @@ def get_current_borrow_index_from_pool(
 
     borrow_index: int
     (borrow_index,) = raw_call(
-        w3=provider,
+        provider=provider,
         address=pool_address,
         calldata=encode_function_calldata(
             function_prototype="getReserveNormalizedVariableDebt(address)",
@@ -287,7 +287,7 @@ def verify_scaled_token_positions(
             raise DegenbotValueError(message=msg)
 
         (actual_scaled_balance,) = raw_call(
-            w3=provider,
+            provider=provider,
             address=token_address,
             calldata=encode_function_calldata(
                 function_prototype="scaledBalanceOf(address)",
@@ -305,7 +305,7 @@ def verify_scaled_token_positions(
         )
 
         (actual_last_index,) = raw_call(
-            w3=provider,
+            provider=provider,
             address=token_address,
             calldata=encode_function_calldata(
                 function_prototype="getPreviousIndex(address)",

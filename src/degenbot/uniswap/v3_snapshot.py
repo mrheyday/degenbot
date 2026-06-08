@@ -18,7 +18,7 @@ from degenbot.config import settings
 from degenbot.connection import async_connection_manager, connection_manager
 from degenbot.database import db_session
 from degenbot.database.models.base import ExchangeTable
-from degenbot.database.models.pools import AbstractUniswapV3Pool, LiquidityPoolTable
+from degenbot.database.models.pools import LiquidityPoolTable, UniswapV3PoolTableBase
 from degenbot.database.operations import get_scoped_sqlite_session
 from degenbot.exceptions.liquidity_pool import UnknownPool
 from degenbot.functions import fetch_logs_retrying, fetch_logs_retrying_async
@@ -205,7 +205,7 @@ class DatabaseSnapshot:
             return None
 
         if TYPE_CHECKING:
-            assert isinstance(pool_in_db, AbstractUniswapV3Pool)
+            assert isinstance(pool_in_db, UniswapV3PoolTableBase)
 
         return LiquidityMap(
             tick_bitmap={
@@ -244,7 +244,7 @@ class DatabaseSnapshot:
     def get_pools(self) -> set[ChecksumAddress]:
         return {
             get_checksum_address(pool)
-            for pool in self.session.scalars(select(AbstractUniswapV3Pool.address)).all()
+            for pool in self.session.scalars(select(UniswapV3PoolTableBase.address)).all()
         }
 
 
@@ -356,7 +356,7 @@ class UniswapV3LiquiditySnapshot:
         logger.info(f"Updating Uniswap V3 snapshot from block {self.newest_block} to {to_block}")
 
         event_logs = fetch_logs_retrying(
-            w3=connection_manager.get_web3(self.chain_id),
+            provider=connection_manager.get_provider(self.chain_id),
             start_block=self.newest_block + 1,
             end_block=to_block,
             max_blocks_per_request=blocks_per_request,

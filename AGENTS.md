@@ -75,8 +75,11 @@ class SomeClass:
 - Create a test double with `Fake` prefix instead of mocking
 
 ## Refactoring
+- Unless directed otherwise, design standalone features without a backwards compatibility layer.
 
-- Unless directed otherwise, design standalone features without a backwards compatibility layer. Use a feature flag during development and testing to enable hard cutover. Feature flags are typically implemented as a module-level boolean constant (e.g. `USE_NEW_PATH = bool(os.environ.get("DEGENBOT_NEW_FEATURE", ""))`) that gates the new code path.
+## Ubiquitous Language
+
+Each module has a `UBIQUITOUS_LANGUAGE.md` defining domain terms, aliases to avoid, and resolved ambiguities. The root [`UBIQUITOUS_LANGUAGE.md`](UBIQUITOUS_LANGUAGE.md) indexes all modules and holds cross-cutting content (relationships, ambiguity rulings). Read the relevant module glossary before naming variables, classes, or docstrings in that area.
 
 ## Solidity
 

@@ -1,6 +1,5 @@
 # ruff: noqa: PLR0904
 
-
 # TODO: add event prototype exporter method and handler for callbacks
 import dataclasses
 from collections import deque
@@ -14,14 +13,13 @@ from eth_abi.exceptions import DecodingError
 from eth_typing import ChecksumAddress
 from sqlalchemy import select
 from sqlalchemy.orm import Session, scoped_session
-from web3 import Web3
 from web3.exceptions import ContractLogicError
-from web3.types import BlockIdentifier, TxParams
+from web3.types import BlockIdentifier
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
 from degenbot.database import db_session
-from degenbot.database.models.pools import AbstractUniswapV3Pool, LiquidityPoolTable
+from degenbot.database.models.pools import LiquidityPoolTable, UniswapV3PoolTableBase
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.evm import EVMRevertError
@@ -30,16 +28,22 @@ from degenbot.exceptions.liquidity_pool import (
     ExternalUpdateError,
     IncompleteSwap,
     LateUpdateError,
-    LiquidityMapWordMissing,
     LiquidityPoolError,
-    NoPoolStateAvailable,
 )
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
+from degenbot.provider import ProviderAdapter
 from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractArbitrage, AbstractLiquidityPool
+from degenbot.types.abstract import AbstractArbitrage, AbstractConcentratedLiquidityPool
 from degenbot.types.aliases import BlockNumber, ChainId
 from degenbot.types.concrete import AbstractPublisherMessage, Publisher, PublisherMixin, Subscriber
+from degenbot.types.hop_types import BoundedProductHop, HopType, V3TickRangeInfo
+from degenbot.types.pool_protocols import SimulationResult
+from degenbot.uniswap.concentrated.liquidity_map import LiquidityMapSnapshot, MissingLiquidityData
+from degenbot.uniswap.concentrated.state_manager import (
+    ConcentratedLiquidityStateManager,
+)
+from degenbot.uniswap.concentrated.v3_simulator import calculate_swap as _v3_swap
 from degenbot.uniswap.deployments import FACTORY_DEPLOYMENTS, UniswapV3ExchangeDeployment
 from degenbot.uniswap.types import UniswapPoolSwapVector
 from degenbot.uniswap.v3_functions import (
@@ -47,19 +51,13 @@ from degenbot.uniswap.v3_functions import (
     generate_v3_pool_address,
     get_tick_word_and_bit_position,
 )
-from degenbot.uniswap.v3_libraries.swap_math import compute_swap_step
-from degenbot.uniswap.v3_libraries.tick_bitmap import (
-    flip_tick,
-    gen_ticks,
-    next_initialized_tick_within_one_word,
-)
+from degenbot.uniswap.v3_libraries.tick_bitmap import flip_tick, gen_ticks
 from degenbot.uniswap.v3_libraries.tick_math import (
     MAX_SQRT_RATIO,
     MAX_TICK,
     MIN_SQRT_RATIO,
     MIN_TICK,
     get_sqrt_ratio_at_tick,
-    get_tick_at_sqrt_ratio,
 )
 from degenbot.uniswap.v3_types import (
     InitializedTickMap,
@@ -96,39 +94,11 @@ class UniswapV3BitmapAtWordAsDict(TypedDict):
     block: int
 
 
-@dataclasses.dataclass(slots=True, frozen=True)
-class LiquidityRangeCacheKey:
-    """
-    Cache key for liquidity range swap calculations.
-    """
-
-    exact_input: bool
-    tick_lower: int
-    tick_upper: int
-    liquidity: int
-    zero_for_one: bool
-    price_start: SqrtPriceX96
-    price_end: SqrtPriceX96
-
-
-@dataclasses.dataclass(slots=True, frozen=True)
-class LiquidityRangeCacheValue:
-    """
-    Cached result of a complete liquidity range consumption.
-    """
-
-    amount_in: int
-    amount_out: int
-    fee_amount: int
-    price_end: SqrtPriceX96
-    amount_required: int  # Total amount needed to consume this range
-
-
 def get_pool_from_database(
     address: ChecksumAddress,
     chain_id: int,
     session: Session | scoped_session[Session] = db_session,
-) -> AbstractUniswapV3Pool | None:
+) -> UniswapV3PoolTableBase | None:
     return session.scalar(
         select(LiquidityPoolTable).where(
             LiquidityPoolTable.address == address,
@@ -137,10 +107,10 @@ def get_pool_from_database(
     )  # type: ignore[return-value]
 
 
-class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
+class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
     type PoolState = UniswapV3PoolState
     _state: PoolState
-    _state_cache: deque[PoolState]
+    _state_mgr: ConcentratedLiquidityStateManager[UniswapV3PoolState]
 
     UNISWAP_V3_MAINNET_POOL_INIT_HASH = (
         "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54"
@@ -166,27 +136,6 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
     )
 
     FEE_DENOMINATOR = 1_000_000
-
-    @dataclasses.dataclass(slots=True, eq=False)
-    class SwapState:
-        amount_specified_remaining: int
-        amount_calculated: int
-        sqrt_price_x96: int
-        tick: int
-        liquidity: int
-
-        def __post_init__(self) -> None:
-            assert self.liquidity >= 0
-
-    @dataclasses.dataclass(slots=True, eq=False)
-    class StepComputations:
-        sqrt_price_start_x96: int = 0
-        sqrt_price_next_x96: int = 0
-        tick_next: int = 0
-        initialized: bool = False
-        amount_in: int = 0
-        amount_out: int = 0
-        fee_amount: int = 0
 
     @classmethod
     def from_exchange(
@@ -241,6 +190,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             | dict[str, UniswapV3LiquidityAtTickAsDict]
             | None
         ) = None,
+        provider: ProviderAdapter | None = None,
         state_block: BlockNumber | None = None,
         verify_address: bool = True,
         silent: bool = False,
@@ -248,8 +198,12 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
     ) -> None:
         self.address = get_checksum_address(address)
         self._chain_id = chain_id if chain_id is not None else connection_manager.default_chain_id
-        w3 = connection_manager.get_web3(self.chain_id)
-        state_block = state_block if state_block is not None else w3.eth.block_number
+        self._provider = (
+            provider if provider is not None else connection_manager.get_provider(self.chain_id)
+        )
+        # Track whether provider was fetched from connection_manager (True) or passed in (False)
+        self._provider_from_connection_manager = provider is None
+        state_block = state_block if state_block is not None else self._provider.get_block_number()
         self._initial_state_block = state_block
 
         pool_from_db = get_pool_from_database(address=self.address, chain_id=self.chain_id)
@@ -272,7 +226,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         else:
             try:
                 factory_address, (token0_address, token1_address), self.fee, self.tick_spacing = (
-                    self.get_immutable_pool_values(w3=w3)
+                    self.get_immutable_pool_values(self._provider)
                 )
 
             except (ContractLogicError, DecodingError) as exc:
@@ -282,7 +236,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
         try:
             sqrt_price_x96, tick, liquidity = self.get_mutable_pool_values(
-                w3=w3, state_block=state_block
+                self._provider, state_block=state_block
             )
         except (ContractLogicError, DecodingError) as exc:
             # Contracts differ slightly across Uniswap V3 forks, so decoding may fail. Catch this
@@ -307,7 +261,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 init_hash if init_hash is not None else self.UNISWAP_V3_MAINNET_POOL_INIT_HASH
             )
 
-        token_manager = Erc20TokenManager(chain_id=self.chain_id)
+        token_manager = Erc20TokenManager(chain_id=self.chain_id, provider=self._provider)
         try:
             self.token0, self.token1 = (
                 token_manager.get_erc20token(
@@ -376,13 +330,11 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             tick_data=working_tick_data,
             block=state_block,
         )
-        self._state_cache = deque(maxlen=max(1, state_cache_depth))
-        self._state_cache.append(initial_state)
         self._state_lock = Lock()
-
-        # Liquidity range consumption cache
-        self._swap_step_cache: dict[LiquidityRangeCacheKey, LiquidityRangeCacheValue] = {}
-        self._swap_step_cache_lock = Lock()
+        self._state_mgr = ConcentratedLiquidityStateManager(
+            initial_state=initial_state,
+            state_cache_depth=state_cache_depth,
+        )
 
         pool_registry.add(
             pool=self,
@@ -408,9 +360,10 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         # after pickling/unpickling
         copied_attributes: set[str] = set()
         dropped_attributes = {
+            "_provider",
+            "_provider_from_connection_manager",
             "_state_lock",
             "_subscribers",
-            "_swap_step_cache_lock",
         }
 
         with self._state_lock:
@@ -422,8 +375,16 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         state["_state_lock"] = Lock()
-        state["_swap_step_cache_lock"] = Lock()
+        # After unpickling, provider must be re-acquired from connection_manager
+        state["_provider_from_connection_manager"] = True
         self.__dict__ = state
+
+    def __getnewargs_ex__(self) -> tuple[tuple[()], dict[str, Any]]:
+        """
+        Return empty args so __init__ is not called during unpickling.
+        The object is reconstructed via __setstate__.
+        """
+        return (), {}
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1}, fee={100 * self.fee / self.FEE_DENOMINATOR:.2f}%, tick spacing={self.tick_spacing})"
@@ -452,217 +413,93 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         This method will fetch missing liquidity data as needed, but this data is discarded.
         """
 
-        if amount_specified == 0:  # pragma: no branch
-            raise EVMRevertError(error="AS")
-
-        exact_input = amount_specified > 0
-
         if override_state is not None:
+            snapshot = LiquidityMapSnapshot.from_state(
+                override_state,
+                tick_spacing=self.tick_spacing,
+                sparse=self.sparse_liquidity_map,
+            )
             liquidity_start = override_state.liquidity
             sqrt_price_x96_start = override_state.sqrt_price_x96
             tick_start = override_state.tick
-            tick_bitmap = override_state.tick_bitmap
-            tick_data = override_state.tick_data
         else:
+            # The tick bitmap and tick data accessed through the property are copies,
+            # so they can be freely modified without corrupting the state
+            snapshot = LiquidityMapSnapshot(
+                tick_data=self.tick_data,
+                tick_bitmap=self.tick_bitmap,
+                tick_spacing=self.tick_spacing,
+                sparse=self.sparse_liquidity_map,
+            )
             liquidity_start = self.liquidity
             sqrt_price_x96_start = self.sqrt_price_x96
             tick_start = self.tick
-            # The tick bitmap and tick data dictionaries accessed through the attribute are copies,
-            # so they can be freely modified without corrupting the state
-            tick_bitmap = self.tick_bitmap
-            tick_data = self.tick_data
 
-        assert liquidity_start >= 0
-
-        if zero_for_one and not (
-            MIN_SQRT_RATIO < sqrt_price_limit_x96 < sqrt_price_x96_start
-        ):  # pragma: no cover
-            raise EVMRevertError(error="SPL")
-
-        if not zero_for_one and not (
-            sqrt_price_x96_start < sqrt_price_limit_x96 < MAX_SQRT_RATIO
-        ):  # pragma: no cover
-            raise EVMRevertError(error="SPL")
-
-        swap_state = self.SwapState(
-            amount_specified_remaining=amount_specified,
-            amount_calculated=0,
-            sqrt_price_x96=sqrt_price_x96_start,
-            tick=tick_start,
-            liquidity=liquidity_start,
-        )
-
-        if not self.sparse_liquidity_map:
-            # The liquidity mapping is complete. Optimize loop by building a generator that yields
-            # ticks and initialization status along the swap path
-            ticks_along_swap_path = gen_ticks(
-                tick_data=tick_data,
-                starting_tick=tick_start,
-                tick_spacing=self.tick_spacing,
-                less_than_or_equal=zero_for_one,
-            )
-
-        step = self.StepComputations()
-
-        while (
-            swap_state.amount_specified_remaining != 0
-            and swap_state.sqrt_price_x96 != sqrt_price_limit_x96
-        ):
-            step.sqrt_price_start_x96 = swap_state.sqrt_price_x96
-
-            if not self.sparse_liquidity_map:
-                step.tick_next, step.initialized = next(ticks_along_swap_path)
-            else:
+        if self.sparse_liquidity_map:
+            # Sparse map may raise MissingLiquidityData. Fetch missing data and retry.
+            while True:
                 try:
-                    step.tick_next, step.initialized = next_initialized_tick_within_one_word(
-                        tick_bitmap=tick_bitmap,
-                        tick_data=tick_data,
-                        tick=swap_state.tick,
-                        tick_spacing=self.tick_spacing,
-                        less_than_or_equal=zero_for_one,
+                    result = _v3_swap(
+                        snapshot=snapshot,
+                        zero_for_one=zero_for_one,
+                        amount_specified=amount_specified,
+                        sqrt_price_limit_x96=sqrt_price_limit_x96,
+                        fee=self.fee,
+                        liquidity_start=liquidity_start,
+                        sqrt_price_x96_start=sqrt_price_x96_start,
+                        tick_start=tick_start,
                     )
-                except LiquidityMapWordMissing as exc:
-                    missing_word = exc.word
+                except MissingLiquidityData as exc:
+                    # Fetch missing word into mutable copies, then rebuild snapshot
+                    working_bitmap = dict(snapshot.tick_bitmap)
+                    working_data = dict(snapshot.tick_data)
                     self._fetch_and_populate_initialized_ticks(
-                        word_position=missing_word,
-                        tick_bitmap=tick_bitmap,
-                        tick_data=tick_data,
+                        word_position=exc.word,
+                        tick_bitmap=cast("InitializedTickMap", working_bitmap),
+                        tick_data=cast("LiquidityMap", working_data),
                         block_number=self.update_block,
                     )
-                    continue
-
-            # Ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of
-            # these bounds
-            step.tick_next = (
-                max(MIN_TICK, step.tick_next)  # descending ticks
-                if zero_for_one
-                else min(MAX_TICK, step.tick_next)  # ascending ticks
-            )
-
-            step.sqrt_price_next_x96 = get_sqrt_ratio_at_tick(step.tick_next)
-
-            # Determine the current liquidity range boundaries
-            if zero_for_one:
-                tick_lower, tick_upper = (
-                    step.tick_next,
-                    step.tick_next + self.tick_spacing,
-                )
-            else:
-                tick_lower, tick_upper = (
-                    step.tick_next - self.tick_spacing,
-                    step.tick_next,
-                )
-            assert tick_lower < tick_upper, f"{tick_lower} should be < {tick_upper}"
-
-            cached_result = self._swap_step_cache.get(
-                LiquidityRangeCacheKey(
-                    exact_input=exact_input,
-                    tick_lower=tick_lower,
-                    tick_upper=tick_upper,
-                    liquidity=swap_state.liquidity,
-                    zero_for_one=zero_for_one,
-                    price_start=step.sqrt_price_start_x96,
-                    price_end=step.sqrt_price_next_x96,
-                )
-            )
-
-            if (
-                cached_result
-                and abs(swap_state.amount_specified_remaining) >= cached_result.amount_required
-            ):
-                swap_state.sqrt_price_x96 = cached_result.price_end
-                step.amount_in = cached_result.amount_in
-                step.amount_out = cached_result.amount_out
-                step.fee_amount = cached_result.fee_amount
-            else:
-                # compute values to swap to the target tick, price limit, or point where
-                # the input/output amount is exhausted
-                swap_state.sqrt_price_x96, step.amount_in, step.amount_out, step.fee_amount = (
-                    compute_swap_step(
-                        sqrt_ratio_x96_current=swap_state.sqrt_price_x96,
-                        sqrt_ratio_x96_target=(
-                            sqrt_price_limit_x96
-                            if (
-                                (
-                                    zero_for_one is True
-                                    and step.sqrt_price_next_x96 < sqrt_price_limit_x96
-                                )
-                                or (
-                                    zero_for_one is False
-                                    and step.sqrt_price_next_x96 > sqrt_price_limit_x96
-                                )
-                            )
-                            else step.sqrt_price_next_x96
-                        ),
-                        liquidity=swap_state.liquidity,
-                        amount_remaining=swap_state.amount_specified_remaining,
-                        fee_pips=self.fee,
+                    snapshot = LiquidityMapSnapshot(
+                        tick_data=working_data,
+                        tick_bitmap=working_bitmap,
+                        tick_spacing=self.tick_spacing,
+                        sparse=True,
                     )
-                )
-
-            if exact_input:
-                swap_state.amount_specified_remaining -= step.amount_in + step.fee_amount
-                swap_state.amount_calculated -= step.amount_out
-            else:
-                swap_state.amount_specified_remaining += step.amount_out
-                swap_state.amount_calculated += step.amount_in + step.fee_amount
-
-            if swap_state.sqrt_price_x96 == step.sqrt_price_next_x96:  # pragma: no branch
-                # Cache the step if it consumed the liquidity range
-                if not cached_result:
-                    self._cache_swap_step(
-                        tick_lower=tick_lower,
-                        tick_upper=tick_upper,
-                        liquidity=swap_state.liquidity,
-                        zero_for_one=zero_for_one,
-                        exact_input=exact_input,
-                        amount_in=step.amount_in,
-                        amount_out=step.amount_out,
-                        fee_amount=step.fee_amount,
-                        price_start=step.sqrt_price_start_x96,
-                        price_end=swap_state.sqrt_price_x96,
+                else:
+                    return (
+                        result.amount0,
+                        result.amount1,
+                        result.sqrt_price_x96,
+                        result.liquidity,
+                        result.tick,
                     )
-                # If the next tick is initialized, adjust the in-range liquidity
-                if step.initialized:
-                    liquidity_net_at_next_tick = tick_data[step.tick_next].liquidity_net
-                    swap_state = dataclasses.replace(
-                        swap_state,
-                        liquidity=swap_state.liquidity
-                        + (
-                            -liquidity_net_at_next_tick
-                            if zero_for_one
-                            else liquidity_net_at_next_tick
-                        ),
-                    )
-                swap_state.tick = step.tick_next - 1 if zero_for_one else step.tick_next
-
-            elif swap_state.sqrt_price_x96 != step.sqrt_price_start_x96:  # pragma: no branch
-                # Recompute unless we're on a lower tick boundary (i.e. already transitioned ticks),
-                # and haven't moved
-                swap_state.tick = get_tick_at_sqrt_ratio(swap_state.sqrt_price_x96)
-
-        amount0, amount1 = (
-            (
-                amount_specified - swap_state.amount_specified_remaining,
-                swap_state.amount_calculated,
+        else:
+            result = _v3_swap(
+                snapshot=snapshot,
+                zero_for_one=zero_for_one,
+                amount_specified=amount_specified,
+                sqrt_price_limit_x96=sqrt_price_limit_x96,
+                fee=self.fee,
+                liquidity_start=liquidity_start,
+                sqrt_price_x96_start=sqrt_price_x96_start,
+                tick_start=tick_start,
             )
-            if zero_for_one == exact_input
-            else (
-                swap_state.amount_calculated,
-                amount_specified - swap_state.amount_specified_remaining,
+            return (
+                result.amount0,
+                result.amount1,
+                result.sqrt_price_x96,
+                result.liquidity,
+                result.tick,
             )
-        )
-
-        return amount0, amount1, swap_state.sqrt_price_x96, swap_state.liquidity, swap_state.tick
 
     def get_tick_bitmap_at_word(
         self,
-        w3: Web3,
+        provider: ProviderAdapter,
         word_position: int,
         block_identifier: BlockIdentifier,
     ) -> int:
         (bitmap_at_word,) = raw_call(
-            w3=w3,
+            provider,
             address=self.address,
             calldata=encode_function_calldata(
                 function_prototype="tickBitmap(int16)",
@@ -675,12 +512,12 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     def get_populated_ticks_in_word(
         self,
-        w3: Web3,
+        provider: ProviderAdapter,
         word_position: int,
         block_identifier: BlockIdentifier,
     ) -> list[tuple[int, int, int]]:
         bitmap_at_word = self.get_tick_bitmap_at_word(
-            w3=w3,
+            provider,
             word_position=word_position,
             block_identifier=block_identifier,
         )
@@ -691,27 +528,24 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             if bitmap_at_word & (1 << i) > 0
         ]
 
-        with w3.batch_requests() as batch:
-            for tick in active_ticks:
-                batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="ticks(int24)",
-                                function_arguments=[tick],
-                            ),
-                        ),
-                        block_identifier=block_identifier,
-                    )
-                )
-            results = batch.execute()
+        results: list[HexBytes] = []
+        block = block_identifier if isinstance(block_identifier, int) else None
+        for tick in active_ticks:
+            result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="ticks(int24)",
+                    function_arguments=[tick],
+                ),
+                block=block,
+            )
+            results.append(result)
 
         populated_ticks = []
         for tick, result in zip(active_ticks, results, strict=True):
             liquidity_gross, liquidity_net, *_ = eth_abi.abi.decode(
                 types=self.TICK_STRUCT_TYPES,
-                data=cast("HexBytes", result),
+                data=result,
             )
             populated_ticks.append((tick, liquidity_gross, liquidity_net))
 
@@ -730,20 +564,18 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         position. A word is divided into 256 ticks, spaced at a fixed interval.
         """
 
-        w3 = connection_manager.get_web3(self.chain_id)
-
         if block_number is None:
-            block_number = w3.eth.get_block_number()
+            block_number = self._provider.get_block_number()
 
         working_tick_data: list[tuple[Tick, LiquidityGross, LiquidityNet]] = []
         working_tick_bitmap = self.get_tick_bitmap_at_word(
-            w3=w3,
+            self._provider,
             word_position=word_position,
             block_identifier=block_number,
         )
         if working_tick_bitmap != 0:
             working_tick_data = self.get_populated_ticks_in_word(
-                w3=w3,
+                self._provider,
                 word_position=word_position,
                 block_identifier=block_number,
             )
@@ -759,64 +591,6 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 block=block_number,
             )
 
-    def _cache_swap_step(
-        self,
-        *,
-        tick_lower: int,
-        tick_upper: int,
-        liquidity: int,
-        zero_for_one: bool,
-        exact_input: bool,
-        amount_in: int,
-        amount_out: int,
-        fee_amount: int,
-        price_start: SqrtPriceX96,
-        price_end: SqrtPriceX96,
-    ) -> None:
-        """
-        Cache the input and output of a swap step that reached a lower or upper limit of a liquidity
-        range.
-        """
-        cache_key = LiquidityRangeCacheKey(
-            exact_input=exact_input,
-            tick_lower=tick_lower,
-            tick_upper=tick_upper,
-            liquidity=liquidity,
-            zero_for_one=zero_for_one,
-            price_start=price_start,
-            price_end=price_end,
-        )
-
-        # Calculate the total amount required to consume this range
-        amount_required = (amount_in + fee_amount) if exact_input else amount_out
-
-        cache_value = LiquidityRangeCacheValue(
-            amount_in=amount_in,
-            amount_out=amount_out,
-            fee_amount=fee_amount,
-            price_end=price_end,
-            amount_required=amount_required,
-        )
-
-        with self._swap_step_cache_lock:
-            self._swap_step_cache[cache_key] = cache_value
-
-    def _invalidate_range_cache_for_ticks(self, tick_lower: int, tick_upper: int) -> None:
-        """
-        Invalidate cache entries that overlap with the specified tick range.
-
-        This should be called when liquidity is updated in a range to ensure
-        cached calculations remain valid.
-        """
-        with self._swap_step_cache_lock:
-            self._swap_step_cache = {
-                key: value
-                for key, value in self._swap_step_cache.items()
-                # Preserve only the cached values outside of the updated range
-                # TODO: determine if one or more inequalities can be <= or >=
-                if (tick_lower > key.tick_upper or tick_upper < key.tick_lower)
-            }
-
     def _verified_address(self) -> ChecksumAddress:
         return generate_v3_pool_address(
             deployer_address=self.deployer_address,
@@ -827,7 +601,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     def get_immutable_pool_values(
         self,
-        w3: Web3,
+        provider: ProviderAdapter,
     ) -> tuple[
         str,  # factory
         tuple[str, str],  # tokens
@@ -835,56 +609,47 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         int,  # tick spacing
     ]:
         try:
-            with w3.batch_requests() as batch:
-                batch.add_mapping({
-                    w3.eth.call: [
-                        TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="factory()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="token0()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="token1()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="fee()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="tickSpacing()",
-                                function_arguments=None,
-                            ),
-                        ),
-                    ],
-                })
-
-                factory, token0, token1, fee, tick_spacing = batch.execute()
-
-            (factory,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", factory))
-            (token0,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", token0))
-            (token1,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", token1))
-            (fee,) = eth_abi.abi.decode(types=["uint256"], data=cast("HexBytes", fee))
-            (tick_spacing,) = eth_abi.abi.decode(
-                types=["uint256"], data=cast("HexBytes", tick_spacing)
+            factory_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="factory()",
+                    function_arguments=None,
+                ),
             )
+            token0_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="token0()",
+                    function_arguments=None,
+                ),
+            )
+            token1_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="token1()",
+                    function_arguments=None,
+                ),
+            )
+            fee_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="fee()",
+                    function_arguments=None,
+                ),
+            )
+            tick_spacing_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="tickSpacing()",
+                    function_arguments=None,
+                ),
+            )
+
+            (factory,) = eth_abi.abi.decode(types=["address"], data=factory_result)
+            (token0,) = eth_abi.abi.decode(types=["address"], data=token0_result)
+            (token1,) = eth_abi.abi.decode(types=["address"], data=token1_result)
+            (fee,) = eth_abi.abi.decode(types=["uint256"], data=fee_result)
+            (tick_spacing,) = eth_abi.abi.decode(types=["uint256"], data=tick_spacing_result)
 
         except (ContractLogicError, DecodingError) as exc:
             # Contracts differ slightly across Uniswap V3 forks, so decoding may fail. Catch this
@@ -901,43 +666,29 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     def get_mutable_pool_values(
         self,
-        w3: Web3,
+        provider: ProviderAdapter,
         state_block: BlockNumber,
     ) -> tuple[SqrtPriceX96, Tick, Liquidity]:
         try:
-            with w3.batch_requests() as batch:
-                # This calls use a specific block so the mutable state values are consistent
-                batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="slot0()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        block_identifier=state_block,
-                    )
-                )
-                batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="liquidity()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        block_identifier=state_block,
-                    )
-                )
-
-                slot0, liquidity = batch.execute()
-
-            price, tick, *_ = eth_abi.abi.decode(
-                types=self.SLOT0_STRUCT_TYPES, data=cast("HexBytes", slot0)
+            slot0_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="slot0()",
+                    function_arguments=None,
+                ),
+                block=state_block,
             )
-            (liquidity,) = eth_abi.abi.decode(types=["uint256"], data=cast("HexBytes", liquidity))
+            liquidity_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="liquidity()",
+                    function_arguments=None,
+                ),
+                block=state_block,
+            )
+
+            price, tick, *_ = eth_abi.abi.decode(types=self.SLOT0_STRUCT_TYPES, data=slot0_result)
+            (liquidity,) = eth_abi.abi.decode(types=["uint256"], data=liquidity_result)
 
         except (ContractLogicError, DecodingError) as exc:
             # Contracts differ slightly across Uniswap V3 forks, so decoding may fail. Catch this
@@ -957,15 +708,27 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     @property
     def liquidity(self) -> int:
-        return self.state.liquidity
+        return self._state_mgr.liquidity
 
     @property
     def sqrt_price_x96(self) -> int:
-        return self.state.sqrt_price_x96
+        return self._state_mgr.sqrt_price_x96
+
+    @property
+    def _state_cache(self) -> deque[PoolState]:
+        return self._state_mgr.state_cache
+
+    @_state_cache.setter
+    def _state_cache(self, value: deque[PoolState]) -> None:
+        if not hasattr(self, "_state_mgr"):
+            self._state_mgr = object.__new__(ConcentratedLiquidityStateManager)
+            self._state_mgr.state_cache = value
+            return
+        self._state_mgr.state_cache = value
 
     @property
     def state(self) -> PoolState:
-        return self._state_cache[-1]
+        return self._state_mgr.state
 
     def to_v3_snapshot_json(self, state_override: PoolState | None = None) -> str:
         """
@@ -987,15 +750,15 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
 
     @property
     def tick(self) -> int:
-        return self.state.tick
+        return self._state_mgr.tick
 
     @property
     def tick_bitmap(self) -> InitializedTickMap:
-        return self.state.tick_bitmap.copy()
+        return cast("InitializedTickMap", self._state_mgr.tick_bitmap)
 
     @property
     def tick_data(self) -> LiquidityMap:
-        return self.state.tick_data.copy()
+        return cast("LiquidityMap", self._state_mgr.tick_data)
 
     @property
     def tokens(self) -> tuple[Erc20Token, Erc20Token]:
@@ -1012,40 +775,26 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         state: PoolState,
         vector: UniswapPoolSwapVector,
     ) -> bool:
-        if self.sparse_liquidity_map:
-            # Liquidity cannot be checked with a sparse mapping, so default to True
-            return True
+        return self._state_mgr.swap_is_viable(
+            state=state,
+            zero_for_one=vector.zero_for_one,
+            sparse_liquidity_map=self.sparse_liquidity_map,
+        )
 
-        if state.tick_data == {}:
-            # The pool has no liquidity
-            return False
+    def _get_provider_for_chain(self) -> ProviderAdapter:
+        """Get the provider for this pool's chain.
 
-        if state.sqrt_price_x96 == 0:
-            # The pool is not initialized
-            assert state.tick_data == {}, (
-                f"Found pool @ {self.address} with liquidity positions, but price=0!"
-            )
-            return False
-
-        if (vector.zero_for_one is True and state.sqrt_price_x96 <= MIN_SQRT_RATIO + 1) or (
-            vector.zero_for_one is False and state.sqrt_price_x96 >= MAX_SQRT_RATIO - 1
-        ):
-            # The price has reached the min/max price, and the swap would drive it beyond
-            # that limit
-            return False
-
-        # ----------------------------------------------------------------------------------
-        # After this point, at least one liquidity position is assumed
-        # ----------------------------------------------------------------------------------
-
-        if vector.zero_for_one:
-            # A 0->1 swap will lower the price & tick, so pool viability can be
-            # determined by checking for a liquidity position starting below
-            # the current price
-            return get_sqrt_ratio_at_tick(min(state.tick_data)) < state.sqrt_price_x96
-        # A 1->0 swap will raise the price & tick. Check for a liquidity position
-        # above the current price, similar to the above comment.
-        return get_sqrt_ratio_at_tick(max(state.tick_data)) > state.sqrt_price_x96
+        If the provider was passed in explicitly during construction, use the cached provider.
+        Otherwise, fetch from connection_manager to handle provider updates.
+        """
+        if self._provider_from_connection_manager:
+            try:
+                return connection_manager.get_provider(self._chain_id)
+            except Exception:  # noqa: BLE001
+                # Fall back to cached provider if connection_manager doesn't have one
+                # (e.g., in multiprocessing context)
+                return self._provider
+        return self._provider
 
     def auto_update(
         self,
@@ -1065,49 +814,34 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             if block_number is not None and block_number < self.update_block:
                 raise LateUpdateError
 
-            w3 = connection_manager.get_web3(self.chain_id)
-            block_number = block_number if block_number is not None else w3.eth.get_block_number()
+            provider = self._get_provider_for_chain()
+            block_number = block_number if block_number is not None else provider.get_block_number()
 
-            with w3.batch_requests() as batch:
-                batch.add(
-                    # This call uses a specific block so the mutable state values are consistent
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="slot0()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        block_identifier=block_number,
-                    )
-                )
-                batch.add(
-                    # This call uses a specific block so the mutable state values are consistent
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="liquidity()",
-                                function_arguments=None,
-                            ),
-                        ),
-                        block_identifier=block_number,
-                    )
-                )
-
-                slot0_result, liquidity_result = batch.execute()
+            slot0_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="slot0()",
+                    function_arguments=None,
+                ),
+                block=block_number,
+            )
+            liquidity_result = provider.call(
+                to=self.address,
+                data=encode_function_calldata(
+                    function_prototype="liquidity()",
+                    function_arguments=None,
+                ),
+                block=block_number,
+            )
 
             sqrt_price_x96: int
             tick: int
             liquidity: int
 
             sqrt_price_x96, tick, *_ = eth_abi.abi.decode(
-                types=self.SLOT0_STRUCT_TYPES, data=cast("HexBytes", slot0_result)
+                types=self.SLOT0_STRUCT_TYPES, data=slot0_result
             )
-            (liquidity,) = eth_abi.abi.decode(
-                types=["uint256"], data=cast("HexBytes", liquidity_result)
-            )
+            (liquidity,) = eth_abi.abi.decode(types=["uint256"], data=liquidity_result)
 
             if (
                 sqrt_price_x96 == self.sqrt_price_x96
@@ -1124,9 +858,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 block=block_number,
             )
 
-            if self.state.block == block_number:
-                self._state_cache.pop()
-            self._state_cache.append(working_state)
+            self._state_mgr.push_state(working_state)
 
             self._notify_subscribers(
                 message=UniswapV3PoolStateUpdated(working_state),
@@ -1281,9 +1013,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 block=state_block,
             )
 
-            if self.state.block == update.block_number:
-                self._state_cache.pop()
-            self._state_cache.append(working_state)
+            self._state_mgr.push_state(working_state)
 
             self._notify_subscribers(
                 message=UniswapV3PoolStateUpdated(working_state),
@@ -1303,9 +1033,6 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         """
 
         with self._state_lock:
-            # Invalidate cache entries for the affected range before applying the update
-            self._invalidate_range_cache_for_ticks(update.tick_lower, update.tick_upper)
-
             state_block = update.block_number
 
             # The tick bitmap and tick data dictionaries accessed through the attribute are copies,
@@ -1408,9 +1135,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 block=max(self.update_block, state_block),
             )
 
-            if self.state.block == update.block_number:
-                self._state_cache.pop()
-            self._state_cache.append(working_state)
+            self._state_mgr.push_state(working_state)
 
             self._notify_subscribers(
                 message=UniswapV3PoolStateUpdated(working_state),
@@ -1453,7 +1178,7 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
         WETH/USDC exchange rate is 649004842.70137. Rounding down, this signifies that the smallest
         swap (1 USDC) results in a 649004842 WETH output.
 
-        A V4 pool encodes the token1/token0 exchange rate in `sqrt_price_x96`, so it can be directly
+        A V3 pool encodes the token1/token0 exchange rate in `sqrt_price_x96`, so it can be directly
         obtained.
         """
 
@@ -1496,57 +1221,16 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
             else Fraction(10**self.token0.decimals, 10**self.token1.decimals)
         )
 
-    def discard_states_before_block(
-        self,
-        block: BlockNumber,
-    ) -> None:
-        """
-        Discard cached states earlier than the given block.
-        """
-
+    def discard_states_before_block(self, block: BlockNumber) -> None:
+        """Discard cached states earlier than the given block."""
         with self._state_lock:
-            # The oldest state already satisfies the request
-            if (earliest_block := self._state_cache[0].block) and earliest_block >= block:
-                return
+            self._state_mgr.discard_states_before_block(block)
 
-            # The newest state is older than the target block, so there is no state to return to
-            if (newest_block := self._state_cache[-1].block) and newest_block < block:
-                raise NoPoolStateAvailable(block=block)
-
-            # Discard older states until the earliest block is crossed
-            while (earliest_block := self._state_cache[0].block) is None or earliest_block < block:
-                self._state_cache.popleft()
-
-            assert self.state.block is not None
-            assert self.state.block >= block
-
-    def restore_state_before_block(
-        self,
-        block: BlockNumber,
-    ) -> None:
-        """
-        Restore the last pool state recorded prior to a target block.
-
-        Use this method to maintain consistent state data following a chain re-organization.
-
-        The pool will notify all subscribers of the new state with a `UniswapV3PoolStateUpdated`
-        event.
-        """
-
+    def restore_state_before_block(self, block: BlockNumber) -> None:
+        """Restore the last pool state recorded prior to a target block."""
         with self._state_lock:
-            # The newest state already satisfies the request
-            if (newest_block := self._state_cache[-1].block) and newest_block < block:
-                return
-
-            # No earlier state is available
-            if (earliest_block := self._state_cache[0].block) and earliest_block >= block:
-                raise NoPoolStateAvailable(block=block)
-
-            # Discard blocks until the last block is older than the target
-            while self._state_cache[-1].block is None or self._state_cache[-1].block >= block:
-                self._state_cache.pop()
-
-            self._notify_subscribers(message=UniswapV3PoolStateUpdated(self.state))
+            restored: UniswapV3PoolState = self._state_mgr.restore_state_before_block(block)
+            self._notify_subscribers(message=UniswapV3PoolStateUpdated(restored))
 
     def simulate_exact_input_swap(
         self,
@@ -1638,24 +1322,206 @@ class UniswapV3Pool(PublisherMixin, AbstractLiquidityPool):
                 ),
             )
 
-    def clear_swap_step_cache(self) -> None:
-        """
-        Clear all cached liquidity range calculations.
+    def simulate_swap(
+        self,
+        token_in: ChecksumAddress,
+        amount_in: int,
+        token_out: ChecksumAddress,  # noqa: ARG002
+        state_override: UniswapV3PoolState | None = None,
+    ) -> SimulationResult:
+        if token_in == self.token0.address:
+            token_in_obj = self.token0
+        elif token_in == self.token1.address:
+            token_in_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_in {token_in} not in pool")
 
-        This can be useful for memory management or when you want to ensure
-        fresh calculations.
-        """
-        with self._swap_step_cache_lock:
-            self._swap_step_cache.clear()
+        result = self.simulate_exact_input_swap(
+            token_in=token_in_obj,
+            token_in_quantity=amount_in,
+            override_state=state_override,
+        )
+        zero_for_one = token_in_obj == self.token0
+        amount_out = -result.amount1_delta if zero_for_one else -result.amount0_delta
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=result.initial_state,
+            final_state=result.final_state,
+        )
 
-    def get_range_cache_stats(self) -> dict[str, int]:
-        """
-        Get statistics about the liquidity range cache.
+    def simulate_swap_for_output(
+        self,
+        token_in: ChecksumAddress,  # noqa: ARG002
+        token_out: ChecksumAddress,
+        amount_out: int,
+        state_override: UniswapV3PoolState | None = None,
+    ) -> SimulationResult:
+        if token_out == self.token0.address:
+            token_out_obj = self.token0
+        elif token_out == self.token1.address:
+            token_out_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_out {token_out} not in pool")
 
-        Returns:
-            Dictionary containing cache size and other metrics.
-        """
-        with self._swap_step_cache_lock:
-            return {
-                "cache_size": len(self._swap_step_cache),
-            }
+        result = self.simulate_exact_output_swap(
+            token_out=token_out_obj,
+            token_out_quantity=amount_out,
+            override_state=state_override,
+        )
+        zero_for_one = token_out_obj == self.token1
+        amount_in = result.amount0_delta if zero_for_one else result.amount1_delta
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=result.initial_state,
+            final_state=result.final_state,
+        )
+
+    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001, ARG002
+        return Fraction(self.fee, self.FEE_DENOMINATOR)
+
+    _TICK_RANGE_CACHE: dict[tuple[str, int, bool], tuple[tuple[V3TickRangeInfo, ...], int] | None]
+    _MAX_TICK_RANGE_CACHE_SIZE: int = 128
+
+    def _get_tick_ranges(
+        self,
+        zero_for_one: bool,  # noqa: FBT001
+        max_ranges: int = 3,
+    ) -> tuple[tuple[V3TickRangeInfo, ...], int] | None:
+        if not hasattr(self, "_TICK_RANGE_CACHE"):
+            self._TICK_RANGE_CACHE = {}
+
+        cache_key = (str(self.address), self.tick, zero_for_one)
+
+        if cache_key in self._TICK_RANGE_CACHE:
+            return self._TICK_RANGE_CACHE[cache_key]
+
+        result = self._compute_tick_ranges(zero_for_one=zero_for_one, max_ranges=max_ranges)
+
+        if len(self._TICK_RANGE_CACHE) >= self._MAX_TICK_RANGE_CACHE_SIZE:
+            self._TICK_RANGE_CACHE.clear()
+
+        self._TICK_RANGE_CACHE[cache_key] = result
+        return result
+
+    def _compute_tick_ranges(
+        self,
+        *,
+        zero_for_one: bool,
+        max_ranges: int = 3,
+    ) -> tuple[tuple[V3TickRangeInfo, ...], int] | None:
+        if getattr(self, "sparse_liquidity_map", True):
+            return None
+
+        tick_data = getattr(self, "tick_data", None)
+        tick_bitmap = getattr(self, "tick_bitmap", None)
+        tick_spacing = getattr(self, "tick_spacing", 0)
+
+        if tick_data is None or tick_bitmap is None or tick_spacing == 0:
+            return None
+
+        current_tick = self.tick
+        less_than_or_equal = not zero_for_one
+
+        try:
+            ticks_along_path = gen_ticks(
+                tick_data=tick_data,
+                starting_tick=current_tick,
+                tick_spacing=tick_spacing,
+                less_than_or_equal=less_than_or_equal,
+            )
+        except (ValueError, KeyError, IndexError):
+            return None
+
+        initialized_ticks: list[int] = []
+        try:
+            for tick, is_initialized in ticks_along_path:
+                clamped_tick = max(MIN_TICK, tick) if less_than_or_equal else min(MAX_TICK, tick)
+                if clamped_tick != tick:
+                    break
+                if len(initialized_ticks) >= max_ranges + 1:
+                    break
+                if is_initialized or tick == current_tick:
+                    initialized_ticks.append(tick)
+        except StopIteration:
+            pass
+
+        if len(initialized_ticks) < 2:  # noqa: PLR2004
+            return None
+
+        ranges: list[V3TickRangeInfo] = []
+        current_idx = 0
+
+        for i in range(len(initialized_ticks) - 1):
+            if zero_for_one:
+                tick_lower = initialized_ticks[i + 1]
+                tick_upper = initialized_ticks[i]
+            else:
+                tick_lower = initialized_ticks[i]
+                tick_upper = initialized_ticks[i + 1]
+
+            tick_info = tick_data.get(tick_lower if zero_for_one else tick_upper)
+            liquidity = tick_info.liquidity_net if tick_info else self.liquidity
+
+            sqrt_price_lower = int(get_sqrt_ratio_at_tick(tick_lower))
+            sqrt_price_upper = int(get_sqrt_ratio_at_tick(tick_upper))
+
+            ranges.append(
+                V3TickRangeInfo(
+                    tick_lower=tick_lower,
+                    tick_upper=tick_upper,
+                    liquidity=liquidity,
+                    sqrt_price_lower=sqrt_price_lower,
+                    sqrt_price_upper=sqrt_price_upper,
+                )
+            )
+
+            if tick_lower <= current_tick < tick_upper:
+                current_idx = i
+
+        if len(ranges) < 1:
+            return None
+
+        return (tuple(ranges), current_idx)
+
+    def to_hop_state(
+        self,
+        zero_for_one: bool,  # noqa: FBT001
+        state_override: UniswapV3PoolState | None = None,
+    ) -> HopType:
+        from degenbot.uniswap.v3_libraries.functions import v3_virtual_reserves  # noqa: PLC0415
+
+        state = state_override or self.state
+        fee = self.extract_fee(zero_for_one=zero_for_one)
+        reserve_in, reserve_out = v3_virtual_reserves(
+            liquidity=state.liquidity,
+            sqrt_price_x96=state.sqrt_price_x96,
+            zero_for_one=zero_for_one,
+        )
+
+        if state_override is None:
+            tick_ranges = self._get_tick_ranges(zero_for_one)
+            if tick_ranges is not None:
+                ranges, current_idx = tick_ranges
+                return BoundedProductHop(
+                    reserve_in=reserve_in,
+                    reserve_out=reserve_out,
+                    fee=fee,
+                    liquidity=state.liquidity,
+                    sqrt_price=state.sqrt_price_x96,
+                    tick_lower=state.tick,
+                    tick_upper=state.tick,
+                    tick_ranges=ranges,
+                    current_range_index=current_idx,
+                )
+
+        return BoundedProductHop(
+            reserve_in=reserve_in,
+            reserve_out=reserve_out,
+            fee=fee,
+            liquidity=state.liquidity,
+            sqrt_price=state.sqrt_price_x96,
+            tick_lower=state.tick,
+            tick_upper=state.tick,
+        )

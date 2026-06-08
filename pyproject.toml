@@ -68,6 +68,9 @@ exclude_also = [
 source = ["src/degenbot"]
 parallel = true
 branch = true
+omit = [
+    "**/migrations/**/*.py",
+]
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]
@@ -249,6 +252,7 @@ markers = [
     "database: tests requiring an operator-populated degenbot SQLite database",
     "ethereum: tests requiring an Ethereum mainnet RPC",
     "live_rpc: tests requiring public or operator-provided live RPC endpoints",
+    "slow: tests that are too slow for routine local runs (e.g. pathfinding)",
 ]
 
 [dependency-groups]

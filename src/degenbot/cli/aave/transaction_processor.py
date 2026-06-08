@@ -194,7 +194,7 @@ def _process_transaction(tx_context: TransactionContext) -> None:
                     continue
 
                 (discount_percent,) = raw_call(
-                    w3=tx_context.provider,
+                    provider=tx_context.provider,
                     address=gho_vtoken_address,
                     calldata=encode_function_calldata(
                         function_prototype="getDiscountPercent(address)",

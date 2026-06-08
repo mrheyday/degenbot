@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, scoped_session
 from web3 import AsyncBaseProvider, AsyncWeb3, Web3
 from web3.exceptions import Web3Exception
-from web3.types import BlockIdentifier, TxParams
+from web3.types import BlockIdentifier
 
 from degenbot.chainlink import ChainlinkPriceContract
 from degenbot.checksum_cache import get_checksum_address
@@ -25,6 +25,7 @@ from degenbot.functions import (
     raw_call,
 )
 from degenbot.logging import logger
+from degenbot.provider import AsyncProviderAdapter, ProviderAdapter
 from degenbot.registry import token_registry
 from degenbot.types.abstract import AbstractErc20Token
 from degenbot.types.aliases import BlockNumber, ChainId
@@ -62,11 +63,15 @@ class Erc20Token(AbstractErc20Token):
         *,
         chain_id: ChainId | None = None,
         oracle_address: str | None = None,
+        provider: ProviderAdapter | None = None,
         silent: bool = False,
         state_cache_depth: int = 8,
     ) -> None:
         self.address = get_checksum_address(address)
         self._chain_id = chain_id if chain_id is not None else connection_manager.default_chain_id
+
+        # Use injected provider, or fall back to global connection_manager
+        self._provider = provider if provider is not None else self.provider
 
         token_from_db = get_token_from_database(
             token=self.address,
@@ -92,17 +97,19 @@ class Erc20Token(AbstractErc20Token):
             and self.name == self.UNKNOWN_NAME
             and self.symbol == self.UNKNOWN_SYMBOL
         ):
-            w3 = self.w3
+            provider = self._provider
 
-            if not w3.eth.get_code(self.address):
+            if not provider.get_code(self.address):
                 raise DegenbotValueError(message="No contract deployed at this address")
 
             try:
-                self.name, self.symbol, self.decimals = self.get_name_symbol_decimals_batched(w3=w3)
+                self.name, self.symbol, self.decimals = self.get_name_symbol_decimals_batched(
+                    provider=provider
+                )
             except (Web3Exception, DecodingError):
                 for func_prototype in ("name()", "NAME()"):
                     try:
-                        self.name = self.get_name(w3=w3, func_prototype=func_prototype)
+                        self.name = self.get_name(provider, func_prototype=func_prototype)
                     except (Web3Exception, DecodingError):
                         continue
                     else:
@@ -110,7 +117,7 @@ class Erc20Token(AbstractErc20Token):
 
                 for func_prototype in ("symbol()", "SYMBOL()"):
                     try:
-                        self.symbol = self.get_symbol(w3=w3, func_prototype=func_prototype)
+                        self.symbol = self.get_symbol(provider, func_prototype=func_prototype)
                     except (Web3Exception, DecodingError):
                         continue
                     else:
@@ -118,7 +125,7 @@ class Erc20Token(AbstractErc20Token):
 
                 for func_prototype in ("decimals()", "DECIMALS()"):
                     try:
-                        self.decimals = self.get_decimals(w3=w3, func_prototype=func_prototype)
+                        self.decimals = self.get_decimals(provider, func_prototype=func_prototype)
                     except (Web3Exception, DecodingError):
                         continue
                     else:
@@ -157,51 +164,37 @@ class Erc20Token(AbstractErc20Token):
     def __repr__(self) -> str:  # pragma: no cover
         return f"{self.__class__.__name__}(address={self.address}, symbol='{self.symbol}', name='{self.name}', decimals={self.decimals})"
 
-    def get_name_symbol_decimals_batched(self, w3: Web3) -> tuple[str, str, int]:
-        with w3.batch_requests() as batch:
-            batch.add_mapping({
-                w3.eth.call: [
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="name()",
-                            function_arguments=None,
-                        ),
-                    ),
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="symbol()",
-                            function_arguments=None,
-                        ),
-                    ),
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="decimals()",
-                            function_arguments=None,
-                        ),
-                    ),
-                ]
-            })
+    def get_name_symbol_decimals_batched(self, provider: ProviderAdapter) -> tuple[str, str, int]:
+        name_calldata = encode_function_calldata(
+            function_prototype="name()",
+            function_arguments=None,
+        )
+        symbol_calldata = encode_function_calldata(
+            function_prototype="symbol()",
+            function_arguments=None,
+        )
+        decimals_calldata = encode_function_calldata(
+            function_prototype="decimals()",
+            function_arguments=None,
+        )
 
-            name, symbol, decimals = batch.execute()
+        name_result = provider.call(to=self.address, data=name_calldata)
+        symbol_result = provider.call(to=self.address, data=symbol_calldata)
+        decimals_result = provider.call(to=self.address, data=decimals_calldata)
 
-            (name,) = eth_abi.abi.decode(types=["string"], data=cast("HexBytes", name))
-            (symbol,) = eth_abi.abi.decode(types=["string"], data=cast("HexBytes", symbol))
-            (decimals,) = eth_abi.abi.decode(types=["uint256"], data=cast("HexBytes", decimals))
+        (name,) = eth_abi.abi.decode(types=["string"], data=name_result)
+        (symbol,) = eth_abi.abi.decode(types=["string"], data=symbol_result)
+        (decimals,) = eth_abi.abi.decode(types=["uint256"], data=decimals_result)
 
-            return cast("str", name), cast("str", symbol), cast("int", decimals)
+        return cast("str", name), cast("str", symbol), cast("int", decimals)
 
-    def get_name(self, w3: Web3, func_prototype: str) -> str:
-        result = w3.eth.call(
-            TxParams(
-                to=self.address,
-                data=encode_function_calldata(
-                    function_prototype=func_prototype,
-                    function_arguments=None,
-                ),
-            )
+    def get_name(self, provider: ProviderAdapter, func_prototype: str) -> str:
+        result = provider.call(
+            to=self.address,
+            data=encode_function_calldata(
+                function_prototype=func_prototype,
+                function_arguments=None,
+            ),
         )
 
         try:
@@ -211,15 +204,13 @@ class Erc20Token(AbstractErc20Token):
             (name,) = eth_abi.abi.decode(types=["bytes32"], data=result)
             return cast("HexBytes", name).decode("utf-8", errors="ignore").strip("\x00")
 
-    def get_symbol(self, w3: Web3, func_prototype: str) -> str:
-        result = w3.eth.call(
-            TxParams(
-                to=self.address,
-                data=encode_function_calldata(
-                    function_prototype=func_prototype,
-                    function_arguments=None,
-                ),
-            )
+    def get_symbol(self, provider: ProviderAdapter, func_prototype: str) -> str:
+        result = provider.call(
+            to=self.address,
+            data=encode_function_calldata(
+                function_prototype=func_prototype,
+                function_arguments=None,
+            ),
         )
 
         try:
@@ -229,9 +220,9 @@ class Erc20Token(AbstractErc20Token):
             (symbol,) = eth_abi.abi.decode(types=["bytes32"], data=result)
             return cast("HexBytes", symbol).decode("utf-8", errors="ignore").strip("\x00")
 
-    def get_decimals(self, w3: Web3, func_prototype: str) -> int:
+    def get_decimals(self, provider: ProviderAdapter, func_prototype: str) -> int:
         (result,) = raw_call(
-            w3=w3,
+            provider,
             address=self.address,
             calldata=encode_function_calldata(
                 function_prototype=func_prototype,
@@ -259,7 +250,7 @@ class Erc20Token(AbstractErc20Token):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                self.w3,
+                self.provider,
             )
         )
 
@@ -269,13 +260,11 @@ class Erc20Token(AbstractErc20Token):
         approval: int
         (approval,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=self.w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="allowance(address,address)")[:4]
-                    + eth_abi.abi.encode(types=["address", "address"], args=[owner, spender]),
-                ),
-                block_identifier=block_number,
+            data=self.provider.call(
+                to=self.address,
+                data=Web3.keccak(text="allowance(address,address)")[:4]
+                + eth_abi.abi.encode(types=["address", "address"], args=[owner, spender]),
+                block=block_number,
             ),
         )
         self._cached_approval[block_number, owner, spender] = approval
@@ -309,13 +298,11 @@ class Erc20Token(AbstractErc20Token):
         approval: int
         (approval,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=await self.async_w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="allowance(address,address)")[:4]
-                    + eth_abi.abi.encode(types=["address", "address"], args=[owner, spender]),
-                ),
-                block_identifier=block_number,
+            data=await self.async_provider.call(
+                to=self.address,
+                data=Web3.keccak(text="allowance(address,address)")[:4]
+                + eth_abi.abi.encode(types=["address", "address"], args=[owner, spender]),
+                block=block_number,
             ),
         )
         self._cached_approval[block_number, owner, spender] = approval
@@ -337,7 +324,7 @@ class Erc20Token(AbstractErc20Token):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                self.w3,
+                self.provider,
             )
         )
 
@@ -347,13 +334,11 @@ class Erc20Token(AbstractErc20Token):
         balance: int
         (balance,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=self.w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="balanceOf(address)")[:4]
-                    + eth_abi.abi.encode(types=["address"], args=[address]),
-                ),
-                block_identifier=block_number,
+            data=self.provider.call(
+                to=self.address,
+                data=Web3.keccak(text="balanceOf(address)")[:4]
+                + eth_abi.abi.encode(types=["address"], args=[address]),
+                block=block_number,
             ),
         )
 
@@ -389,13 +374,11 @@ class Erc20Token(AbstractErc20Token):
         balance: int
         (balance,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=await self.async_w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="balanceOf(address)")[:4]
-                    + eth_abi.abi.encode(types=["address"], args=[address]),
-                ),
-                block_identifier=block_number,
+            data=await self.async_provider.call(
+                to=self.address,
+                data=Web3.keccak(text="balanceOf(address)")[:4]
+                + eth_abi.abi.encode(types=["address"], args=[address]),
+                block=block_number,
             ),
         )
 
@@ -415,7 +398,7 @@ class Erc20Token(AbstractErc20Token):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                self.w3,
+                self.provider,
             )
         )
 
@@ -425,12 +408,10 @@ class Erc20Token(AbstractErc20Token):
         total_supply: int
         (total_supply,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=self.w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="totalSupply()")[:4],
-                ),
-                block_identifier=block_number,
+            data=self.provider.call(
+                to=self.address,
+                data=Web3.keccak(text="totalSupply()")[:4],
+                block=block_number,
             ),
         )
         self._cached_total_supply[block_number] = total_supply
@@ -456,12 +437,10 @@ class Erc20Token(AbstractErc20Token):
         total_supply: int
         (total_supply,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=await self.async_w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="totalSupply()")[:4],
-                ),
-                block_identifier=block_number,
+            data=await self.async_provider.call(
+                to=self.address,
+                data=Web3.keccak(text="totalSupply()")[:4],
+                block=block_number,
             ),
         )
         self._cached_total_supply[block_number] = total_supply
@@ -478,9 +457,13 @@ class Erc20Token(AbstractErc20Token):
         return self._price_oracle.price
 
     @property
-    def w3(self) -> Web3:
-        return connection_manager.get_web3(self.chain_id)
+    def provider(self) -> ProviderAdapter:
+        return connection_manager.get_provider(self.chain_id)
 
     @property
     def async_w3(self) -> AsyncWeb3[AsyncBaseProvider]:
         return async_connection_manager.get_web3(self.chain_id)
+
+    @property
+    def async_provider(self) -> AsyncProviderAdapter:
+        return async_connection_manager.get_provider(self.chain_id)

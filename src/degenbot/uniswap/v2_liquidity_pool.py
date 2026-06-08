@@ -15,17 +15,15 @@ from eth_abi.exceptions import DecodingError
 from eth_typing import BlockIdentifier, ChecksumAddress
 from sqlalchemy import select
 from sqlalchemy.orm import Session, scoped_session
-from web3 import Web3
 from web3.exceptions import ContractLogicError
-from web3.types import TxParams
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
 from degenbot.database import db_session
 from degenbot.database.models.pools import (
-    AbstractUniswapV2Pool,
     LiquidityPoolTable,
     UniswapV2PoolTable,
+    UniswapV2PoolTableBase,
 )
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.exceptions import DegenbotValueError
@@ -39,10 +37,13 @@ from degenbot.exceptions.liquidity_pool import (
 )
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
+from degenbot.provider import ProviderAdapter
 from degenbot.registry import pool_registry
-from degenbot.types.abstract import AbstractArbitrage, AbstractLiquidityPool
+from degenbot.types.abstract import AbstractArbitrage, AbstractUniswapV2Pool
 from degenbot.types.aliases import BlockNumber, ChainId
 from degenbot.types.concrete import AbstractPublisherMessage, Publisher, PublisherMixin, Subscriber
+from degenbot.types.hop_types import ConstantProductHop, HopType
+from degenbot.types.pool_protocols import SimulationResult
 from degenbot.uniswap.deployments import FACTORY_DEPLOYMENTS, UniswapV2ExchangeDeployment
 from degenbot.uniswap.types import UniswapPoolSwapVector
 from degenbot.uniswap.v2_functions import (
@@ -57,15 +58,12 @@ from degenbot.uniswap.v2_types import (
     UniswapV2PoolStateUpdated,
 )
 
-if TYPE_CHECKING:
-    from hexbytes import HexBytes
-
 
 def get_pool_from_database(
     address: ChecksumAddress,
     chain_id: int,
     session: Session | scoped_session[Session] = db_session,
-) -> AbstractUniswapV2Pool | None:
+) -> UniswapV2PoolTableBase | None:
     return session.scalar(
         select(LiquidityPoolTable).where(
             LiquidityPoolTable.address == address,
@@ -74,7 +72,7 @@ def get_pool_from_database(
     )  # type: ignore[return-value]
 
 
-class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
+class UniswapV2Pool(PublisherMixin, AbstractUniswapV2Pool):
     """
     A Uniswap V2-based liquidity pool implementing the x*y=k constant function invariant.
     """
@@ -121,6 +119,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
         deployer_address: str | None = None,
         init_hash: str | None = None,
         fee: Fraction | Iterable[Fraction] | None = None,
+        provider: ProviderAdapter | None = None,
         state_block: BlockNumber | None = None,
         verify_address: bool = True,
         silent: bool = False,
@@ -146,6 +145,9 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             can be specified by passing `fee=Fraction(3,1000)`. For split-fee pools of unequal
             value, provide an iterable of fees ordered by token position, e.g.
             `fee=[Fraction(3,1000), Fraction(2,1000)]`
+        provider:
+            A ProviderAdapter instance for blockchain calls. Uses the default provider if not
+            provided.
         state_block:
             Fetch initial state values from the chain at a particular block height. Defaults to the
             latest block if omitted.
@@ -159,15 +161,19 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
 
         self.address = get_checksum_address(address)
         self._chain_id = chain_id if chain_id is not None else connection_manager.default_chain_id
-        w3 = connection_manager.get_web3(self.chain_id)
-        state_block = state_block if state_block is not None else w3.eth.block_number
+        self._provider = (
+            provider if provider is not None else connection_manager.get_provider(self.chain_id)
+        )
+        # Track whether provider was fetched from connection_manager (True) or passed in (False)
+        self._provider_from_connection_manager = provider is None
+        state_block = state_block if state_block is not None else self._provider.get_block_number()
 
         self.init_hash = (
             init_hash if init_hash is not None else self.UNISWAP_V2_MAINNET_POOL_INIT_HASH
         )
 
         with db_session() as session:
-            pool_from_db: AbstractUniswapV2Pool = session.scalar(
+            pool_from_db: UniswapV2PoolTableBase = session.scalar(
                 select(LiquidityPoolTable).where(
                     LiquidityPoolTable.address == self.address,
                     LiquidityPoolTable.chain == self._chain_id,
@@ -180,7 +186,9 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
                 token1_address = pool_from_db.token1.address
             else:
                 try:
-                    _, (token0_address, token1_address) = self.get_immutable_pool_values(w3=w3)
+                    _, (token0_address, token1_address) = self.get_immutable_pool_values(
+                        self._provider
+                    )
                 except (ContractLogicError, DecodingError) as exc:  # pragma: no cover
                     # Contracts differ slightly across Uniswap V2 forks, so decoding may fail.
                     # Catch this here and raise as a pool-specific exception
@@ -196,7 +204,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
                 )
             else:
                 try:
-                    factory, _ = self.get_immutable_pool_values(w3=w3)
+                    factory, _ = self.get_immutable_pool_values(self._provider)
                     self.factory = get_checksum_address(factory)
                 except (ContractLogicError, DecodingError) as exc:  # pragma: no cover
                     # Contracts differ slightly across Uniswap V2 forks, so decoding may fail.
@@ -229,7 +237,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             else:
                 self.fee_token0 = self.fee_token1 = self.FEE
 
-        token_manager = Erc20TokenManager(chain_id=self.chain_id)
+        token_manager = Erc20TokenManager(chain_id=self.chain_id, provider=self._provider)
         try:
             self.token0 = token_manager.get_erc20token(
                 address=token0_address,
@@ -256,7 +264,7 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
         )
         self.name = f"{self.token0}-{self.token1} ({self.__class__.__name__}, {fee_string}%)"
 
-        reserves0, reserves1 = self.get_reserves(w3=w3, block_identifier=state_block)
+        reserves0, reserves1 = self.get_reserves(self._provider, block_identifier=state_block)
 
         initial_state = self.PoolState.__value__(
             address=self.address,
@@ -285,6 +293,8 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
         # Remove objects that either cannot be pickled or are unnecessary to perform the calculation
         copied_attributes = ()
         dropped_attributes = (
+            "_provider",
+            "_provider_from_connection_manager",
             "_state_lock",
             "_subscribers",
         )
@@ -295,6 +305,12 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
                 for k, v in self.__dict__.items()
                 if k not in dropped_attributes
             }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        state["_state_lock"] = Lock()
+        # After unpickling, provider must be re-acquired from connection_manager
+        state["_provider_from_connection_manager"] = True
+        self.__dict__ = state
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"{self.__class__.__name__}(address={self.address}, token0={self.token0}, token1={self.token1})"
@@ -308,45 +324,36 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
 
     def get_immutable_pool_values(
         self,
-        w3: Web3,
+        provider: ProviderAdapter,
     ) -> tuple[
         str,  # factory
         tuple[str, str],  # tokens
     ]:
-        with w3.batch_requests() as batch:
-            batch.add_mapping({
-                # These calls default to use 'latest' for block number, which is OK since the
-                # values are immutable
-                w3.eth.call: [
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="factory()",
-                            function_arguments=None,
-                        ),
-                    ),
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="token0()",
-                            function_arguments=None,
-                        ),
-                    ),
-                    TxParams(
-                        to=self.address,
-                        data=encode_function_calldata(
-                            function_prototype="token1()",
-                            function_arguments=None,
-                        ),
-                    ),
-                ],
-            })
+        factory_result = provider.call(
+            to=self.address,
+            data=encode_function_calldata(
+                function_prototype="factory()",
+                function_arguments=None,
+            ),
+        )
+        token0_result = provider.call(
+            to=self.address,
+            data=encode_function_calldata(
+                function_prototype="token0()",
+                function_arguments=None,
+            ),
+        )
+        token1_result = provider.call(
+            to=self.address,
+            data=encode_function_calldata(
+                function_prototype="token1()",
+                function_arguments=None,
+            ),
+        )
 
-            factory, token0, token1 = batch.execute()
-
-        (factory,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", factory))
-        (token0,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", token0))
-        (token1,) = eth_abi.abi.decode(types=["address"], data=cast("HexBytes", token1))
+        (factory,) = eth_abi.abi.decode(types=["address"], data=factory_result)
+        (token0,) = eth_abi.abi.decode(types=["address"], data=token0_result)
+        (token1,) = eth_abi.abi.decode(types=["address"], data=token1_result)
 
         return (
             cast("str", factory),
@@ -376,8 +383,8 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
         return self.token0, self.token1
 
     @property
-    def w3(self) -> Web3:
-        return connection_manager.get_web3(self.chain_id)
+    def w3(self) -> ProviderAdapter:
+        return connection_manager.get_provider(self.chain_id)
 
     @staticmethod
     def swap_is_viable(
@@ -387,6 +394,21 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
         if state.reserves_token0 == 0 or state.reserves_token1 == 0:
             return False
         return state.reserves_token1 > 1 if vector.zero_for_one else state.reserves_token0 > 1
+
+    def _get_provider_for_chain(self) -> ProviderAdapter:
+        """Get the provider for this pool's chain.
+
+        If the provider was passed in explicitly during construction, use the cached provider.
+        Otherwise, fetch from connection_manager to handle provider updates.
+        """
+        if self._provider_from_connection_manager:
+            try:
+                return connection_manager.get_provider(self._chain_id)
+            except Exception:  # noqa: BLE001
+                # Fall back to cached provider if connection_manager doesn't have one
+                # (e.g., in multiprocessing context)
+                return self._provider
+        return self._provider
 
     def auto_update(
         self,
@@ -406,9 +428,9 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             if block_number is not None and block_number < self.update_block:
                 raise LateUpdateError
 
-            w3 = self.w3
-            block_number = block_number if block_number is not None else w3.eth.get_block_number()
-            reserves0, reserves1 = self.get_reserves(w3=w3, block_identifier=block_number)
+            provider = self._get_provider_for_chain()
+            block_number = block_number if block_number is not None else provider.get_block_number()
+            reserves0, reserves1 = self.get_reserves(provider, block_identifier=block_number)
 
             if (
                 self.reserves_token0,
@@ -687,9 +709,11 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             else Fraction(10**self.token0.decimals, 10**self.token1.decimals)
         )
 
-    def get_reserves(self, w3: Web3, block_identifier: BlockIdentifier) -> tuple[int, int]:
+    def get_reserves(
+        self, provider: ProviderAdapter, block_identifier: BlockIdentifier
+    ) -> tuple[int, int]:
         reserves_token0, reserves_token1 = raw_call(
-            w3=w3,
+            provider,
             address=self.address,
             calldata=encode_function_calldata(
                 function_prototype="getReserves()",
@@ -874,9 +898,87 @@ class UniswapV2Pool(PublisherMixin, AbstractLiquidityPool):
             ),
         )
 
+    def simulate_swap(
+        self,
+        token_in: ChecksumAddress,
+        amount_in: int,
+        token_out: ChecksumAddress,
+        state_override: UniswapV2PoolState | None = None,
+    ) -> SimulationResult:
+        if token_in == self.token0.address:
+            token_in_obj = self.token0
+        elif token_in == self.token1.address:
+            token_in_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_in {token_in} not in pool")
+
+        result = self.simulate_exact_input_swap(
+            token_in=token_in_obj,
+            token_in_quantity=amount_in,
+            override_state=state_override,
+        )
+        zero_for_one = token_in_obj == self.token0
+        amount_out = -result.amount1_delta if zero_for_one else -result.amount0_delta
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=result.initial_state,
+            final_state=result.final_state,
+        )
+
+    def simulate_swap_for_output(
+        self,
+        token_in: ChecksumAddress,
+        token_out: ChecksumAddress,
+        amount_out: int,
+        state_override: UniswapV2PoolState | None = None,
+    ) -> SimulationResult:
+        if token_out == self.token0.address:
+            token_out_obj = self.token0
+        elif token_out == self.token1.address:
+            token_out_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_out {token_out} not in pool")
+
+        result = self.simulate_exact_output_swap(
+            token_out=token_out_obj,
+            token_out_quantity=amount_out,
+            override_state=state_override,
+        )
+        zero_for_one = token_out_obj == self.token1
+        amount_in = result.amount0_delta if zero_for_one else result.amount1_delta
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=result.initial_state,
+            final_state=result.final_state,
+        )
+
     def get_arbitrage_helpers(self) -> tuple[AbstractArbitrage, ...]:
         return tuple(
             subscriber
             for subscriber in self._subscribers
             if isinstance(subscriber, AbstractArbitrage)
+        )
+
+    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001
+        return self.fee_token0 if zero_for_one else self.fee_token1
+
+    def to_hop_state(
+        self,
+        zero_for_one: bool,  # noqa: FBT001
+        state_override: UniswapV2PoolState | None = None,
+    ) -> HopType:
+        state = state_override or self.state
+        fee = self.extract_fee(zero_for_one=zero_for_one)
+        if zero_for_one:
+            reserve_in = state.reserves_token0
+            reserve_out = state.reserves_token1
+        else:
+            reserve_in = state.reserves_token1
+            reserve_out = state.reserves_token0
+        return ConstantProductHop(
+            reserve_in=reserve_in,
+            reserve_out=reserve_out,
+            fee=fee,
         )

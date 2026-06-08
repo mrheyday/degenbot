@@ -41,6 +41,7 @@ pub mod abi_decoder;
 pub mod abi_encoder;
 pub mod abi_types;
 pub mod address_utils;
+pub mod address_utils_py;
 pub mod alloy_py;
 pub mod async_contract;
 pub mod async_provider;
@@ -75,9 +76,8 @@ pub mod types;
 pub mod utils;
 
 // Re-export commonly used items at the crate root
-pub use address_utils::{
-    parse_address, to_checksum_address, to_checksum_address_bytes, to_checksum_address_str,
-};
+pub use address_utils::{parse_address, to_checksum_address_bytes, to_checksum_address_str};
+pub use address_utils_py::to_checksum_address;
 pub use hex_utils::{decode_hex, encode_hex};
 
 pub use errors::{AbiDecodeError, AddressError, ProviderError, TickMathError};
@@ -109,7 +109,7 @@ fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tick_math_py::get_tick_at_sqrt_ratio, m)?)?;
 
     // Address utilities
-    m.add_function(wrap_pyfunction!(address_utils::to_checksum_address, m)?)?;
+    m.add_function(wrap_pyfunction!(address_utils_py::to_checksum_address, m)?)?;
 
     // ABI decoder functions
     m.add_function(wrap_pyfunction!(abi_decoder::decode, m)?)?;

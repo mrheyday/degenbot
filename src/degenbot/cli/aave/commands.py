@@ -145,7 +145,7 @@ def _activate_aave_v3_market(
     provider = get_web3_from_config(chain_id=chain_id)
 
     (market_name,) = raw_call(
-        w3=provider,
+        provider=provider,
         address=pool_address_provider,
         calldata=encode_function_calldata(
             function_prototype="getMarketId()",
@@ -435,7 +435,7 @@ def aave_update(
 
         if not active_chains:
             msg = "No active Aave markets found."
-            raise DegenbotValueError(msg)
+            raise DegenbotValueError(message=msg)
 
         for chain_id in active_chains:
             provider = get_web3_from_config(chain_id=chain_id)
@@ -474,11 +474,17 @@ def aave_update(
                     raise ValueError(msg)
 
                 last_block = (
-                    get_number_for_block_identifier(identifier=block_tag, w3=provider)
+                    get_number_for_block_identifier(
+                        identifier=block_tag,
+                        provider=provider,
+                    )
                     + block_offset
                 )
 
-            current_block_number = get_number_for_block_identifier(identifier="latest", w3=provider)
+            current_block_number = get_number_for_block_identifier(
+                identifier="latest",
+                provider=provider,
+            )
             if last_block > current_block_number:
                 msg = f"{to_block} is ahead of the current chain tip."
                 raise ValueError(msg)

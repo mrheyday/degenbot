@@ -27,6 +27,7 @@ from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
 from degenbot.erc20 import Erc20Token, Erc20TokenManager
 from degenbot.exceptions import DegenbotValueError
+from degenbot.exceptions.arbitrage import IncompatiblePoolInvariant
 from degenbot.exceptions.liquidity_pool import (
     AddressMismatch,
     ExternalUpdateError,
@@ -37,11 +38,14 @@ from degenbot.exceptions.liquidity_pool import (
 )
 from degenbot.functions import encode_function_calldata, raw_call
 from degenbot.logging import logger
+from degenbot.provider import ProviderAdapter
 from degenbot.registry import pool_registry
 from degenbot.solidly.solidly_functions import general_calc_exact_in_volatile
-from degenbot.types.abstract import AbstractLiquidityPool
+from degenbot.types.abstract import AbstractAerodromeV2Pool
 from degenbot.types.aliases import BlockNumber, ChainId
 from degenbot.types.concrete import AbstractPublisherMessage, Publisher, PublisherMixin, Subscriber
+from degenbot.types.hop_types import ConstantProductHop, HopType
+from degenbot.types.pool_protocols import SimulationResult
 from degenbot.uniswap.types import UniswapPoolSwapVector
 from degenbot.uniswap.v2_functions import constant_product_calc_exact_out
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
@@ -50,7 +54,7 @@ if TYPE_CHECKING:
     from hexbytes import HexBytes
 
 
-class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
+class AerodromeV2Pool(PublisherMixin, AbstractAerodromeV2Pool):
     type PoolState = AerodromeV2PoolState
 
     _state: PoolState
@@ -184,8 +188,8 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
         return self.state.block
 
     @property
-    def w3(self) -> Web3:
-        return connection_manager.get_web3(self.chain_id)
+    def w3(self) -> ProviderAdapter:
+        return connection_manager.get_provider(self.chain_id)
 
     @staticmethod
     def swap_is_viable(
@@ -213,9 +217,11 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
             if block_number is not None and block_number < self.update_block:
                 raise LateUpdateError
 
-            w3 = self.w3
-            block_number = block_number if block_number is not None else w3.eth.get_block_number()
-            reserves0, reserves1 = self.get_reserves(w3=w3, block_identifier=block_number)
+            provider = self.w3
+            block_number = block_number if block_number is not None else provider.get_block_number()
+            reserves0, reserves1 = self.get_reserves(
+                provider=provider, block_identifier=block_number
+            )
 
             if (
                 self.reserves_token0,
@@ -518,7 +524,7 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
         (fee,) = eth_abi.abi.decode(
             types=["uint256"],
             data=w3.eth.call(
-                transaction=TxParams(
+                TxParams(
                     to=get_checksum_address(cast("str", factory)),
                     data=encode_function_calldata(
                         function_prototype="getFee(address,bool)",
@@ -537,10 +543,10 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
         )
 
     def get_reserves(
-        self, w3: Web3, block_identifier: BlockIdentifier | None = None
+        self, provider: ProviderAdapter, block_identifier: BlockIdentifier | None = None
     ) -> tuple[int, int]:
         reserves_token0, reserves_token1 = raw_call(
-            w3=w3,
+            provider,
             address=self.address,
             block_identifier=block_identifier,
             calldata=encode_function_calldata(
@@ -602,6 +608,86 @@ class AerodromeV2Pool(PublisherMixin, AbstractLiquidityPool):
                 self._state_cache.pop()
 
         self._notify_subscribers(message=AerodromeV2PoolStateUpdated(self.state))
+
+    def simulate_swap(
+        self,
+        token_in: ChecksumAddress,
+        amount_in: int,
+        token_out: ChecksumAddress,
+        state_override: AerodromeV2PoolState | None = None,
+    ) -> SimulationResult:
+        if token_in == self.token0.address:
+            token_in_obj = self.token0
+        elif token_in == self.token1.address:
+            token_in_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_in {token_in} not in pool")
+
+        initial_state = state_override or self.state
+        amount_out = self.calculate_tokens_out_from_tokens_in(
+            token_in=token_in_obj,
+            token_in_quantity=amount_in,
+            override_state=state_override,
+        )
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=initial_state,
+            final_state=initial_state,
+        )
+
+    def simulate_swap_for_output(
+        self,
+        token_in: ChecksumAddress,
+        token_out: ChecksumAddress,
+        amount_out: int,
+        state_override: AerodromeV2PoolState | None = None,
+    ) -> SimulationResult:
+        if token_out == self.token0.address:
+            token_out_obj = self.token0
+        elif token_out == self.token1.address:
+            token_out_obj = self.token1
+        else:
+            raise DegenbotValueError(message=f"token_out {token_out} not in pool")
+
+        initial_state = state_override or self.state
+        amount_in = self.calculate_tokens_in_from_tokens_out(
+            token_out=token_out_obj,
+            token_out_quantity=amount_out,
+            override_state=state_override,
+        )
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=initial_state,
+            final_state=initial_state,
+        )
+
+    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001, ARG002
+        return self.fee
+
+    def to_hop_state(
+        self,
+        zero_for_one: bool,  # noqa: FBT001
+        state_override: AerodromeV2PoolState | None = None,
+    ) -> HopType:
+        if self.stable:
+            msg = f"Aerodrome stable pool at {self.address} is not supported for arbitrage"
+            raise IncompatiblePoolInvariant(message=msg)
+
+        state = state_override or self.state
+        fee = self.extract_fee(zero_for_one=zero_for_one)
+        if zero_for_one:
+            reserve_in = state.reserves_token0
+            reserve_out = state.reserves_token1
+        else:
+            reserve_in = state.reserves_token1
+            reserve_out = state.reserves_token0
+        return ConstantProductHop(
+            reserve_in=reserve_in,
+            reserve_out=reserve_out,
+            fee=fee,
+        )
 
 
 class AerodromeV3Pool(UniswapV3Pool):

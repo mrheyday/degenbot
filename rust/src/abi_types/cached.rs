@@ -81,7 +81,7 @@ pub fn get_cached_types(types: &[&str]) -> Result<CachedAbiTypes, AbiDecodeError
 /// let values = vec![
 ///     AbiValue::Address([0u8; 20]),
 ///     AbiValue::Address([0u8; 20]),
-///     AbiValue::Uint(U256::from(100u64)),
+///     AbiValue::Uint(U256::from(100u64), 256),
 /// ];
 /// let encoded = cached.encode(&values)?;
 ///
@@ -244,7 +244,7 @@ impl CachedAbiTypes {
     /// let cached = CachedAbiTypes::new(&["address", "uint256"])?;
     ///
     /// // Encode test data
-    /// let values = vec![AbiValue::Address([0u8; 20]), AbiValue::Uint(U256::from(1u64))];
+    /// let values = vec![AbiValue::Address([0u8; 20]), AbiValue::Uint(U256::from(1u64), 256)];
     /// let encoded = cached.encode(&values)?;
     ///
     /// // Decode batch
@@ -357,6 +357,18 @@ pub fn value_to_alloy_for_type(
             ))
         }
 
+        (DynSolType::Uint(bits), AbiValue::Uint(n, val_bits)) => {
+            debug_assert!(*bits > 0, "Uint bit width should never be 0");
+            let effective_bits = if *bits > 0 { *bits } else { *val_bits };
+            Ok(alloy::dyn_abi::DynSolValue::Uint(*n, effective_bits))
+        }
+
+        (DynSolType::Int(bits), AbiValue::Int(n, val_bits)) => {
+            debug_assert!(*bits > 0, "Int bit width should never be 0");
+            let effective_bits = if *bits > 0 { *bits } else { *val_bits };
+            Ok(alloy::dyn_abi::DynSolValue::Int(*n, effective_bits))
+        }
+
         // Handle FixedArray conversion
         (DynSolType::FixedArray(inner_ty, expected_size), AbiValue::Array(values)) => {
             if values.len() != *expected_size {
@@ -426,7 +438,7 @@ mod tests {
         let values = vec![
             AbiValue::Address([0x11; 20]),
             AbiValue::Address([0x22; 20]),
-            AbiValue::Uint(U256::from(1000u64)),
+            AbiValue::Uint(U256::from(1000u64), 256),
         ];
 
         let encoded = cached.encode(&values).unwrap();
@@ -442,7 +454,10 @@ mod tests {
             _ => panic!("Expected Address"),
         }
         match &decoded[2] {
-            AbiValue::Uint(n) => assert_eq!(*n, U256::from(1000u64)),
+            AbiValue::Uint(n, bits) => {
+                assert_eq!(*n, U256::from(1000u64));
+                assert_eq!(*bits, 256);
+            }
             _ => panic!("Expected Uint"),
         }
     }
@@ -454,7 +469,7 @@ mod tests {
         let mut encoded_items: Vec<Vec<u8>> = Vec::new();
         for i in 0..3u64 {
             let values = vec![
-                AbiValue::Uint(U256::from(i * 10)),
+                AbiValue::Uint(U256::from(i * 10), 256),
                 AbiValue::Bool(i % 2 == 0),
             ];
             encoded_items.push(cached.encode(&values).unwrap());
@@ -466,7 +481,10 @@ mod tests {
 
         for (i, decoded) in decoded_batch.iter().enumerate() {
             match &decoded[0] {
-                AbiValue::Uint(n) => assert_eq!(*n, U256::from(i as u64 * 10)),
+                AbiValue::Uint(n, bits) => {
+                    assert_eq!(*n, U256::from(i as u64 * 10));
+                    assert_eq!(*bits, 256);
+                }
                 _ => panic!("Expected Uint"),
             }
             match &decoded[1] {
@@ -484,7 +502,7 @@ mod tests {
             .map(|i| {
                 vec![
                     AbiValue::Address([i; 20]),
-                    AbiValue::Uint(U256::from(u64::from(i) * 100)),
+                    AbiValue::Uint(U256::from(u64::from(i) * 100), 256),
                 ]
             })
             .collect();
@@ -496,7 +514,10 @@ mod tests {
         for (i, encoded) in encoded_batch.iter().enumerate() {
             let decoded = cached.decode(encoded).unwrap();
             match &decoded[1] {
-                AbiValue::Uint(n) => assert_eq!(*n, U256::from(i as u64 * 100)),
+                AbiValue::Uint(n, bits) => {
+                    assert_eq!(*n, U256::from(i as u64 * 100));
+                    assert_eq!(*bits, 256);
+                }
                 _ => panic!("Expected Uint"),
             }
         }
@@ -520,7 +541,7 @@ mod tests {
 
         let values = vec![
             AbiValue::Address([0xab; 20]),
-            AbiValue::Uint(U256::from(999_888_777u64)),
+            AbiValue::Uint(U256::from(999_888_777u64), 256),
             AbiValue::Bool(true),
         ];
         let encoded = cached.encode(&values).unwrap();

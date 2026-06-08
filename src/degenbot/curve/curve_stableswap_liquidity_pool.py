@@ -9,6 +9,7 @@
 
 import contextlib
 from collections.abc import Iterable, Sequence
+from fractions import Fraction
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from weakref import WeakSet
@@ -20,7 +21,7 @@ from eth_typing import AnyAddress, ChecksumAddress
 from hexbytes import HexBytes
 from web3 import Web3
 from web3.exceptions import Web3Exception
-from web3.types import BlockIdentifier, TxParams
+from web3.types import BlockIdentifier
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.connection import connection_manager
@@ -39,6 +40,7 @@ from degenbot.exceptions.evm import EVMRevertError
 from degenbot.exceptions.liquidity_pool import BrokenPool, InvalidSwapInputAmount
 from degenbot.functions import encode_function_calldata, get_number_for_block_identifier, raw_call
 from degenbot.logging import logger
+from degenbot.provider import ProviderAdapter
 from degenbot.registry import pool_registry
 from degenbot.types.abstract import AbstractArbitrage, AbstractLiquidityPool
 from degenbot.types.aliases import BlockNumber, ChainId
@@ -49,6 +51,8 @@ from degenbot.types.concrete import (
     PublisherMixin,
     Subscriber,
 )
+from degenbot.types.hop_types import CurveStableswapHop, HopType, PoolInvariant
+from degenbot.types.pool_protocols import SimulationResult
 
 
 class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
@@ -173,6 +177,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         address: ChecksumAddress | str,
         *,
         chain_id: ChainId | None = None,
+        provider: ProviderAdapter | None = None,
         state_block: BlockNumber | None = None,
         silent: bool = False,
         state_cache_depth: int = 8,
@@ -186,6 +191,9 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             Address for the deployed pool contract.
         chain_id:
             The chain ID where the pool contract is deployed.
+        provider:
+            A ProviderAdapter instance for blockchain calls. Uses the default provider if not
+            provided.
         state_block:
             Fetch initial state values from the chain at a particular block height. Defaults to the
             latest block if omitted.
@@ -196,9 +204,16 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         """
 
         self._chain_id = chain_id if chain_id is not None else connection_manager.default_chain_id
+        self._provider = (
+            provider if provider is not None else connection_manager.get_provider(self._chain_id)
+        )
+        # Track whether provider was fetched from connection_manager (True) or passed in (False)
+        # This is used to determine whether to refresh the provider from connection_manager
+        self._provider_from_connection_manager = provider is None
+        provider = self._provider
         w3: web3.Web3 = connection_manager.get_web3(self.chain_id)
         if state_block is None:
-            state_block = w3.eth.block_number
+            state_block = self._provider.get_block_number()
 
         self.fee_gamma: int
         self.mid_fee: int
@@ -220,51 +235,43 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 w3.batch_requests() as batch,
             ):
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="initial_A()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="initial_A()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="initial_A_time()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="initial_A_time()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="future_A()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="future_A()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
-                    ),
+                        block=self.update_block,
+                    )
                 )
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="future_A_time()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="future_A_time()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
 
@@ -293,39 +300,33 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         def get_coefficient_and_fees() -> None:
             with w3.batch_requests() as batch:
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="A()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="A()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="fee()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="fee()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
                 batch.add(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=encode_function_calldata(
-                                function_prototype="admin_fee()",
-                                function_arguments=None,
-                            ),
+                    provider.call(
+                        to=self.address,
+                        data=encode_function_calldata(
+                            function_prototype="admin_fee()",
+                            function_arguments=None,
                         ),
-                        block_identifier=self.update_block,
+                        block=self.update_block,
                     )
                 )
 
@@ -355,13 +356,11 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 try:
                     eth_abi.abi.decode(
                         types=["address"],
-                        data=w3.eth.call(
-                            transaction=TxParams(
-                                to=self.address,
-                                data=Web3.keccak(text=f"coins({coin_type})")[:4]
-                                + eth_abi.abi.encode(types=[coin_type], args=[0]),
-                            ),
-                            block_identifier=state_block,
+                        data=provider.call(
+                            to=self.address,
+                            data=Web3.keccak(text=f"coins({coin_type})")[:4]
+                            + eth_abi.abi.encode(types=[coin_type], args=[0]),
+                            block=state_block,
                         ),
                     )
                 except (InsufficientDataBytes, web3.exceptions.ContractLogicError):
@@ -379,7 +378,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 try:
                     token_address: str
                     (token_address,) = raw_call(
-                        w3=w3,
+                        provider,
                         address=self.address,
                         calldata=encode_function_calldata(
                             function_prototype=f"coins({self._coin_index_type})",
@@ -403,7 +402,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             ):
                 with contextlib.suppress(Web3Exception, DecodingError):
                     (lp_token_address,) = raw_call(
-                        w3=connection_manager.get_web3(chain_id=self.chain_id),
+                        connection_manager.get_provider(chain_id=self.chain_id),
                         address=contract_address,
                         calldata=encode_function_calldata(
                             function_prototype="get_lp_token(address)",
@@ -428,7 +427,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             ):
                 with contextlib.suppress(Web3Exception, DecodingError):
                     (pool_address,) = raw_call(
-                        w3=connection_manager.get_web3(chain_id=self.chain_id),
+                        connection_manager.get_provider(chain_id=self.chain_id),
                         address=contract_address,
                         calldata=encode_function_calldata(
                             function_prototype="get_pool_from_lp_token(address)",
@@ -449,8 +448,6 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             as a metapool. Some metapools are not correctly marked in one of the contracts, so this
             function checks both.
             """
-            w3 = connection_manager.get_web3(chain_id=self.chain_id)
-
             is_meta_results = [False]
 
             for contract_address in (
@@ -460,7 +457,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             ):
                 with contextlib.suppress(Web3Exception, DecodingError):
                     (result,) = raw_call(
-                        w3=w3,
+                        provider,
                         address=contract_address,
                         calldata=encode_function_calldata(
                             function_prototype="is_meta(address)",
@@ -493,12 +490,10 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                     self.precision_multipliers = (1, 10**12, 10**12)
                     (self.offpeg_fee_multiplier,) = eth_abi.abi.decode(
                         types=["uint256"],
-                        data=w3.eth.call(
-                            transaction=TxParams(
-                                to=self.address,
-                                data=Web3.keccak(text="offpeg_fee_multiplier()")[:4],
-                            ),
-                            block_identifier=state_block,
+                        data=provider.call(
+                            to=self.address,
+                            data=Web3.keccak(text="offpeg_fee_multiplier()")[:4],
+                            block=state_block,
                         ),
                     )
                 case "0x2dded6Da1BF5DBdF597C45fcFaa3194e53EcfeAF":
@@ -519,12 +514,10 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 case "0xEB16Ae0052ed37f479f7fe63849198Df1765a733":
                     (self.offpeg_fee_multiplier,) = eth_abi.abi.decode(
                         types=["uint256"],
-                        data=w3.eth.call(
-                            transaction=TxParams(
-                                to=self.address,
-                                data=Web3.keccak(text="offpeg_fee_multiplier()")[:4],
-                            ),
-                            block_identifier=state_block,
+                        data=provider.call(
+                            to=self.address,
+                            data=Web3.keccak(text="offpeg_fee_multiplier()")[:4],
+                            block=state_block,
                         ),
                     )
 
@@ -532,7 +525,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         if self.address in BROKEN_CURVE_V1_POOLS:
             raise BrokenPool
 
-        block = w3.eth.get_block(state_block)
+        block = provider.get_block(state_block)
 
         self._create_timestamp = block["timestamp"]
 
@@ -631,13 +624,11 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             token_balance: int
             (token_balance,) = eth_abi.abi.decode(
                 types=[self._coin_index_type],
-                data=w3.eth.call(
-                    transaction=TxParams(
-                        to=self.address,
-                        data=Web3.keccak(text=f"balances({self._coin_index_type})")[:4]
-                        + eth_abi.abi.encode(types=[self._coin_index_type], args=[token_id]),
-                    ),
-                    block_identifier=state_block,
+                data=provider.call(
+                    to=self.address,
+                    data=Web3.keccak(text=f"balances({self._coin_index_type})")[:4]
+                    + eth_abi.abi.encode(types=[self._coin_index_type], args=[token_id]),
+                    block=state_block,
                 ),
             )
             balances.append(token_balance)
@@ -692,12 +683,22 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         # Remove objects that cannot be pickled and are unnecessary to perform
         # the calculation
         dropped_attributes = (
+            "_provider",
+            "_provider_from_connection_manager",
             "_state_lock",
             "_subscribers",
         )
 
         with self._state_lock:
             return {k: v for k, v in self.__dict__.items() if k not in dropped_attributes}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        state["_state_lock"] = Lock()
+        # After unpickling, provider must be re-acquired from connection_manager
+        state["_provider_from_connection_manager"] = True
+        # Provider will be fetched from connection_manager when needed
+        state["_provider"] = None
+        self.__dict__ = state
 
     def __repr__(self) -> str:  # pragma: no cover
         token_string = "-".join([token.symbol for token in self.tokens])
@@ -804,7 +805,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                connection_manager.get_web3(self.chain_id),
+                self._provider,
             )
         )
 
@@ -834,7 +835,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                connection_manager.get_web3(self.chain_id),
+                self._provider,
             )
         )
 
@@ -865,29 +866,26 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
         redemption_price_scale = 10**9
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         snap_contract_address: str
         (snap_contract_address,) = eth_abi.abi.decode(
             types=["address"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="redemption_price_snap()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.address,
+                data=Web3.keccak(text="redemption_price_snap()")[:4],
+                block=block_number,
             ),
         )
 
         rate: int
         (rate,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=get_checksum_address(snap_contract_address),
-                    data=Web3.keccak(text="snappedRedemptionPrice()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=get_checksum_address(snap_contract_address),
+                data=Web3.keccak(text="snappedRedemptionPrice()")[:4],
+                block=block_number,
             ),
         )
         result = rate // redemption_price_scale
@@ -924,12 +922,14 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         pool_balances = override_state.balances if override_state is not None else self.balances
         rates = self.rate_multipliers
 
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
         block_number = (
             block_identifier
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                connection_manager.get_web3(self.chain_id),
+                provider,
             )
         )
 
@@ -988,17 +988,13 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 with contextlib.suppress(KeyError):
                     return self._cached_contract_D[block_number]
 
-                w3 = connection_manager.get_web3(self.chain_id)
-
                 d: int
                 (d,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=Web3.keccak(text="D()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=self.address,
+                        data=Web3.keccak(text="D()")[:4],
+                        block=block_number,
                     ),
                 )
                 self._cached_contract_D[block_number] = d
@@ -1008,17 +1004,13 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 with contextlib.suppress(KeyError):
                     return self._cached_gamma[block_number]
 
-                w3 = connection_manager.get_web3(self.chain_id)
-
                 gamma: int
                 (gamma,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=Web3.keccak(text="gamma()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=self.address,
+                        data=Web3.keccak(text="gamma()")[:4],
+                        block=block_number,
                     ),
                 )
                 self._cached_gamma[block_number] = gamma
@@ -1030,19 +1022,15 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
                 n_coins = len(self.tokens)
 
-                w3 = connection_manager.get_web3(self.chain_id)
-
                 price_scale = [0] * (n_coins - 1)
                 for token_index in range(n_coins - 1):
                     (price_scale[token_index],) = eth_abi.abi.decode(
                         types=["uint256"],
-                        data=w3.eth.call(
-                            transaction=TxParams(
-                                to=self.address,
-                                data=Web3.keccak(text="price_scale(uint256)")[:4]
-                                + eth_abi.abi.encode(types=["uint256"], args=[token_index]),
-                            ),
-                            block_identifier=block_number,
+                        data=provider.call(
+                            to=self.address,
+                            data=Web3.keccak(text="price_scale(uint256)")[:4]
+                            + eth_abi.abi.encode(types=["uint256"], args=[token_index]),
+                            block=block_number,
                         ),
                     )
                 self._cached_price_scale[block_number] = tuple(price_scale)
@@ -1423,7 +1411,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 identifier=block_identifier,
-                w3=connection_manager.get_web3(self.chain_id),
+                provider=self._provider,
             )
         )
 
@@ -1658,17 +1646,16 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         with contextlib.suppress(KeyError):
             return self._cached_base_cache_updated[block_number]
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         base_cache_updated: int
         (base_cache_updated,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="base_cache_updated()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.address,
+                data=Web3.keccak(text="base_cache_updated()")[:4],
+                block=block_number,
             ),
         )
         self._cached_base_cache_updated[block_number] = base_cache_updated
@@ -1678,17 +1665,16 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         with contextlib.suppress(KeyError):
             return self._cached_base_virtual_price[block_number]
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         base_virtual_price: int
         (base_virtual_price,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="base_virtual_price()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.address,
+                data=Web3.keccak(text="base_virtual_price()")[:4],
+                block=block_number,
             ),
         )
         self._cached_base_virtual_price[block_number] = base_virtual_price
@@ -1703,8 +1689,9 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
         base_cache_expires = 10 * 60  # 10 minutes
 
-        w3 = connection_manager.get_web3(self.chain_id)
-        self._block_timestamps[block_number] = w3.eth.get_block(block_identifier=block_number)[
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
+        self._block_timestamps[block_number] = provider.get_block(block_identifier=block_number)[
             "timestamp"
         ]
 
@@ -1715,12 +1702,10 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         ):
             (base_virtual_price,) = eth_abi.abi.decode(
                 types=["uint256"],
-                data=w3.eth.call(
-                    transaction=TxParams(
-                        to=self.base_pool.address,
-                        data=Web3.keccak(text="get_virtual_price()")[:4],
-                    ),
-                    block_identifier=block_number,
+                data=provider.call(
+                    to=self.base_pool.address,
+                    data=Web3.keccak(text="get_virtual_price()")[:4],
+                    block=block_number,
                 ),
             )
         else:
@@ -1738,7 +1723,7 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         for token_index, _ in enumerate(self.tokens):
             admin_balance: int
             (admin_balance,) = raw_call(
-                w3=connection_manager.get_web3(chain_id=self.chain_id),
+                connection_manager.get_provider(chain_id=self.chain_id),
                 address=self.address,
                 calldata=encode_function_calldata(
                     function_prototype="admin_balances(uint256)",
@@ -1954,21 +1939,23 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         raise EVMRevertError(error="y_d calculation did not converge.")  # pragma: no cover
 
     def _set_oracle_method(self, block_number: BlockNumber) -> None:
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
         (self.oracle_method,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.address,
-                    data=Web3.keccak(text="oracle_method()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.address,
+                data=Web3.keccak(text="oracle_method()")[:4],
+                block=block_number,
             ),
         )
 
     def _stored_rates_from_ctokens(self, block_number: BlockNumber) -> tuple[int, ...]:
         with contextlib.suppress(KeyError):
             return self._cached_rates_from_ctokens[block_number]
+
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         result: list[int] = []
         rate: int
@@ -1981,37 +1968,30 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             if not use_lending:
                 rate = self.PRECISION
             else:
-                w3 = connection_manager.get_web3(self.chain_id)
                 (rate,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=token.address,
-                            data=Web3.keccak(text="exchangeRateStored()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=token.address,
+                        data=Web3.keccak(text="exchangeRateStored()")[:4],
+                        block=block_number,
                     ),
                 )
                 supply_rate: int
                 (supply_rate,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=token.address,
-                            data=Web3.keccak(text="supplyRatePerBlock()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=token.address,
+                        data=Web3.keccak(text="supplyRatePerBlock()")[:4],
+                        block=block_number,
                     ),
                 )
                 old_block: BlockNumber
                 (old_block,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=token.address,
-                            data=Web3.keccak(text="accrualBlockNumber()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=token.address,
+                        data=Web3.keccak(text="accrualBlockNumber()")[:4],
+                        block=block_number,
                     ),
                 )
 
@@ -2028,6 +2008,9 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
         # ref: https://etherscan.io/address/0x79a8C46DeA5aDa233ABaFFD40F3A0A2B1e5A4F27#code
 
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
+
         result: list[int] = []
         for token, multiplier, use_lending in zip(
             self.tokens,
@@ -2036,16 +2019,13 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             strict=True,
         ):
             if use_lending:
-                w3 = connection_manager.get_web3(self.chain_id)
                 rate: int
                 (rate,) = eth_abi.abi.decode(
                     types=["uint256"],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=token.address,
-                            data=Web3.keccak(text="getPricePerFullShare()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=token.address,
+                        data=Web3.keccak(text="getPricePerFullShare()")[:4],
+                        block=block_number,
                     ),
                 )
             else:
@@ -2060,7 +2040,8 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         with contextlib.suppress(KeyError):
             return self._cached_rates_from_cytokens[block_number]
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         result: list[int] = []
         for token, precision_multiplier in zip(
@@ -2070,35 +2051,29 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             (rate,) = eth_abi.abi.decode(
                 types=["uint256"],
                 data=(
-                    w3.eth.call(
-                        transaction=TxParams(
-                            to=token.address,
-                            data=Web3.keccak(text="exchangeRateStored()")[:4],
-                        ),
-                        block_identifier=block_number,
+                    provider.call(
+                        to=token.address,
+                        data=Web3.keccak(text="exchangeRateStored()")[:4],
+                        block=block_number,
                     )
                 ),
             )
             supply_rate: int
             (supply_rate,) = eth_abi.abi.decode(
                 types=["uint256"],
-                data=w3.eth.call(
-                    transaction=TxParams(
-                        to=token.address,
-                        data=Web3.keccak(text="supplyRatePerBlock()")[:4],
-                    ),
-                    block_identifier=block_number,
+                data=provider.call(
+                    to=token.address,
+                    data=Web3.keccak(text="supplyRatePerBlock()")[:4],
+                    block=block_number,
                 ),
             )
             old_block: BlockNumber
             (old_block,) = eth_abi.abi.decode(
                 types=["uint256"],
-                data=w3.eth.call(
-                    transaction=TxParams(
-                        to=token.address,
-                        data=Web3.keccak(text="accrualBlockNumber()")[:4],
-                    ),
-                    block_identifier=block_number,
+                data=provider.call(
+                    to=token.address,
+                    data=Web3.keccak(text="accrualBlockNumber()")[:4],
+                    block=block_number,
                 ),
             )
 
@@ -2112,18 +2087,17 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         with contextlib.suppress(KeyError):
             return self.PRECISION, self._cached_rates_from_reth[block_number]
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         # ref: https://etherscan.io/address/0xF9440930043eb3997fc70e1339dBb11F341de7A8#code
         ratio: int
         (ratio,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.tokens[1].address,
-                    data=Web3.keccak(text="getExchangeRate()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.tokens[1].address,
+                data=Web3.keccak(text="getExchangeRate()")[:4],
+                block=block_number,
             ),
         )
         self._cached_rates_from_reth[block_number] = ratio
@@ -2138,18 +2112,17 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
                 // self._cached_rates_from_aeth[block_number],
             )
 
-        w3 = connection_manager.get_web3(self.chain_id)
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
 
         # ref: https://etherscan.io/address/0xA96A65c051bF88B4095Ee1f2451C2A9d43F53Ae2#code
         ratio: int
         (ratio,) = eth_abi.abi.decode(
             types=["uint256"],
-            data=w3.eth.call(
-                transaction=TxParams(
-                    to=self.tokens[1].address,
-                    data=Web3.keccak(text="ratio()")[:4],
-                ),
-                block_identifier=block_number,
+            data=provider.call(
+                to=self.tokens[1].address,
+                data=Web3.keccak(text="ratio()")[:4],
+                block=block_number,
             ),
         )
         self._cached_rates_from_aeth[block_number] = ratio
@@ -2165,6 +2138,9 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         with contextlib.suppress(KeyError):
             return self._cached_rates_from_oracle[block_number]
 
+        # Fetch current provider from connection manager to handle provider updates
+        provider = self._get_provider_for_chain()
+
         self._set_oracle_method(block_number=block_number)
         if TYPE_CHECKING:
             assert self.oracle_method is not None
@@ -2176,12 +2152,10 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             oracle_rate: int
             (oracle_rate,) = eth_abi.abi.decode(
                 types=["uint256"],
-                data=connection_manager.get_web3(self.chain_id).eth.call(
-                    transaction=TxParams(
-                        to=get_checksum_address(HexBytes(self.oracle_method % 2**160)),
-                        data=HexBytes(self.oracle_method & oracle_bit_mask),
-                    ),
-                    block_identifier=block_number,
+                data=provider.call(
+                    to=get_checksum_address(HexBytes(self.oracle_method % 2**160)),
+                    data=HexBytes(self.oracle_method & oracle_bit_mask),
+                    block=block_number,
                 ),
             )
             rates = (
@@ -2203,9 +2177,9 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         """
 
         with self._state_lock:
-            w3 = connection_manager.get_web3(self.chain_id)
+            provider = self._get_provider_for_chain()
 
-            state_block = w3.eth.get_block("latest" if block_number is None else block_number)
+            state_block = provider.get_block("latest" if block_number is None else block_number)
             block_number = state_block["number"]
 
             token_balances = []
@@ -2213,13 +2187,11 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             for token_id, _ in enumerate(self.tokens):
                 (token_balance,) = eth_abi.abi.decode(
                     types=[self._coin_index_type],
-                    data=w3.eth.call(
-                        transaction=TxParams(
-                            to=self.address,
-                            data=Web3.keccak(text=f"balances({self._coin_index_type})")[:4]
-                            + eth_abi.abi.encode(types=[self._coin_index_type], args=[token_id]),
-                        ),
-                        block_identifier=block_number,
+                    data=provider.call(
+                        to=self.address,
+                        data=Web3.keccak(text=f"balances({self._coin_index_type})")[:4]
+                        + eth_abi.abi.encode(types=[self._coin_index_type], args=[token_id]),
+                        block=block_number,
                     ),
                 )
                 token_balances.append(token_balance)
@@ -2258,6 +2230,22 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
 
             return found_updates
 
+    def _get_provider_for_chain(self) -> ProviderAdapter | None:
+        """Get the provider for this pool's chain.
+
+        If the provider was passed in explicitly during construction, use the cached provider.
+        Otherwise, fetch from connection_manager to handle provider updates.
+        Returns None if no provider is available (e.g., in multiprocessing context).
+        """
+        if self._provider_from_connection_manager:
+            try:
+                return connection_manager.get_provider(self._chain_id)
+            except Exception:  # noqa: BLE001
+                # No provider available from connection_manager (e.g., multiprocessing)
+                pass
+        # Use cached provider if available
+        return self._provider
+
     def calculate_tokens_out_from_tokens_in(
         self,
         token_in: Erc20Token,
@@ -2270,12 +2258,13 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
         Calculates the expected token OUTPUT for a target INPUT at current pool reserves.
         """
 
+        provider = self._get_provider_for_chain()
         block_number = (
             block_identifier
             if isinstance(block_identifier, int)
             else get_number_for_block_identifier(
                 block_identifier,
-                connection_manager.get_web3(self.chain_id),
+                provider,
             )
         )
 
@@ -2380,4 +2369,95 @@ class CurveStableswapPool(PublisherMixin, AbstractLiquidityPool):
             subscriber
             for subscriber in self._subscribers
             if isinstance(subscriber, AbstractArbitrage)
+        )
+
+    def simulate_swap(
+        self,
+        token_in: ChecksumAddress,
+        amount_in: int,
+        token_out: ChecksumAddress,
+        state_override: CurveStableswapPoolState | None = None,
+    ) -> SimulationResult:
+        token_in_obj = next((t for t in self.tokens if t.address == token_in), None)
+        if token_in_obj is None:
+            all_tokens = list(self.tokens)
+            if self.base_pool is not None:
+                all_tokens.extend(self.base_pool.tokens)
+            if token_in not in {t.address for t in all_tokens}:
+                raise DegenbotValueError(message=f"token_in {token_in} not in pool")
+
+        token_out_obj = next((t for t in self.tokens if t.address == token_out), None)
+        if token_out_obj is None:
+            all_tokens = list(self.tokens)
+            if self.base_pool is not None:
+                all_tokens.extend(self.base_pool.tokens)
+            if token_out not in {t.address for t in all_tokens}:
+                raise DegenbotValueError(message=f"token_out {token_out} not in pool")
+
+        initial_state = state_override or self.state
+        amount_out = self.calculate_tokens_out_from_tokens_in(
+            token_in=token_in_obj,  # type: ignore[arg-type]
+            token_out=token_out_obj,  # type: ignore[arg-type]
+            token_in_quantity=amount_in,
+            override_state=state_override,
+        )
+        return SimulationResult(
+            amount_in=amount_in,
+            amount_out=amount_out,
+            initial_state=initial_state,
+            final_state=initial_state,
+        )
+
+    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001
+        return Fraction(self.fee, self.FEE_DENOMINATOR)
+
+    def to_hop_state(
+        self,
+        zero_for_one: bool,  # noqa: FBT001
+        state_override: CurveStableswapPoolState | None = None,
+    ) -> HopType:
+        """Create a hop state for this pool.
+
+        For 2-token pools, zero_for_one maps to token[0] -> token[1] direction.
+        For metapools or base pools, swap direction is still determined by
+        token index in the pool's tokens tuple.
+
+        NOTE: swap_fn is not pickleable for ProcessPoolExecutor. For
+        multiprocessing, use constant-product approximation or build
+        hop states in the subprocess from pool IDs.
+        """
+        state = state_override or self.state
+        balances = state.balances
+
+        # For 2-token pools, zero_for_one maps to tokens[0] -> tokens[1]
+        # For N-token pools, this is ambiguous; the caller should use
+        # token_in/token_out kwargs when available
+        if zero_for_one:
+            i, j = 0, 1
+        else:
+            i, j = 1, 0
+
+        # Validate indices exist
+        if i >= len(balances) or j >= len(balances):
+            raise DegenbotValueError(
+                message=f"Invalid swap indices ({i}, {j}) for pool with {len(balances)} tokens"
+            )
+
+        # Create swap_fn closure wrapping get_dy
+        # NOTE: This closure captures `self` and is not pickleable!
+        def swap_fn(dx: int) -> int:
+            return self.get_dy(i=i, j=j, dx=dx, override_state=state_override)
+
+        return CurveStableswapHop(
+            reserve_in=balances[i],
+            reserve_out=balances[j],
+            fee=Fraction(self.fee, self.FEE_DENOMINATOR),
+            curve_a=self.a_coefficient,
+            curve_n_coins=len(self.tokens),
+            curve_d=0,  # D is computed dynamically in get_dy via _get_y
+            token_index_in=i,
+            token_index_out=j,
+            precisions=self.precision_multipliers,
+            swap_fn=swap_fn,
+            invariant=PoolInvariant.CURVE_STABLESWAP,
         )

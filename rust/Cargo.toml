@@ -54,7 +54,7 @@ rand = { version = "^0.10" }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 thiserror = { version = "^2.0" }
-tokio = { version = "^1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "^1", features = ["rt-multi-thread", "time", "macros", "sync"] }
 hotpath = { version = "0.16.1", optional = true }
 
 # mev-arbitrum forked crates, ported to alloy 2.x / revm 38 (see the
