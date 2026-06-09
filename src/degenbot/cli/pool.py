@@ -29,8 +29,6 @@ from degenbot.database import db_session
 from degenbot.database.models.base import ExchangeTable
 from degenbot.database.models.erc20 import Erc20TokenTable
 from degenbot.database.models.pools import (
-    UniswapV3PoolTableBase,
-    UniswapV4PoolTableBase,
     AerodromeV2PoolTable,
     AerodromeV3PoolTable,
     CamelotV2PoolTable,
@@ -49,7 +47,9 @@ from degenbot.database.models.pools import (
     SwapbasedV2PoolTable,
     UniswapV2PoolTable,
     UniswapV3PoolTable,
+    UniswapV3PoolTableBase,
     UniswapV4PoolTable,
+    UniswapV4PoolTableBase,
 )
 from degenbot.functions import (
     encode_function_calldata,
