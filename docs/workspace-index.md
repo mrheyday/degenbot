@@ -83,6 +83,9 @@ commands, and high-risk execution areas. It is not a generated dependency graph.
 - Python tests mirror protocol and execution domains under `tests/`.
 - Rust-wrapped Python tests live in `tests/rust/`.
 - Stylus tests run from the Stylus workspace with native-test features.
+- `tests/autoresearch/` is now a tracked optimization lane used by the
+  autoresearch harness (`just test-autoresearch`). Canonical benchmark and route
+  definitions are in `tests/autoresearch/AR_TASK_MANIFEST.md`.
 - Aave flow documentation lives under `docs/aave/`.
 - Architecture notes live under `docs/architecture/`.
 - CLI docs live under `docs/cli/`.

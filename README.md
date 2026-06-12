@@ -1050,6 +1050,7 @@ Arbitrum is wired across the existing upstream protocol surface:
 - Rust: `just test-rust` (covers `execution_py`, `execution_engine_py`,
   `signed_order_admission_py`, `simulation_py`)
 - Combined: `just test-all`
+- Autoresearch lane: `just test-autoresearch`
 
 ## Contributing
 
@@ -1067,6 +1068,7 @@ just test-python
 
 # Run external-gated tests when prerequisites are configured
 just test-python-live
+just test-autoresearch
 just test-python-database
 
 # Run linting

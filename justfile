@@ -61,6 +61,10 @@ compile-test-contracts:
 test-python: compile-test-contracts
     env -u RUST_LOG uv run pytest tests/ -x -q --no-header
 
+# Run Autoresearch harness tests
+test-autoresearch:
+    env -u RUST_LOG uv run pytest -o addopts="" tests/autoresearch --confcutdir=tests/autoresearch -x -q --no-header
+
 # Run Python tests that require live RPC endpoints
 test-python-live: compile-test-contracts
     env -u RUST_LOG uv run pytest tests/ -x -q --no-header --run-live-rpc
