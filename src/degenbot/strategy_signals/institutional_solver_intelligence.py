@@ -239,9 +239,7 @@ class InstitutionalSolverIntelligence:
             decision=InstitutionalSolverDecision.APPROVE,
             policy_id=self._policy_id,
             controls=("simulator_replay", "telemetry_logging"),
-            rationale=(
-                f"candidate {candidate.candidate_id}: all control gates passed"
-            ),
+            rationale=(f"candidate {candidate.candidate_id}: all control gates passed"),
         )
 
     def propose_policy_correction(
@@ -262,9 +260,7 @@ class InstitutionalSolverIntelligence:
             )
             raise DegenbotValueError(msg)
 
-        proposal_id = (
-            f"{self._policy_id}:{candidate.candidate_id}:{observation.observation_id}"
-        )
+        proposal_id = f"{self._policy_id}:{candidate.candidate_id}:{observation.observation_id}"
 
         if observation.realized_drawdown_bps > self._max_drawdown_bps:
             return PolicyCorrectionProposal(

@@ -76,9 +76,7 @@ class StrictExecutionPolicyError(DegenbotValueError):
     trace_id: str
     violations: tuple[ExecutionPolicyViolation, ...]
 
-    def __init__(
-        self, trace_id: str, violations: tuple[ExecutionPolicyViolation, ...]
-    ) -> None:
+    def __init__(self, trace_id: str, violations: tuple[ExecutionPolicyViolation, ...]) -> None:
         self.trace_id = trace_id
         self.violations = violations
         codes = ", ".join(violation.code for violation in violations)

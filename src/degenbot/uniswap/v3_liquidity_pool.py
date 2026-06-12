@@ -314,7 +314,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
                 int(word): (
                     bitmap_at_word
                     if isinstance(bitmap_at_word, UniswapV3BitmapAtWord)
-                    else UniswapV3BitmapAtWord(**bitmap_at_word)
+                    else UniswapV3BitmapAtWord(**bitmap_at_word)  # type: ignore[arg-type]
                 )
                 for word, bitmap_at_word in tick_bitmap.items()
             }
@@ -326,7 +326,7 @@ class UniswapV3Pool(PublisherMixin, AbstractConcentratedLiquidityPool):
                 int(tick): (
                     liquidity_at_tick
                     if isinstance(liquidity_at_tick, UniswapV3LiquidityAtTick)
-                    else UniswapV3LiquidityAtTick(**liquidity_at_tick)
+                    else UniswapV3LiquidityAtTick(**liquidity_at_tick)  # type: ignore[arg-type]
                 )
                 for tick, liquidity_at_tick in tick_data.items()
             }

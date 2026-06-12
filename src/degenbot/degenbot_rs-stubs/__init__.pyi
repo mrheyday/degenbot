@@ -324,7 +324,6 @@ def v3_optimal_sandwich_size(
     zero_for_one: bool,
     a_max: int | bytes | str,
 ) -> str: ...
-
 def optimal_input_2pool(
     r_a1: int | bytes | str,
     r_b1: int | bytes | str,
@@ -556,7 +555,9 @@ class AsyncAlloyProvider:
         block_number: int | None = None,
     ) -> Coroutine[Any, Any, int]: ...
     def get_transaction(self, tx_hash: str) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
-    def get_transaction_receipt(self, tx_hash: str) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
+    def get_transaction_receipt(
+        self, tx_hash: str
+    ) -> Coroutine[Any, Any, dict[str, Any] | None]: ...
     def get_storage_at(
         self,
         address: str,

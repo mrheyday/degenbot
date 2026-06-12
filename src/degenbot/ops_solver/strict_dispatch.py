@@ -42,9 +42,7 @@ def compose_strict_dispatch_envelope(
         flash_amount_wei=flash_amount_wei,
         sponsored_execution=sponsored_execution,
         private_submission=(
-            envelope["private_submission"]
-            if private_submission is None
-            else private_submission
+            envelope["private_submission"] if private_submission is None else private_submission
         ),
         transport=envelope["broadcast_lane"] if transport is None else transport,
     )

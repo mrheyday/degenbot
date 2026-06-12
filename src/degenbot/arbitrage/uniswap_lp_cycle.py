@@ -505,8 +505,7 @@ class UniswapLpCycle(PublisherMixin, AbstractArbitrage):
                         p1_state = cast("UniswapV3PoolState | None", state_overrides.get(p1))
                         p1_json = p1.to_v3_snapshot_json(p1_state)
                         p2_v2_state = (
-                            cast("UniswapV2PoolState | None", state_overrides.get(p2))
-                            or p2.state
+                            cast("UniswapV2PoolState | None", state_overrides.get(p2)) or p2.state
                         )
                         r_in = (
                             p2_v2_state.reserves_token0

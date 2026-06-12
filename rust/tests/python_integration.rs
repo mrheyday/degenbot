@@ -40,7 +40,7 @@ fn test_python_int_small_positive() {
         println!("Skipping test - Python not available");
         return;
     }
-    assert_eq!(result, Some(AbiValue::Uint(U256::from(42u64))));
+    assert_eq!(result, Some(AbiValue::Uint(U256::from(42u64), 256)));
 }
 
 /// Test Python integer → `AbiValue` conversion for small negative integers.
@@ -54,7 +54,10 @@ fn test_python_int_small_negative() {
         println!("Skipping test - Python not available");
         return;
     }
-    assert_eq!(result, Some(AbiValue::Int(I256::try_from(-42i64).unwrap())));
+    assert_eq!(
+        result,
+        Some(AbiValue::Int(I256::try_from(-42i64).unwrap(), 256))
+    );
 }
 
 /// Test Python integer → `AbiValue` conversion for `U256::MAX`.
@@ -71,7 +74,7 @@ fn test_python_int_u256_max() {
         return;
     }
 
-    if let Some(AbiValue::Uint(n)) = result {
+    if let Some(AbiValue::Uint(n, _)) = result {
         assert_eq!(n, U256::MAX, "`U256::MAX` should convert correctly");
     } else {
         panic!("Expected Uint variant, got {result:?}");
@@ -92,7 +95,7 @@ fn test_python_int_i256_min() {
         return;
     }
 
-    if let Some(AbiValue::Int(n)) = result {
+    if let Some(AbiValue::Int(n, _)) = result {
         assert_eq!(
             n,
             I256::MIN,
@@ -177,9 +180,9 @@ fn test_python_list_array() {
     match result {
         Some(AbiValue::Array(values)) => {
             assert_eq!(values.len(), 3);
-            assert_eq!(values[0], AbiValue::Uint(U256::from(1u64)));
-            assert_eq!(values[1], AbiValue::Uint(U256::from(2u64)));
-            assert_eq!(values[2], AbiValue::Uint(U256::from(3u64)));
+            assert_eq!(values[0], AbiValue::Uint(U256::from(1u64), 256));
+            assert_eq!(values[1], AbiValue::Uint(U256::from(2u64), 256));
+            assert_eq!(values[2], AbiValue::Uint(U256::from(3u64), 256));
         }
         _ => panic!("Expected Array variant, got {result:?}"),
     }
@@ -213,7 +216,7 @@ fn test_python_int_i128_boundary() {
     }
     assert_eq!(
         result_max,
-        Some(AbiValue::Uint(U256::from(i128::MAX as u128)))
+        Some(AbiValue::Uint(U256::from(i128::MAX as u128), 256))
     );
 
     // i128::MIN
@@ -223,7 +226,7 @@ fn test_python_int_i128_boundary() {
     });
     assert_eq!(
         result_min,
-        Some(AbiValue::Int(I256::try_from(i128::MIN).unwrap()))
+        Some(AbiValue::Int(I256::try_from(i128::MIN).unwrap(), 256))
     );
 }
 
@@ -242,7 +245,7 @@ fn test_python_int_large_positive() {
         return;
     }
 
-    if let Some(AbiValue::Uint(n)) = result {
+    if let Some(AbiValue::Uint(n, _)) = result {
         let expected = U256::from(2u128.pow(127));
         assert_eq!(
             n, expected,
@@ -267,7 +270,7 @@ fn test_python_int_large_negative() {
         return;
     }
 
-    if let Some(AbiValue::Int(n)) = result {
+    if let Some(AbiValue::Int(n, _)) = result {
         assert!(n < I256::ZERO, "Large negative int should be negative");
     } else {
         panic!("Expected Int variant, got {result:?}");

@@ -47,9 +47,7 @@ def _calculateInvariant(amplification_parameter: int, balances: list[int]) -> in
         )
 
         denominator = math.add(
-            math.div_down(
-                math.mul(amp_times_total - _AMP_PRECISION, invariant), _AMP_PRECISION
-            ),
+            math.div_down(math.mul(amp_times_total - _AMP_PRECISION, invariant), _AMP_PRECISION),
             math.mul(num_tokens + 1, d_p),
         )
 
@@ -125,9 +123,7 @@ def _getTokenBalanceGivenInvariantAndAllOtherBalances(
     p_d = balances[0] * len(balances)
 
     for i in range(1, len(balances)):
-        p_d = math.div_down(
-            math.mul(math.mul(p_d, balances[i]), len(balances)), invariant
-        )
+        p_d = math.div_down(math.mul(math.mul(p_d, balances[i]), len(balances)), invariant)
         sum_balances = math.add(sum_balances, balances[i])
 
     sum_balances -= balances[token_index]

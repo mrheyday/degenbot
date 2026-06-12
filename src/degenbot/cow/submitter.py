@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         cow_solver_private_key: SecretStr | None
         chain_id: int
 
+
 log = structlog.get_logger(__name__).bind(service="solver", component="competition_submitter")
 
 GPV2_SETTLEMENT_ADDRESS = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"

@@ -237,7 +237,9 @@ class AaveV3FlashLoanBuilder:
                 or cow_fill_calldata is None
                 or uniswapx_rebalance_calldata is None
             ):
-                msg = "Aave V3 compose_four_leg encoding requires Across, CoW, and UniswapX calldata"
+                msg = (
+                    "Aave V3 compose_four_leg encoding requires Across, CoW, and UniswapX calldata"
+                )
                 raise ValueError(msg)
             return encode_compose_four_leg_calldata(
                 across_fill_calldata=across_fill_calldata,

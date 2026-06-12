@@ -174,7 +174,9 @@ class BalancerV2StablePool(PublisherMixin, AbstractLiquidityPool):
             balances = list(self.balances)
 
         _upscale_array(amounts=balances, scaling_factors=self.scaling_factors)
-        amount_in_scaled = _upscale(amount_in_after_fee, scaling_factor=self.scaling_factors[token_in_index])
+        amount_in_scaled = _upscale(
+            amount_in_after_fee, scaling_factor=self.scaling_factors[token_in_index]
+        )
 
         invariant = stable_math._calculateInvariant(  # noqa: SLF001
             amplification_parameter=self.amplification_parameter,
@@ -191,5 +193,7 @@ class BalancerV2StablePool(PublisherMixin, AbstractLiquidityPool):
         )
 
         return int(
-            _downscale_down(amount=amount_out_scaled, scaling_factor=self.scaling_factors[token_out_index])
+            _downscale_down(
+                amount=amount_out_scaled, scaling_factor=self.scaling_factors[token_out_index]
+            )
         )
