@@ -11,7 +11,10 @@ default:
 test-rust:
     #!/usr/bin/env bash
     python_libdir="$(.venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+    # Linux's loader reads LD_LIBRARY_PATH; macOS's dyld ignores it and reads DYLD_LIBRARY_PATH.
+    # Export both so the pyo3 test binary finds libpython at runtime on either platform.
     export LD_LIBRARY_PATH="${python_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export DYLD_LIBRARY_PATH="${python_libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
     cargo test --manifest-path rust/Cargo.toml --workspace
 
 # Run wrapped Rust Python tests
@@ -164,7 +167,18 @@ update-deps:
 
 # Simulate CI Rust checks
 ci-rust: fmt-check check-no-pyo3-in-cores lint-rust test-rust
-    cargo build --release -p degenbot_rs --features extension-module --manifest-path rust/Cargo.toml
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The extension-module build leaves libpython symbols undefined (resolved at load
+    # time by the host interpreter). Linux's linker tolerates this in a cdylib; macOS's
+    # ld rejects it without -undefined dynamic_lookup. maturin sets this automatically,
+    # but a raw cargo build does not, so add it on macOS.
+    extra_rustflags=""
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        extra_rustflags="-C link-arg=-undefined -C link-arg=dynamic_lookup"
+    fi
+    RUSTFLAGS="${RUSTFLAGS:-} ${extra_rustflags}" \
+        cargo build --release -p degenbot_rs --features extension-module --manifest-path rust/Cargo.toml
 
 # Simulate full CI pipeline
 ci-full: ci-rust lint-markdown test-python
