@@ -29,14 +29,20 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue
 
   if [ "$remote_sha" = "$ZERO" ]; then
-    # New branch on the remote — lint back to the nearest existing remote
-    # ref's merge-base (so only THIS branch's new commits are checked, not
-    # shared history that already shipped). Fall back to just HEAD if no
-    # merge-base is resolvable.
-    from=$(git merge-base origin/HEAD "$local_sha" 2>/dev/null || true)
-    if [ -z "$from" ]; then
-      from="${local_sha}^"
+    # New branch on the remote — lint only the commits being introduced: those
+    # reachable from the local tip but present on NO remote-tracking branch yet
+    # (i.e. genuinely new, unshipped work). `git merge-base origin/HEAD` was
+    # wrong here — origin/HEAD resolves to the default branch (origin/main), so
+    # it re-lints the entire branch-vs-main delta, including hundreds of commits
+    # that already shipped on another branch (and may predate the hook).
+    oldest_new=$(git rev-list "$local_sha" --not --remotes | tail -n 1)
+    if [ -z "$oldest_new" ]; then
+      # Every reachable commit is already on some remote — nothing new to lint.
+      continue
     fi
+    # Boundary is the parent of the oldest new commit; if that commit is a root
+    # commit with no parent, lint from the commit itself.
+    from=$(git rev-parse --verify --quiet "${oldest_new}^") || from="$oldest_new"
   else
     from="$remote_sha"
   fi
