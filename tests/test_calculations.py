@@ -2,24 +2,17 @@
 
 from fractions import Fraction
 
-from degenbot.calculations.camelot import f_camelot, get_y_camelot, k_camelot
-from degenbot.calculations.solidly_stable import (
-    calc_d,
-    calc_exact_in_stable,
-    calc_exact_in_volatile,
-    calc_f,
-    calc_k,
-    get_y_solidly,
+from degenbot.degenbot_rs import camelot_f as f_camelot
+from degenbot.degenbot_rs import camelot_get_y_camelot as get_y_camelot
+from degenbot.degenbot_rs import camelot_k as k_camelot
+from degenbot.degenbot_rs import solidly_calc_d as calc_d
+from degenbot.degenbot_rs import (
+    solidly_calc_exact_in_stable_solidly as calc_exact_in_stable_solidly,
 )
-from degenbot.calculations.solidly_stable import calc_k as solidly_calc_k
-from degenbot.calculations.stableswap import calc_d as curve_calc_d
-from degenbot.calculations.stableswap import (
-    calc_d_variant_alpha,
-    calc_dp,
-    calc_dp_variant_alpha,
-    calc_dp_variant_beta,
-    calc_dp_variant_gamma,
-)
+from degenbot.degenbot_rs import solidly_calc_exact_in_volatile as calc_exact_in_volatile
+from degenbot.degenbot_rs import solidly_calc_f as calc_f
+from degenbot.degenbot_rs import solidly_calc_k as calc_k
+from degenbot.degenbot_rs import solidly_get_y_solidly as get_y_solidly
 from degenbot.uniswap.v2_functions import constant_product_calc_exact_in
 
 # ── constant_product tests ──
@@ -210,11 +203,12 @@ class TestSolidlyCalcExactInVolatile:
     def test_standard_fee(self):
         """Volatile swap with token_in=0, matching constant product result."""
         result = calc_exact_in_volatile(
-            amount_in=1_000_000,
-            token_in=0,
-            reserves0=10_000_000_000,
-            reserves1=10_000_000_000,
-            fee=Fraction(3, 1000),
+            1_000_000,
+            0,
+            10_000_000_000,
+            10_000_000_000,
+            3,
+            1000,
         )
         assert result == 996900
 
@@ -225,24 +219,28 @@ class TestSolidlyCalcExactInVolatile:
         r0 = 10_000_000_000
         r1 = 10_000_000_000
         cp_result = constant_product_calc_exact_in(amount_in, r0, r1, fee)
-        solidly_result = calc_exact_in_volatile(amount_in, 0, r0, r1, fee)
+        solidly_result = calc_exact_in_volatile(
+            amount_in, 0, r0, r1, fee.numerator, fee.denominator
+        )
         assert cp_result == solidly_result
 
     def test_token_in_1(self):
         """Swapping token 1 should use reserves1 as input reserves."""
         result_0 = calc_exact_in_volatile(
-            amount_in=1_000_000,
-            token_in=0,
-            reserves0=10_000_000_000,
-            reserves1=5_000_000_000,
-            fee=Fraction(3, 1000),
+            1_000_000,
+            0,
+            10_000_000_000,
+            5_000_000_000,
+            3,
+            1000,
         )
         result_1 = calc_exact_in_volatile(
-            amount_in=1_000_000,
-            token_in=1,
-            reserves0=5_000_000_000,
-            reserves1=10_000_000_000,
-            fee=Fraction(3, 1000),
+            1_000_000,
+            1,
+            5_000_000_000,
+            10_000_000_000,
+            3,
+            1000,
         )
         assert result_0 == result_1
 
@@ -252,33 +250,30 @@ class TestSolidlyCalcExactInStable:
 
     def test_nonzero_output(self):
         """Exact computed output for symmetric 1e18 reserves with 0.3% fee."""
-        result = calc_exact_in_stable(
-            amount_in=1_000_000,
-            token_in=0,
-            reserves0=1_000_000_000_000_000_000,
-            reserves1=1_000_000_000_000_000_000,
-            decimals0=10**18,
-            decimals1=10**18,
-            fee=Fraction(3, 1000),
-            k_func=calc_k,
-            get_y_func=get_y_solidly,
+        result = calc_exact_in_stable_solidly(
+            1_000_000,
+            0,
+            1_000_000_000_000_000_000,
+            1_000_000_000_000_000_000,
+            10**18,
+            10**18,
+            3,
+            1000,
         )
         assert result == 996999
 
     def test_symmetric_reserves_forward_and_reverse(self):
         """Forward and reverse swaps on symmetric reserves should give equal outputs."""
-        kwargs = {
-            "amount_in": 1_000_000_000_000_000_000,
-            "reserves0": 5_000_000_000_000_000_000,
-            "reserves1": 5_000_000_000_000_000_000,
-            "decimals0": 10**18,
-            "decimals1": 10**18,
-            "fee": Fraction(3, 1000),
-            "k_func": calc_k,
-            "get_y_func": get_y_solidly,
-        }
-        forward = calc_exact_in_stable(token_in=0, **kwargs)
-        reverse = calc_exact_in_stable(token_in=1, **kwargs)
+        common = (
+            5_000_000_000_000_000_000,
+            5_000_000_000_000_000_000,
+            10**18,
+            10**18,
+            3,
+            1000,
+        )
+        forward = calc_exact_in_stable_solidly(1_000_000_000_000_000_000, 0, *common)
+        reverse = calc_exact_in_stable_solidly(1_000_000_000_000_000_000, 1, *common)
         assert forward == reverse
 
 
@@ -335,7 +330,7 @@ class TestCamelot:
         b0 = 1_000_000_000_000_000_000
         b1 = 2_000_000_000_000_000_000
         d0 = d1 = 10**18
-        assert k_camelot(b0, b1, d0, d1) == solidly_calc_k(b0, b1, d0, d1)
+        assert k_camelot(b0, b1, d0, d1) == calc_k(b0, b1, d0, d1)
 
     def test_get_y_camelot_converges(self):
         """get_y_camelot should return a y that approximately preserves the invariant."""
@@ -353,131 +348,3 @@ class TestCamelot:
         x = 260_876_273_137_374_942
         y = 218_168_890_076_913_833
         assert f_camelot(x, y) != calc_f(x, y)
-
-
-# ── Curve StableSwap calc tests ──
-
-
-class TestCurveCalcD:
-    """Test Curve StableSwap D step functions."""
-
-    def test_standard_d_step(self):
-        """Standard D step with A=10_000, n=2, s=4e18, d=2e18, d_p=1e18."""
-        result = curve_calc_d(
-            a_nn=10_000 * 2,  # A=10,000, n=2
-            s=4_000_000_000_000_000_000,
-            d=2_000_000_000_000_000_000,
-            d_p=1_000_000_000_000_000_000,
-            n_coins=2,
-            a_precision=10**10,
-        )
-        assert result == 4_000_000_000_000_000_000
-
-    def test_variant_alpha_d_step(self):
-        """Variant alpha D step with same inputs — should also converge to 4e18."""
-        result = calc_d_variant_alpha(
-            a_nn=10_000 * 2,
-            s=4_000_000_000_000_000_000,
-            d=2_000_000_000_000_000_000,
-            d_p=1_000_000_000_000_000_000,
-            n_coins=2,
-            a_precision=10**10,
-        )
-        assert result == 4_000_000_000_000_000_000
-
-    def test_variant_alpha_differs_from_standard(self):
-        """Variant alpha should produce a different result than standard for non-trivial inputs."""
-        kwargs = {
-            "a_nn": 5000,  # Small A — more curvature
-            "s": 3_000_000_000_000_000_000,
-            "d": 1_500_000_000_000_000_000,
-            "d_p": 500_000_000_000_000_000,
-            "n_coins": 3,
-            "a_precision": 10**10,
-        }
-        standard = curve_calc_d(**kwargs)
-        alpha = calc_d_variant_alpha(**kwargs)
-        assert standard != alpha
-
-    def test_variant_alpha_ignores_a_precision(self):
-        """Variant alpha should produce the same result regardless of a_precision."""
-        kwargs = {
-            "a_nn": 5000,
-            "s": 3_000_000_000_000_000_000,
-            "d": 1_500_000_000_000_000_000,
-            "d_p": 500_000_000_000_000_000,
-            "n_coins": 3,
-        }
-        result_10 = calc_d_variant_alpha(**kwargs, a_precision=10)
-        result_1e10 = calc_d_variant_alpha(**kwargs, a_precision=10**10)
-        assert result_10 == result_1e10
-
-
-class TestCurveCalcDp:
-    """Test Curve StableSwap D' step functions."""
-
-    def test_standard_dp(self):
-        """Standard D' step: d_p iteratively scaled by d/(x*n) for each x."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        result = calc_dp(
-            d=2_000_000_000_000_000_000,
-            d_p=2_000_000_000_000_000_000,
-            xp=xp,
-            n_coins=2,
-        )
-        # After x0=1e18: d_p = 2e18 * 2e18 // (1e18 * 2) = 2e18
-        # After x1=2e18: d_p = 2e18 * 2e18 // (2e18 * 2) = 1e18
-        assert result == 1_000_000_000_000_000_000
-
-    def test_variant_alpha_dp(self):
-        """Variant alpha adds +1 to denominator — truncates one wei."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        d = 2_000_000_000_000_000_000
-        d_p = 2_000_000_000_000_000_000
-        standard = calc_dp(d=d, d_p=d_p, xp=xp, n_coins=2)
-        alpha = calc_dp_variant_alpha(d=d, d_p=d_p, xp=xp, n_coins=2)
-        # With large values the +1 is negligible, but alpha should be <= standard
-        assert standard == 1_000_000_000_000_000_000
-        assert alpha == 999_999_999_999_999_999
-        assert alpha <= standard
-
-    def test_variant_beta_dp(self):
-        """Variant beta: d²/x0 * d/x1 / n²."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        result = calc_dp_variant_beta(
-            d=2_000_000_000_000_000_000,
-            d_p=1,  # unused
-            xp=xp,
-            n_coins=2,
-        )
-        # d*d//x0 = 4e18 // 1e18 * 2e18 = 4e18
-        # 4e18 * d // x1 = 4e18 * 2e18 // 2e18 = 4e18
-        # 4e18 // n_coins² = 4e18 // 4 = 1e18
-        assert result == 1_000_000_000_000_000_000
-
-    def test_variant_gamma_dp(self):
-        """Variant gamma: same as beta for n=2 since n^n == n²."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        result = calc_dp_variant_gamma(
-            d=2_000_000_000_000_000_000,
-            d_p=1,  # unused
-            xp=xp,
-            n_coins=2,
-        )
-        assert result == 1_000_000_000_000_000_000
-
-    def test_beta_differs_from_gamma_for_n_greater_than_2(self):
-        """n^2 != n^n for n >= 3, so beta and gamma should differ."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        d = 3_000_000_000_000_000_000
-        beta = calc_dp_variant_beta(d=d, d_p=1, xp=xp, n_coins=3)
-        gamma = calc_dp_variant_gamma(d=d, d_p=1, xp=xp, n_coins=3)
-        assert beta != gamma
-
-    def test_beta_equals_gamma_for_n_equals_2(self):
-        """2^2 == 2^2, so beta and gamma should be identical for n=2."""
-        xp = [1_000_000_000_000_000_000, 2_000_000_000_000_000_000]
-        d = 2_000_000_000_000_000_000
-        beta = calc_dp_variant_beta(d=d, d_p=1, xp=xp, n_coins=2)
-        gamma = calc_dp_variant_gamma(d=d, d_p=1, xp=xp, n_coins=2)
-        assert beta == gamma

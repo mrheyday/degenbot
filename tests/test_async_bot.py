@@ -18,9 +18,10 @@ from degenbot.constants import ZERO_ADDRESS
 from degenbot.degenbot_rs import PyBot
 from degenbot.erc20.erc20 import Erc20Token
 from degenbot.provider.call_helpers import encode_function_calldata
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
 
 _PY_BOT = PyBot()
@@ -31,7 +32,7 @@ def _make_test_config(
 ) -> DegenbotConfig:
     return DegenbotConfig(
         database=DatabaseSettings(path=tmp_path / "test.db"),
-        rpc={1: "https://eth.llamarpc.com/"},
+        rpc={1: ETHEREUM_ARCHIVE_NODE_HTTP_URI},
         default_chain_id=chain_id,
     )
 
@@ -157,12 +158,14 @@ class TestAsyncBotBuildPoolV2:
         bot = await AsyncBot.from_provider(config, provider=provider)
 
         # Pre-register tokens so async ERC20 builder doesn't need chain calls
-        weth = _make_weth()
-        usdc = _make_usdc()
+        weth = make_erc20(
+            bot._py_bot, WETH_ADDR, chain_id=1, name="Wrapped Ether", symbol="WETH", decimals=18
+        )
+        usdc = make_erc20(
+            bot._py_bot, USDC_ADDR, chain_id=1, name="USD Coin", symbol="USDC", decimals=6
+        )
         bot.tokens.add(chain_id=1, token_address=WETH_ADDR, token=weth)
         bot.tokens.add(chain_id=1, token_address=USDC_ADDR, token=usdc)
-
-        # V2 factory is already registered in pool_type_registry at import time
 
         # Mock responses
         factory_calldata = encode_function_calldata("factory()", None)
@@ -190,7 +193,7 @@ class TestAsyncBotBuildPoolV2:
 
         pool = await bot.build_pool(USDC_WETH_V2_POOL)
 
-        assert isinstance(pool, LiquidityPool)
+        assert isinstance(pool, UniswapV2Pool)
         assert pool.address == get_checksum_address(USDC_WETH_V2_POOL)
 
 

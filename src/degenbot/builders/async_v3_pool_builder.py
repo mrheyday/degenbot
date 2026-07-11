@@ -9,18 +9,25 @@ from typing import TYPE_CHECKING, Any, cast
 import eth_abi.abi
 from sqlalchemy import select
 
+from degenbot.builders.tick_data_fetcher import (
+    FetchedTickData,
+    TickDataTypes,
+    make_tick_data_fetcher_from_async_io,
+)
 from degenbot.builders.v3_builder_base import V3BuilderBase
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.database.models.pools import LiquidityPoolTable, UniswapV3PoolTableBase
+from degenbot.degenbot_rs import cl_get_tick_word_and_bit_position
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.exceptions.pool import LiquidityPoolError
 from degenbot.logging import logger
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.registry.pool_type import pool_type_registry
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
-from degenbot.uniswap.v3_functions import get_tick_word_and_bit_position
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from web3.types import BlockIdentifier
 
     from degenbot.builders.async_context import AsyncBuilderContext
@@ -53,6 +60,39 @@ class AsyncV3PoolBuilder:
         self._managed_pools = ctx.managed_pools
         self._erc20_builder = ctx.erc20_builder
         self._py_bot = ctx.py_bot
+
+    def _make_tick_data_fetcher(
+        self,
+        pool_address: str,
+        chain_id: int,
+        io: AsyncPoolIO,
+    ) -> Callable[[int, int], FetchedTickData | None]:
+        """Create a tick data fetcher for an async-built sparse V3 pool.
+
+        AsyncBot parity counterpart of ``V3PoolBuilder._make_tick_data_fetcher``:
+        wraps the async IO in a daemon-loop sync bridge so the synchronous
+        Rust ``TickWordFetcher`` seam can issue async ``eth_call`` RPCs to
+        backfill neighbouring tick words on a crossing swap.
+
+        Returns:
+            The fetcher callback.
+
+        """
+        return make_tick_data_fetcher_from_async_io(
+            pool_lookup=lambda _block: cast(
+                "UniswapV3Pool | None",
+                self._pools.get(
+                    chain_id=chain_id,
+                    pool_address=get_checksum_address(pool_address),
+                ),
+            ),
+            async_io=io,
+            types=TickDataTypes(
+                bitmap_at_word=BitmapAtWord,
+                liquidity_at_tick=LiquidityAtTick,
+                tick_struct_types=UniswapV3Pool.TICK_STRUCT_TYPES,
+            ),
+        )
 
     async def build(
         self,
@@ -210,7 +250,7 @@ class AsyncV3PoolBuilder:
                         )
 
             if not db_snapshot_loaded:
-                word, _ = get_tick_word_and_bit_position(
+                word, _ = cl_get_tick_word_and_bit_position(
                     tick=int(tick),
                     tick_spacing=tick_spacing_for_pool,
                 )
@@ -261,15 +301,9 @@ class AsyncV3PoolBuilder:
                     block=state_block,
                 )
 
-        # Determine deployer and init_hash
-        deployer = factory
-        init_hash = UniswapV3Pool.UNISWAP_V3_MAINNET_POOL_INIT_HASH
-        registry_deployment = pool_type_registry.get_deployment(chain_id, factory)
-        if registry_deployment is not None:
-            if registry_deployment.pool_init_hash is not None:
-                init_hash = registry_deployment.pool_init_hash
-            if registry_deployment.deployer is not None:
-                deployer = get_checksum_address(registry_deployment.deployer)
+        # Deployer / init-hash are resolved off the Rust handle by _from_py_pool
+        # (Fork A, P62DKO) — the builder no longer needs to compute them from
+        # the pool type registry.
 
         # Only pass tick data if we have a complete DB snapshot.
         # Map factory addresses to pool classes for V3 variants
@@ -315,6 +349,7 @@ class AsyncV3PoolBuilder:
             tick_data=rust_rows or None,
             update_block=state_block_int,
             coverage="tracked" if db_snapshot_loaded else "sparse",
+            tick_data_fetcher=self._make_tick_data_fetcher(pool_address, chain_id, io=io),
         )
         py_pool_handle = self._py_bot.get_pool(pool_id)
         assert py_pool_handle is not None, "register_v3_pool returned a pool_id with no handle"
@@ -325,22 +360,14 @@ class AsyncV3PoolBuilder:
                 tick=int(tick),
                 block_number=state_block_int,
             )
-        pool = pool_class(
-            py_pool_handle,
-            address=pool_address,
-            token0=token0,
-            token1=token1,
-            factory=factory,
-            fee=fee,
-            tick_spacing=tick_spacing_for_pool,
-            chain_id=chain_id,
-            deployer_address=deployer,
-            init_hash=init_hash,
-            tick_data_fetcher=None,
-            state_block=int(state_block) if state_block is not None else 0,
-            sparse_liquidity_map=not (db_snapshot_loaded and bool(working_tick_data)),
-            tick_bitmap_override=working_tick_bitmap or None,
-        )
+        pool = pool_class._from_py_pool(py_pool_handle)  # noqa: SLF001
+        pool._sparse_liquidity_map = not (db_snapshot_loaded and bool(working_tick_data))  # noqa: SLF001
+        # Deployer / init-hash: read off the Rust handle (Fork A, P62DKO).
+        # The builder resolved the JSON-sourced deployer + init_hash at
+        # registration; the companion already carries the verified values, so
+        # no registry override is needed here.
+        # pool.deployer_address / pool.init_hash are set by _from_py_pool from
+        # the handle.
 
         # Register pool
         self._pools.add(
@@ -385,7 +412,6 @@ class AsyncV3PoolBuilder:
             msg = f"AsyncV3PoolBuilder cannot update {type(pool).__name__}"
             raise TypeError(msg)
 
-        assert pool.chain_id is not None
         assert io is not None
 
         raw_block = block_number if block_number is not None else await io.get_block_number()

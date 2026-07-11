@@ -40,6 +40,31 @@ pub use degenbot_uniswap::{dex_identity, v2_encoding};
 /// Uniswap V2/V3/V4 event-log decoders (alloy-only leaf).
 pub use degenbot_decoders;
 
+/// Curve `StableSwap` invariant math (Vyper D/Y solvers — pure-Rust leaf).
+pub use degenbot_curve_math;
+
+/// Balancer V2 math (`FixedPoint` / `LogExpMath` / `WeightedMath` / `StableMath` — pure-Rust leaf).
+pub use degenbot_balancer_math;
+
+/// Solidly / Aerodrome / Camelot stable-pool invariant math (pure-Rust leaf).
+pub use degenbot_solidly_math;
+
+/// EVM arithmetic — EIP-1559 base-fee math and gas calculations (pure-Rust leaf).
+pub use degenbot_evm_math;
+
+/// On-chain price readers — Chainlink aggregator + Aave oracle over
+/// `degenbot-rpc` `eth_call` (pyo3-free leaf).
+pub use degenbot_price;
+
+/// cmd-executor domain — simulation warmup-slot storage math (pure-Rust leaf).
+pub use degenbot_executor;
+pub use degenbot_submission;
+
+/// `eth_simulateV1` `stateOverrides` construction — code injection + ETH/WETH
+/// funding + warmup-slot integration + WETH9 `balanceOf` override
+/// (pure-Rust leaf).
+pub use degenbot_simulation;
+
 /// Concentrated-liquidity math (`cl_lib`, `tick_math`).
 pub use degenbot_cl_math;
 
@@ -49,6 +74,11 @@ pub use degenbot_abi;
 /// RPC provider/contract/subscription seams (the pure core; `pyo3` is an
 /// optional feature the umbrella never enables).
 pub use degenbot_rpc;
+
+/// `SQLite` persistence substrate — read handle + Alembic-aware schema gate +
+/// typed rows + read fns (pyo3-free leaf; `rusqlite` with the `bundled`
+/// feature).
+pub use degenbot_db;
 
 // ---------------------------------------------------------------------------
 // Convenience top-level re-exports of the most-used types (mirrors how the

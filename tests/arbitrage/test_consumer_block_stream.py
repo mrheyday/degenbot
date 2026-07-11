@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 import examples.eth_backrun_v2_v3_v4_rust as runner
-from examples.eth_backrun_v2_v3_v4_rust import Dispatcher
+from examples.eth_backrun_v2_v3_v4_rust import PyDispatcher
 
 
 class _Eth:
@@ -31,17 +31,60 @@ class _Eth:
         self._nonce = nonce
         self.fee_history_blocks: list[int] = []
 
+    # PAGQCK: the dispatch hot loop now routes ``eth_feeHistory`` via
+    # ``make_request`` (raw JSON shape with hex-string rewards) instead of
+    # ``async_w3.eth.fee_history(block_count=, newest_block=, ...)``. The
+    # fake records the requested ``newest_block`` from the make_request params
+    # (``[block_count, hex(newest_block), percentiles]``) + returns the empty-
+    # reward shape the example expects (no priority-fee recording).
     async def fee_history(self, *, block_count: int, newest_block: int, reward_percentiles):
         self.fee_history_blocks.append(int(newest_block))
         return {"reward": [[]]}  # empty reward → no priority-fee recording
 
-    async def get_transaction_count(self, address: str) -> int:  # noqa: ARG002
+    async def get_transaction_count(self, address: str) -> int:
         return self._nonce
 
 
 class _FakeW3:
+    """Fake ``AsyncProviderAdapter`` for the dispatch-path tests (PAGQCK).
+
+    The dispatch hot loop was routed off raw ``AsyncWeb3`` onto
+    ``AsyncProviderAdapter`` — this fake exposes the SAME flat surface
+    (``get_transaction_count`` / ``make_request`` / ``rpc_url``) the example
+    now drives, instead of the old ``async_w3.eth.<method>`` nesting. The
+    ``make_request`` dispatcher mirrors the raw-RPC shapes the alloy backend
+    returns (hex strings; ``eth_feeHistory`` returns the empty-reward dict).
+    """
+
     def __init__(self) -> None:
-        self.eth = _Eth()
+        self.eth = _Eth()  # drives fee_history/get_transaction_count tracking
+
+    async def get_transaction_count(self, address: str) -> int:
+        return await self.eth.get_transaction_count(address)
+
+    async def make_request(self, method: str, params: list):
+        if method == "eth_feeHistory":
+            # The params list is [block_count, hex(newest_block), percentiles].
+            return await self.eth.fee_history(
+                block_count=int(params[0]),
+                newest_block=int(params[1], 16),
+                reward_percentiles=params[2],
+            )
+        msg = f"_FakeW3.make_request: unhandled method {method!r}"
+        raise NotImplementedError(msg)
+
+    @property
+    def rpc_url(self) -> str:
+        return "http://fake:8545"
+
+    def as_async_alloy(self):
+        # The PyO3 submission seam extracts a real `AsyncAlloyProvider` from
+        # the adapter to drive the Rust `fetch_fee_history_py` leaf. The test
+        # fake has no alloy backend — returning ``None`` makes `_apply_block_
+        # if_ready` skip the fee-history leaf (the RPC parity is now exercised
+        # by the Rust `fetch_fee_history` tests per §4.3, not this Python
+        # mock).
+        return None
 
 
 class _Blocks:
@@ -109,9 +152,9 @@ async def _run(
     blocks: list[dict[str, int]],
     batches: list[dict[str, Any]],
     *,
-    dispatcher: Dispatcher | None = None,
-) -> tuple[Dispatcher, _FakeW3]:
-    dispatcher = dispatcher or Dispatcher.for_block(0)
+    dispatcher: PyDispatcher | None = None,
+) -> tuple[PyDispatcher, _FakeW3, list[int]]:
+    dispatcher = dispatcher or PyDispatcher.for_block(0)
     w3 = _FakeW3()
     # Monkeypatch dispatch_profitable_results so a non-empty batch records the
     # `current_block` it was dispatched with, proving it keys off the block
@@ -138,15 +181,14 @@ async def _run(
         )
     finally:
         runner.dispatch_profitable_results = orig  # type: ignore[assignment]
-    setattr(dispatcher, "_dispatched", dispatched)  # noqa: SLF001 — test fixture
-    return dispatcher, w3
+    return dispatcher, w3, dispatched
 
 
 class TestBlockClockFromStream:
     async def test_block_clock_tracks_block_stream_not_solve_block(self) -> None:
         # Block stream advances 101 → 102 → 103. Result batches carry a stale
         # solve_block=999 to prove the clock ignores it.
-        dispatcher, _w3 = await _run(
+        dispatcher, _w3, _dispatched = await _run(
             blocks=[_block(101), _block(102), _block(103)],
             batches=[_empty_batch(999), _empty_batch(999)],
         )
@@ -155,15 +197,23 @@ class TestBlockClockFromStream:
         )
 
     async def test_fee_history_keys_off_block_stream_numbers(self) -> None:
-        # fee_history(newest_block=…) must use the block-stream number so the
-        # consumer queries the right block's reward percentiles (the prior
-        # implementation queried solve_block — a stale/wrong block).
-        dispatcher, w3 = await _run(
+        # 7UIYJ6: the fee-history RPC + record-priority-fees now run in the
+        # Rust submit leaf (`fetch_fee_history_py`), keyed off the block-stream
+        # number passed by `_apply_block_if_ready`. The RPC-parity (that the
+        # leaf queries the block-stream number's reward percentiles) is
+        # exercised by the Rust `fetch_fee_history` tests per §4.3 — this Python
+        # test now verifies only that the per-block advance drives the clock
+        # + records block-time pairs (the latency-baseline ring the leaf feeds).
+        dispatcher, _w3, _dispatched = await _run(
             blocks=[_block(201), _block(202)],
             batches=[],
         )
-        assert w3.eth.fee_history_blocks == [201, 202], (
-            "fee_history must be called with the block-stream numbers"
+        assert dispatcher.current_block == 202, (
+            "block clock must track the block stream through fee_history"
+        )
+        assert dispatcher.block_time_count() >= 2, (
+            "block-time ring must record one pair per block-stream tick "
+            "(the latency baseline + the fee-history clock source)"
         )
 
     async def test_dispatch_keys_off_block_stream_current_block(self) -> None:
@@ -175,11 +225,10 @@ class TestBlockClockFromStream:
         # batch's solve_block is never used as the clock).
         batch = dict(_empty_batch(999))
         batch["fresh"] = [(1, 100, 50, (1, 2), (3,))]  # one profitable result
-        dispatcher, _w3 = await _run(
+        dispatcher, _w3, dispatched = await _run(
             blocks=[_block(301), _block(302)],
             batches=[batch],
         )
-        dispatched: list[int] = getattr(dispatcher, "_dispatched")
         assert len(dispatched) == 1
         # The load-bearing contract: dispatch must NEVER use the batch's
         # solve_block (999) as the current block — only the block-stream
@@ -188,3 +237,60 @@ class TestBlockClockFromStream:
             "dispatch must key off the block-stream clock, never the batch's "
             "stale solve_block"
         )
+
+
+class TestTeeBlockStream:
+    """Red tests for `_tee_block_stream` — the fan-out that lets `run()` acquire
+    `engine.block_stream()` exactly once and feed BOTH the result consumer and
+    the T7 recurring-verify ticker.
+
+    Regression: `BackrunSession.run()` previously called
+    `engine.block_stream()` twice (the real `consume_result_batches`
+    self-acquires one when `block_stream=None`; `run()` line 967 acquired
+    another for the recurring-verify ticker). The real
+    `PyUniswapArbEngine.block_stream()` is once-only (it moves the mpsc
+    receiver out of a `Mutex<Option<rx>>`), so the second call raised
+    `RuntimeError("block_stream() can only be called once")` entering the main
+    loop — crashing every permutation run after `[startup] State trimmed …`.
+    The pump's block stream is single-consumer; two consumers need a fan-out.
+    """
+
+    async def test_both_branches_receive_every_block(self) -> None:
+        from examples.eth_backrun_v2_v3_v4_rust import _tee_block_stream
+
+        blocks = [_block(101), _block(102), _block(103)]
+        branch_a, branch_b, _driver = _tee_block_stream(_Blocks(blocks))
+
+        seen_a: list[dict[str, int]] = []
+        seen_b: list[dict[str, int]] = []
+
+        async def _drain(branch, sink: list) -> None:
+            async for b in branch:
+                sink.append(b)
+
+        await asyncio.gather(_drain(branch_a, seen_a), _drain(branch_b, seen_b))
+
+        assert seen_a == blocks, "branch A (result consumer) must receive every block"
+        assert seen_b == blocks, "branch B (recurring-verify ticker) must receive every block"
+
+    async def test_branches_are_independent(self) -> None:
+        # The two consumers must not steal from each other: a slow consumer on
+        # one branch must still see every block even after the other branch has
+        # finished draining. The source is consumed once by the tee driver and
+        # each block is copied to both queues (not a round-robin split).
+        from examples.eth_backrun_v2_v3_v4_rust import _tee_block_stream
+
+        blocks = [_block(201), _block(202), _block(203)]
+        branch_a, branch_b, _driver = _tee_block_stream(_Blocks(blocks))
+
+        # Drain branch A fully first; only then drain branch B. Both must still
+        # see every block (no blocks lost to the already-finished branch).
+        seen_a: list[int] = []
+        seen_b: list[int] = []
+        async for b in branch_a:
+            seen_a.append(b["number"])
+        async for b in branch_b:
+            seen_b.append(b["number"])
+
+        assert seen_a == [201, 202, 203], "branch A independent drain"
+        assert seen_b == [201, 202, 203], "branch B must still see every block after A finished"

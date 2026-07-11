@@ -22,7 +22,7 @@ from degenbot.database.session_manager import DatabaseSessionManager
 from degenbot.degenbot_rs import PyBot
 from degenbot.erc20 import Erc20Token
 from degenbot.registry import PoolRegistry, TokenRegistry
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 
 # --- Fake async provider ---
 
@@ -121,23 +121,24 @@ class TestV2BuilderBaseDecodeHelpers:
 
 
 class TestAsyncV2PoolBuilder:
-    """AsyncV2PoolBuilder builds a LiquidityPool using AsyncPoolIO."""
+    """AsyncV2PoolBuilder builds a UniswapV2Pool using AsyncPoolIO."""
 
     @pytest.mark.asyncio
     async def test_async_v2_builder_builds_pool(self) -> None:
-        """AsyncV2PoolBuilder.build() produces a LiquidityPool using async I/O."""
+        """AsyncV2PoolBuilder.build() produces a UniswapV2Pool using async I/O."""
         provider = FakeAsyncProvider(_v2_common_responses())
         io = AsyncPoolIO(provider)
 
         # Builder with mock dependencies — all I/O goes through io=
         erc20_builder = MagicMock(spec=AsyncErc20Builder)
+        py_bot = PyBot()
 
         async def _build_token(address, *, chain_id=None, silent=False, io=None):
             await asyncio.sleep(0)
-            token = MagicMock(spec=Erc20Token)
-            token.address = address
-            token.chain_id = chain_id or 1
-            return token
+            py_token = py_bot.register_token(
+                address, name="TK", symbol="TK", decimals=18, chain_id=chain_id or 1
+            )
+            return Erc20Token._from_py_token(py_token)
 
         erc20_builder.build = _build_token
 
@@ -149,7 +150,7 @@ class TestAsyncV2PoolBuilder:
             pools=MagicMock(spec=PoolRegistry),
             tokens=MagicMock(spec=TokenRegistry),
             erc20_builder=erc20_builder,
-            py_bot=PyBot(),
+            py_bot=py_bot,
             default_chain_id=1,
         )
 
@@ -160,6 +161,6 @@ class TestAsyncV2PoolBuilder:
             io=io,
             request=BuildPoolRequest(silent=True),
         )
-        assert isinstance(pool, LiquidityPool)
+        assert isinstance(pool, UniswapV2Pool)
         assert pool.reserves_token0 == 1000
         assert pool.reserves_token1 == 2000

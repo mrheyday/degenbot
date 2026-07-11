@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import eth_abi.abi
-
+from degenbot.abi_adapter import decode as abi_decode
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
 
@@ -82,11 +81,11 @@ class V3BuilderBase:
             The computed value.
 
         """
-        (factory_raw,) = eth_abi.abi.decode(types=["address"], data=factory_result)
-        (token0_raw,) = eth_abi.abi.decode(types=["address"], data=token0_result)
-        (token1_raw,) = eth_abi.abi.decode(types=["address"], data=token1_result)
-        (fee,) = eth_abi.abi.decode(types=["uint24"], data=fee_result)
-        (tick_spacing,) = eth_abi.abi.decode(types=["int24"], data=tick_spacing_result)
+        (factory_raw,) = abi_decode(types=["address"], data=factory_result)
+        (token0_raw,) = abi_decode(types=["address"], data=token0_result)
+        (token1_raw,) = abi_decode(types=["address"], data=token1_result)
+        (fee,) = abi_decode(types=["uint24"], data=fee_result)
+        (tick_spacing,) = abi_decode(types=["int24"], data=tick_spacing_result)
 
         return V3ImmutableData(
             factory=get_checksum_address(factory_raw),
@@ -107,7 +106,7 @@ class V3BuilderBase:
             The computed value.
 
         """
-        sqrt_price_x96, tick, *_ = eth_abi.abi.decode(
+        sqrt_price_x96, tick, *_ = abi_decode(
             types=["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"],
             data=slot0_result,
         )
@@ -141,13 +140,6 @@ class V3BuilderBase:
     ) -> tuple[dict[int, BitmapAtWord], dict[int, LiquidityAtTick], bool]:
         """Load tick bitmap and tick data from a re-queried DB row with active relationships.
 
-        The caller is responsible for re-querying the pool row within an
-        active SQLAlchemy session so that lazy-loaded relationships
-        (initialization_maps, liquidity_positions) are accessible.
-
-        Returns (working_tick_bitmap, working_tick_data, db_snapshot_loaded).
-        If the snapshot cannot be loaded, returns ({}, {}, False).
-
         Returns:
             The computed value.
 
@@ -159,6 +151,46 @@ class V3BuilderBase:
             return {}, {}, False
 
         update_block = pool_with_data.liquidity_update_block or 0
+
+        working_tick_bitmap: dict[int, BitmapAtWord] = {}
+        working_tick_data: dict[int, LiquidityAtTick] = {}
+
+        for init_map in init_maps:
+            working_tick_bitmap[int(init_map.word)] = BitmapAtWord(
+                bitmap=int(init_map.bitmap),
+                block=update_block,
+            )
+        for pos in liq_positions:
+            working_tick_data[int(pos.tick)] = LiquidityAtTick(
+                liquidity_net=int(pos.liquidity_net),
+                liquidity_gross=int(pos.liquidity_gross),
+                block=update_block,
+            )
+
+        return working_tick_bitmap, working_tick_data, True
+
+    @staticmethod
+    def load_tick_snapshot_from_seam_rows(
+        *,
+        init_maps: list[Any],
+        liq_positions: list[Any],
+        liquidity_update_block: int | None,
+    ) -> tuple[dict[int, BitmapAtWord], dict[int, LiquidityAtTick], bool]:
+        """Load tick bitmap + data from the Rust seam rows (QVMWQC).
+
+        The per-row fetch methods (`PyBotIo.fetch_initialization_maps` /
+        `fetch_liquidity_positions`) return pyclass rows whose attributes
+        mirror the ORM columns this method reads (`.word` / `.bitmap` /
+        `.tick` / `.liquidity_net` / `.liquidity_gross`).
+
+        Returns:
+            The computed value.
+
+        """
+        if not init_maps or not liq_positions:
+            return {}, {}, False
+
+        update_block = liquidity_update_block or 0
 
         working_tick_bitmap: dict[int, BitmapAtWord] = {}
         working_tick_data: dict[int, LiquidityAtTick] = {}

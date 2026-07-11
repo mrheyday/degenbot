@@ -12,6 +12,19 @@
 # core's `pyo3` feature so the `From<Error> for PyErr` conversions are available
 # at the binding layer. Verify with `just check-no-pyo3-in-cores`.
 
+# Shared package metadata inherited by every member crate via `<field>.workspace
+# = true` (ADR-009 single-source-of-truth versioning). The version literal here
+# is the *only* version in the Rust tree; the binding crate `degenbot_rs`
+# (`crates/degenbot-python/`) inherits it, and maturin reads that crate's
+# version to set the published wheel's — so one edit moves both halves.
+[workspace.package]
+version = "0.6.0-alpha.3"
+edition = "2021"
+license = "MIT"
+publish = false
+repository = "https://github.com/BowTiedDevil/degenbot"
+authors = ["BowTiedDevil <devil@bowtieddevil.com>"]
+
 [workspace]
 resolver = "2"
 members = [
@@ -19,11 +32,22 @@ members = [
     "crates/degenbot-cl-math",
     "crates/degenbot-curve-math",
     "crates/degenbot-balancer-math",
+    "crates/degenbot-solidly-math",
+    "crates/degenbot-evm-math",
+    "crates/degenbot-price",
+    "crates/degenbot-executor",
+    "crates/degenbot-submission",
+    "crates/degenbot-simulation",
     "crates/degenbot-abi",
     "crates/degenbot-rpc",
     "crates/degenbot-bot",
     "crates/degenbot-decoders",
     "crates/degenbot-uniswap",
+    "crates/degenbot-pathfinding",
+    "crates/degenbot-db",
+    "crates/degenbot-pool-updater",
+    "crates/degenbot-aave-updater",
+    "crates/degenbot-executor",
     "crates/degenbot-python",
     "crates/degenbot",
 ]
@@ -55,6 +79,12 @@ codegen-units = 16
 codegen-units = 16
 [profile.release.package.degenbot-balancer-math]
 codegen-units = 16
+[profile.release.package.degenbot-solidly-math]
+codegen-units = 16
+[profile.release.package.degenbot-evm-math]
+codegen-units = 16
+[profile.release.package.degenbot-price]
+codegen-units = 16
 [profile.release.package.degenbot-abi]
 codegen-units = 16
 [profile.release.package.degenbot-rpc]
@@ -64,6 +94,14 @@ codegen-units = 16
 [profile.release.package.degenbot-decoders]
 codegen-units = 16
 [profile.release.package.degenbot-uniswap]
+codegen-units = 16
+[profile.release.package.degenbot-pathfinding]
+codegen-units = 16
+[profile.release.package.degenbot-db]
+codegen-units = 16
+[profile.release.package.degenbot-executor]
+codegen-units = 16
+[profile.release.package.degenbot-submission]
 codegen-units = 16
 
 # Dev profile (default for `cargo test` / `just dev`): keep compilation fast.

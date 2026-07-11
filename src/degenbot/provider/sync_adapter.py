@@ -9,7 +9,6 @@ ProviderAdapter facade with the factory methods that construct each backend.
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from web3 import Web3
@@ -430,27 +429,12 @@ class ProviderAdapter(SyncSubscriptionSupport):
 
     @property
     def provider_type(self) -> Literal["web3", "alloy", "offline"]:
-        """Get the type of the underlying provider."""
+        """The type of the underlying provider."""
         return self._provider_type
 
     @property
-    def underlying(self) -> AlloyProvider | OfflineProvider | Web3 | None:
-        """Get the underlying provider instance.
-
-        .. deprecated:: 0.x
-            This escape hatch will be removed in a future release.
-            Use ProviderAdapter methods directly instead.
-        """
-        warnings.warn(
-            "ProviderAdapter.underlying is deprecated — use ProviderAdapter methods directly.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._raw_provider
-
-    @property
     def provider(self) -> AlloyProvider | OfflineProvider | Web3 | None:
-        """Get the underlying provider, or None if not set (e.g., after unpickling)."""
+        """The underlying provider, or None if not set (e.g., after unpickling)."""
         return self._raw_provider
 
     def as_web3(self) -> Web3 | None:
@@ -486,18 +470,59 @@ class ProviderAdapter(SyncSubscriptionSupport):
             return self._raw_provider
         return None
 
+    def to_alloy_provider(self) -> AlloyProvider:
+        """Return an ``AlloyProvider`` (Rust) over this adapter's transport.
+
+        Returns the held ``AlloyProvider`` directly for alloy-backed adapters.
+        For web3-backed adapters, builds (and caches) one from the underlying
+        IPC path / HTTP endpoint — the same node, via the Rust transport — so
+        Rust readers (e.g. ``PyChainlinkPriceFeed`` / ``PyAavePriceOracle``)
+        can issue ``eth_call`` without a Python round-trip (ADR-005 cutover).
+
+        Returns:
+            The (cached) ``AlloyProvider`` over this adapter's transport.
+
+        Raises:
+            ValueError: If no AlloyProvider can be built from this backend
+                (e.g. an offline provider, which has no live transport).
+
+        """
+        cached = getattr(self, "_alloy_provider_cache", None)
+        if cached is not None:
+            return cached
+        alloy = self.as_alloy()
+        if alloy is None:
+            w3 = self.as_web3()
+            if w3 is not None:
+                backend = w3.provider
+                endpoint = getattr(backend, "endpoint_uri", None)
+                if endpoint:
+                    alloy = AlloyProvider(str(endpoint))
+                else:
+                    ipc_path = getattr(backend, "ipc_path", None)
+                    if ipc_path is not None:
+                        alloy = AlloyProvider(str(ipc_path))
+        if alloy is None:
+            msg = (
+                "Cannot build an AlloyProvider from this provider backend "
+                f"({self._provider_type!r}); a live RPC transport is required."
+            )
+            raise ValueError(msg)
+        self._alloy_provider_cache = alloy
+        return alloy
+
     # -------------------------------------------------------------------------
     # Properties (delegated)
     # -------------------------------------------------------------------------
 
     @property
     def chain_id(self) -> int:
-        """Get the chain ID."""
+        """The chain ID."""
         return self._backend.chain_id
 
     @property
     def block_number(self) -> int:
-        """Get the current block number."""
+        """The current block number."""
         return self._backend.block_number
 
     # -------------------------------------------------------------------------

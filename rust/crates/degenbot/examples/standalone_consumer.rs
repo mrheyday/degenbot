@@ -14,6 +14,9 @@
 //! standalone-consumer gate.
 
 use alloy::primitives::{address, U256};
+use degenbot::degenbot_balancer_math::{mul_down, ONE};
+use degenbot::degenbot_curve_math::{stableswap_get_d, DVariant};
+use degenbot::degenbot_solidly_math::{calc_d as solidly_calc_d, calc_f as solidly_calc_f};
 use degenbot::dex_identity::UNISWAP_V2;
 use degenbot::{BotState, RegisterV2PoolParams};
 
@@ -46,6 +49,10 @@ fn main() {
         fee_token1: UNISWAP_V2.fee_token1,
         factory: UNISWAP_V2.factory,
         update_block: 19_000_000,
+        variant: UNISWAP_V2.variant,
+        stable_swap: false,
+        fee_denominator: None,
+        ..Default::default()
     };
     let pool_id = bot.register_v2_pool(&params);
     assert_eq!(pool_id, 1, "first registered pool gets id 1");
@@ -89,4 +96,59 @@ fn main() {
     );
 
     println!("standalone degenbot consumer OK: pool_id={pool_id} amount_out={amount_out}");
+
+    // 5. Reach the pure-Rust math leaves directly — proves the umbrella
+    //    re-exports the `degenbot-curve-math` / `degenbot-balancer-math`
+    //    leaves (ADR-005 sub-step B' completion) so a standalone consumer
+    //    can call StableSwap / FixedPoint math without `pyo3` in the graph.
+    //
+    // Curve `stableswap_get_d` over a balanced 2-coin pool: D converges to
+    //    sum(xp) = 2e18 when the pool is balanced (the StableSwap invariant
+    //    equals the constant-sum invariant at balance — A amplification perturbs
+    //    D by < 1 unit at the fixed point; the contraction stops within MAX
+    //    loop steps when |d - d_prev| <= 1).
+    let xp = [
+        U256::from(1_000_000_000_000_000_000_u64),
+        U256::from(1_000_000_000_000_000_000_u64),
+    ];
+    let n_coins = U256::from(2u64);
+    let a_precision = U256::from(100u64);
+    let amp = U256::from(2000u64); // A = 20
+    let d = stableswap_get_d(&xp, amp, n_coins, a_precision, DVariant::Standard)
+        .expect("stableswap_get_d converged");
+    let sum = xp[0] + xp[1];
+    // Balanced pool: D ≈ sum(xp) within the convergence tolerance (±1).
+    assert!(
+        d.abs_diff(sum) <= U256::from(1u64),
+        "balanced StableSwap D must ≈ sum(xp): {d} vs {sum}"
+    );
+
+    // Balancer `FixedPoint.mul_down(a, b) = a*b / ONE` (18-dec fixed-point).
+    // Identity check: mul_down(x, ONE) == x for any x ≤ max_fp.
+    let val = U256::from(42_000_000_000_000_000_000_u128); // 42 * 1e18
+    assert_eq!(mul_down(val, ONE).unwrap(), val, "mul_down(x, ONE) == x");
+
+    // 6. Solidly-stable math leaf reach: confirm `calc_d(x0, y)` and
+    //    `calc_f(x0, y)` are reachable from the umbrella without `pyo3`.
+    //    The Solidly/Aerodrome deployed-contract `calc_d` evaluates the
+    //    analytic `D = 3*x0*y^2 + x0^3*y` (1e18-scaled); re-derive it in plain
+    //    integer arithmetic for the parity check.
+    let x0 = U256::from(2_000_000_000_000_000_000_u64); // 2 * 1e18
+    let y = U256::from(3_000_000_000_000_000_000_u64); // 3 * 1e18
+    let got_d = solidly_calc_d(x0, y);
+    // D = 3*x0*(y^2 / 1e18) / 1e18 + (((x0^2 / 1e18) * x0) / 1e18)
+    let yy = y * y / ONE;
+    let term1 = U256::from(3u64) * x0 * yy / ONE;
+    let x0x0 = x0 * x0 / ONE;
+    let term2 = x0x0 * x0 / ONE;
+    let expected_d = term1 + term2;
+    assert_eq!(got_d, expected_d, "solidly calc_d direct port");
+    // And `calc_f(x0, y) = x0*y^3 + x0^3*y`:
+    let got_f = solidly_calc_f(x0, y);
+    let a = x0 * y / ONE;
+    let b = x0 * x0 / ONE + y * y / ONE;
+    let expected_f = a * b / ONE;
+    assert_eq!(got_f, expected_f, "solidly calc_f direct port");
+
+    println!("standalone degenbot consumer OK: curve D={d} balancer fp.mul_down(identity) solidly calc_d={got_d}");
 }

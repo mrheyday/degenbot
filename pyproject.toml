@@ -4,17 +4,21 @@ build-backend = "maturin"
 
 [project]
 name = "degenbot"
-version = "0.6.0a3"
+# Version is supplied by maturin at build time from the `degenbot_rs` binding
+# crate's [package].version, which is inherited from [workspace.package] in
+# rust/Cargo.toml (ADR-009 single-source-of-truth versioning). The single
+# literal lives on the Rust side; maturin bridges it into the wheel and
+# normalizes the semver form to PEP 440 (e.g. 0.6.0-alpha.3 -> 0.6.0a3).
+dynamic = ["version"]
 authors = [
     { name="BowTiedDevil", email="devil@bowtieddevil.com" },
 ]
-description = "Python classes to aid rapid development of Uniswap (V2, V3, V4), Curve V1, and Solidly V2 arbitrage bots on EVM-compatible blockchains"
+description = "Python + Rust (PyO3) building blocks for Uniswap (V2, V3, V4), Curve V1, Solidly V2, Balancer V2 & Aave V3 arbitrage and liquidation bots on EVM-compatible blockchains"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic ~= 1.18",
     "click ~= 8.4",
-    "networkx ~= 3.6",
     "pydantic ~= 2.13",
     "pydantic-settings ~= 2.14",
     "scipy ~= 1.17",
@@ -123,6 +127,9 @@ extend-select = [
     "TRY",      # tryceratops
 ]
 ignore = [
+    "D203",     # incorrect-blank-line-before-class
+    "D213",     # multi-line-summary-second-line
+    "COM812",   # trailing-commas
     "N818",     # error-suffix-on-exception-name
     "PLR0904",  # too-many-public-methods
     "PLR0911",  # too-many-return-statements
@@ -143,11 +150,35 @@ logger-objects = [
 allow-star-arg-any = true
 
 [tool.ruff.lint.per-file-ignores]
+"scripts/aave_replay_diff.py" = [
+    "ANN401",   # the drive/compare JSON-report dicts are dict[str, Any]
+    "ARG001",   # CLI dispatchers take unused `args` for argparse's set_defaults
+    "D",        # docstring strictness (Returns:/Raises:/imperative) not enforced on the CLI
+    "DOC",      # pydoclint Returns:/Raises: sections not enforced on the CLI
+    "EM102",    # short f-string error messages are fine in a script
+    "PLC0415",  # lazy web3/ProviderAdapter imports avoid a hard dep at module load
+    "PLW0717",  # the drive fn's broad try/except is intentional (log+re-raise)
+    "PLR1702",  # the bisect loop nests deeply by design
+    "PTH",      # os.path + os.makedirs are fine for the bisect's file-copy logic
+    "PLW1514",  # the JSON-dump file writes use utf-8 implicitly
+    "RET504",   # unnecessary-assign for clarity in the drive fn
+    "S105",     # "DEGENBOT_RPC_HTTP_CHAINID_1" is an envvar NAME, not a password
+    "S110",     # the optional event-fetcher import's try/except/pass is intentional
+    "S608",     # the table-name is from a hardcoded _TABLE_ORDER list, not user input
+    "SIM",      # the compare dict-comprehensions are clarity over comprehension
+    "SLF001",   # sqlalchemy's `row._mapping` is the documented dict-access API
+    "TRY003",   # raise-vanilla-args on the SystemExit messages
+    "TRY301",   # re-raising the worker-thread error from within the try is intentional
+    "T201",     # the CLI prints its summary to stdout by design
+]
 "tests/*" = [
     "ANN",      # type annotations for tests are low priority
     "ARG",
     "D",
     "DOC",
+    "ICN001",   # benchmark scripts may import networkx without alias
+    "INP001",   # benchmark scripts are not part of a package
+    "PLC0415",  # benchmark scripts may import conditionally
     "PLC2701",  # tests may need to import private modules
     "PLR",
     "S301",
@@ -165,15 +196,16 @@ addopts = [
     "--cov", "src/degenbot",
     "--cov-branch",
     "--cov-report", "html",
-    "-m", "not slow and not base",
+    "-m", "not slow and not base and not online_rpc",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src", ".", "examples"]
 python_files = "test_*.py"
 testpaths = ["tests", "README.md"]
-norecursedirs = ["archive"]
+norecursedirs = ["archive", ".hypothesis"]
 filterwarnings = [
+    "error", # Fail on all warnings by default
     "ignore::DeprecationWarning:websockets.legacy",
 ]
 markers = [
@@ -181,6 +213,8 @@ markers = [
     "base: tests requiring a Base mainnet RPC",
     "ethereum: tests requiring an Ethereum mainnet RPC",
     "slow: tests that are too slow for routine local runs (e.g. pathfinding)",
+    "onchain_oracle: on-chain parity test whose oracle truth is read from a golden file (tests/golden); offline in CI — see docs/architecture/golden-onchain-parity.md",
+    "online_rpc: test requiring a live external RPC (mainnet/arbitrum/base archive node) — skipped in CI by default; run on-demand with `-m online_rpc`. See docs/architecture/golden-onchain-parity.md.",
 ]
 
 [dependency-groups]
@@ -189,6 +223,7 @@ dev = [
     "hypothesis",
     "maturin",
     "pre-commit",
+    "prek",
     "pytest-asyncio",
     "pytest-cov",
     "pytest-order",
@@ -204,6 +239,7 @@ dev = [
 
 [tool.ty.environment]
 python-version = "3.12"
+extra-paths = ["examples"]
 
 [tool.uv]
 exclude-newer = "14 days"

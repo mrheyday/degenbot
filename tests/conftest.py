@@ -1,5 +1,7 @@
 import logging
+import os
 from collections.abc import Generator
+from pathlib import Path
 
 import dotenv
 import pytest
@@ -8,41 +10,69 @@ from _pytest.nodes import Item
 
 from degenbot.anvil_fork import AnvilFork
 from degenbot.bot import Bot
+from degenbot.database.session_manager import DatabaseSessionManager
 from degenbot.logging import set_log_level
 from degenbot.provider import ProviderAdapter
+from tests.golden.oracle import GOLDEN_ROOT, GoldenOracle, _nodeid_to_path
 from tests.helpers.bot_factory import make_bot_with_provider
 
 env_file = dotenv.find_dotenv("tests.env")
 env_values = dotenv.dotenv_values(env_file)
 
 
-ARBITRUM_FULL_NODE_HTTP_URI: str = env_values.get(
-    "ARBITRUM_FULL_NODE_HTTP_URI", "https://arbitrum-one-rpc.publicnode.com",
+def _rpc(key: str, default: str) -> str:
+    """Resolve an RPC URI with precedence: envvar > tests.env > built-in default.
+
+    ``dotenv.dotenv_values`` reads only the file, so a bare ``env_values.get`` would
+    ignore ``os.environ`` entirely — leaving no way for a user to override an RPC
+    endpoint without editing the (gitignored) ``tests.env``. Checking ``os.environ``
+    first makes ad-hoc overrides (``ETHEREUM_ARCHIVE_NODE_HTTP_URI='…' pytest …``)
+    work across machines and CI without touching any file.
+    """
+    return os.environ.get(key, env_values.get(key, default))
+
+
+ARBITRUM_FULL_NODE_HTTP_URI: str = _rpc(
+    "ARBITRUM_FULL_NODE_HTTP_URI",
+    "https://arbitrum-one-rpc.publicnode.com",
 )
-ARBITRUM_FULL_NODE_WS_URI: str = env_values.get(
-    "ARBITRUM_FULL_NODE_WS_URI", "wss://arbitrum-one-rpc.publicnode.com",
+ARBITRUM_FULL_NODE_WS_URI: str = _rpc(
+    "ARBITRUM_FULL_NODE_WS_URI",
+    "wss://arbitrum-one-rpc.publicnode.com",
 )
 
-BASE_ARCHIVE_NODE_HTTP_URI: str = env_values.get(
-    "BASE_ARCHIVE_NODE_HTTP_URI", "https://base.llamarpc.com/",
+BASE_ARCHIVE_NODE_HTTP_URI: str = _rpc(
+    "BASE_ARCHIVE_NODE_HTTP_URI",
+    "https://mainnet.base.org",
 )
-BASE_ARCHIVE_NODE_WS_URI: str = env_values.get(
-    "BASE_ARCHIVE_NODE_WS_URI", "wss://base.llamarpc.com/",
+BASE_ARCHIVE_NODE_WS_URI: str = _rpc(
+    "BASE_ARCHIVE_NODE_WS_URI",
+    "wss://mainnet.base.org",
 )
-BASE_FULL_NODE_HTTP_URI: str = env_values.get("BASE_FULL_NODE_HTTP_URI", "http://localhost:8544/")
-BASE_FULL_NODE_WS_URI: str = env_values.get("BASE_FULL_NODE_WS_URI", "ws://localhost:8548/")
+BASE_FULL_NODE_HTTP_URI: str = _rpc(
+    "BASE_FULL_NODE_HTTP_URI",
+    "https://mainnet.base.org",
+)
+BASE_FULL_NODE_WS_URI: str = _rpc(
+    "BASE_FULL_NODE_WS_URI",
+    "wss://mainnet.base.org",
+)
 
-ETHEREUM_ARCHIVE_NODE_HTTP_URI: str = env_values.get(
-    "ETHEREUM_ARCHIVE_NODE_HTTP_URI", "https://eth.llamarpc.com/",
+ETHEREUM_ARCHIVE_NODE_HTTP_URI: str = _rpc(
+    "ETHEREUM_ARCHIVE_NODE_HTTP_URI",
+    "https://ethereum-rpc.publicnode.com",
 )
-ETHEREUM_ARCHIVE_NODE_WS_URI: str = env_values.get(
-    "ETHEREUM_ARCHIVE_NODE_WS_URI", "wss://eth.llamarpc.com/",
+ETHEREUM_ARCHIVE_NODE_WS_URI: str = _rpc(
+    "ETHEREUM_ARCHIVE_NODE_WS_URI",
+    "wss://ethereum-rpc.publicnode.com",
 )
-ETHEREUM_FULL_NODE_HTTP_URI: str = env_values.get(
-    "ETHEREUM_FULL_NODE_HTTP_URI", "https://eth.llamarpc.com/",
+ETHEREUM_FULL_NODE_HTTP_URI: str = _rpc(
+    "ETHEREUM_FULL_NODE_HTTP_URI",
+    "https://ethereum-rpc.publicnode.com",
 )
-ETHEREUM_FULL_NODE_WS_URI: str = env_values.get(
-    "ETHEREUM_FULL_NODE_WS_URI", "wss://eth.llamarpc.com/",
+ETHEREUM_FULL_NODE_WS_URI: str = _rpc(
+    "ETHEREUM_FULL_NODE_WS_URI",
+    "wss://ethereum-rpc.publicnode.com",
 )
 
 
@@ -52,6 +82,24 @@ def pytest_addoption(parser: Parser):
         action="store",
         default="",
         help="Comma-separated list of fixture names to skip",
+    )
+    parser.addoption(
+        "--golden-mode",
+        action="store",
+        default=os.environ.get("DEGENBOT_GOLDEN_MODE", "replay"),
+        choices=("record", "replay"),
+        help=(
+            "Golden-oracle mode for on-chain parity tests (tests/golden). "
+            "'replay' (default, CI) reads recorded ints with no RPC; "
+            "'record' invokes the deferred contract callable against a live fork "
+            "and writes the golden file. See docs/architecture/golden-onchain-parity.md."
+        ),
+    )
+    parser.addoption(
+        "--golden-root",
+        action="store",
+        default=str(Path(__file__).resolve().parent / "golden" / "data"),
+        help="Root directory for golden-oracle JSON files.",
     )
 
 
@@ -85,6 +133,13 @@ def _initialize_and_reset_after_each_test():
     """Before each test, clear/reset global values and singletons"""
     # Global singletons have been removed. Bot-owned connections and registries
     # are scoped to each Bot instance and do not need inter-test resets.
+    yield
+    # Safety net: dispose any SQLAlchemy engine a test left dangling (a Bot or
+    # DatabaseSessionManager constructed inline and never ``close()`` ed). Without
+    # this, the Engine's connection pool keeps the ``sqlite3.Connection`` open and
+    # surfaces as ``ResourceWarning: unclosed database`` when GC eventually runs
+    # (notably at xdist worker teardown).
+    DatabaseSessionManager.dispose_all()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -96,6 +151,37 @@ def _set_degenbot_logging():
     the test run too.
     """
     set_log_level(logging.DEBUG)
+
+
+@pytest.fixture
+def golden_factory(request: pytest.FixtureRequest):
+    """Factory for :class:`tests.golden.oracle.GoldenOracle` (L2 golden seam).
+
+    Yields a callable ``bind(chain_id, block_number)`` returning a GoldenOracle
+    bound to a per-test JSON file derived from ``request.node.nodeid``. Mode is
+    driven by ``--golden-mode`` (replay by default, record to (re)populate the
+    file against a pinned fork). See ``docs/architecture/golden-onchain-parity.md``.
+
+    Example::
+
+        def test_x(golden_factory):
+            golden = golden_factory(chain_id=1, block_number=17_600_000)
+            res = golden.check("key", contract=lambda: quoter.fn...call())
+            if res.reverted:
+                continue
+            assert calc == res.value
+    """
+    mode: str = request.config.getoption("--golden-mode")
+    root = Path(request.config.getoption("--golden-root"))
+    # When --golden-root is the default, GOLDEN_ROOT already encodes it; honour
+    # an explicit override by rewriting the root anchor too.
+    rel = _nodeid_to_path(request.node.nodeid, GOLDEN_ROOT).relative_to(GOLDEN_ROOT)
+    path = root / rel
+
+    def bind(*, chain_id: int, block_number: int) -> GoldenOracle:
+        return GoldenOracle(path=path, chain_id=chain_id, block_number=block_number, mode=mode)
+
+    return bind
 
 
 @pytest.fixture
@@ -180,14 +266,18 @@ def fork_mainnet_full() -> Generator[AnvilFork, None, None]:
 
 
 @pytest.fixture
-def bot_mainnet_full(fork_mainnet_full: AnvilFork) -> Bot:
+def bot_mainnet_full(fork_mainnet_full: AnvilFork) -> Generator[Bot, None, None]:
     """Provide a Bot with the mainnet full fork's provider registered."""
     provider = ProviderAdapter.from_web3(fork_mainnet_full.w3)
-    return make_bot_with_provider(provider)
+    bot = make_bot_with_provider(provider)
+    yield bot
+    bot.close()
 
 
 @pytest.fixture
-def bot_mainnet_archive(fork_mainnet_archive: AnvilFork) -> Bot:
+def bot_mainnet_archive(fork_mainnet_archive: AnvilFork) -> Generator[Bot, None, None]:
     """Provide a Bot with the mainnet archive fork's provider registered."""
     provider = ProviderAdapter.from_web3(fork_mainnet_archive.w3)
-    return make_bot_with_provider(provider)
+    bot = make_bot_with_provider(provider)
+    yield bot
+    bot.close()

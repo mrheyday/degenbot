@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from degenbot.balancer.stable_pools import BalancerRateProvider
     from degenbot.degenbot_rs import PyLiquidityPool
     from degenbot.erc20.erc20 import Erc20Token
-    from degenbot.types.aliases import BlockNumber, ChainId
+    from degenbot.types.aliases import BlockNumber
 
 
 def _pool_id_hex(pool_id: bytes) -> str:
@@ -47,7 +47,6 @@ def make_balancer_weighted_pool(
     fee,
     weights: list[int] | tuple[int, ...],
     pow_version: int = 1,
-    chain_id: ChainId | None = None,
     state_block: BlockNumber | None = None,
     py_bot: PyBot | None = None,
     pool_class: type[BalancerV2Pool] = BalancerV2Pool,
@@ -73,7 +72,6 @@ def make_balancer_weighted_pool(
     ``WeightedMath``).
     """
     address_checksum = get_checksum_address(address)
-    resolved_chain_id = chain_id if chain_id is not None else tokens[0].chain_id
     state_block_int = state_block if state_block is not None else 0
 
     bot = py_bot if py_bot is not None else PyBot()
@@ -100,18 +98,13 @@ def make_balancer_weighted_pool(
     handle: PyLiquidityPool | None = bot.get_pool(pool_id_int)
     assert handle is not None, "register_balancer_weighted_pool returned a pool_id with no handle"
 
-    return pool_class(
-        handle,
-        address=address_checksum,
-        pool_id=pool_id,
-        vault=vault,
-        tokens=tokens,
-        fee=fee,
-        weights=weights,
-        pow_version=pow_version,
-        chain_id=resolved_chain_id,
-        state_block=state_block_int,
-    )
+    # ADR-005 sealed seam: register tokens in the same Bot as the pool.
+    for tok in tokens:
+        if bot.get_token(tok.address) is None:
+            bot.register_token(
+                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
+            )
+    return pool_class._from_py_pool(handle)  # noqa: SLF001
 
 
 def make_balancer_stable_pool(
@@ -128,7 +121,6 @@ def make_balancer_stable_pool(
     base_scaling_factors: list[int] | tuple[int, ...] | None = None,
     rate_provider: BalancerRateProvider | None = None,
     invariant_version: int = INVARIANT_V2,
-    chain_id: ChainId | None = None,
     state_block: BlockNumber | None = None,
     py_bot: PyBot | None = None,
     pool_class: type[BalancerV2StablePool] = BalancerV2StablePool,
@@ -152,19 +144,13 @@ def make_balancer_stable_pool(
     here, mirroring on-chain ``_cacheTokenRateIfNecessary``.
     """
     address_checksum = get_checksum_address(address)
-    resolved_chain_id = chain_id if chain_id is not None else tokens[0].chain_id
     state_block_int = state_block if state_block is not None else 0
 
     bot = py_bot if py_bot is not None else PyBot()
 
-    # Base scaling factors: 10^(18 - token_decimals) per token — the
-    # decimal-adjustment-only scaling factors (no rate). When not provided,
-    # derive from the canonical ``_compute_scaling_factor`` lookup (matches
-    # the builder + the companion's ``__init__`` fallback).
-    if base_scaling_factors is not None:
-        base_sf = list(base_scaling_factors)
-    else:
-        base_sf = [_compute_scaling_factor(token) for token in tokens]
+    # The sealed seam ignores ``base_scaling_factors`` (the companion derives
+    # base SF from token decimals in ``_from_py_pool``); retained on the
+    # factory signature for API compatibility with callers that pass it.
 
     # encode the Fraction fee the Python-side companion keeps, target-perfect
     # as ``int(fee * FEE_DENOMINATOR)`` (1e18 denominator), mirroring on-chain
@@ -172,6 +158,15 @@ def make_balancer_stable_pool(
     # 12e) ``StableMath`` port; the companion also re-derives it from
     # ``self.fee`` per-call (single source of truth: the Python Fraction).
     fee_scaled_int = int(fee * BalancerV2StablePool.FEE_DENOMINATOR)
+
+    # ADR-006: tokens must be in the same Bot as the pool (the sealed seam
+    # resolves PyErc20Token companions off the handle via
+    # get_balancer_stable_tokens, which requires registered tokens).
+    for tok in tokens:
+        if bot.get_token(tok.address) is None:
+            bot.register_token(
+                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
+            )
 
     pool_id_int = bot.register_balancer_stable_pool(
         address=address_checksum,
@@ -185,26 +180,12 @@ def make_balancer_stable_pool(
         invariant_version=invariant_version,
         balances=list(balances),
         update_block=state_block_int,
+        rate_provider=rate_provider,
     )
     handle: PyLiquidityPool | None = bot.get_pool(pool_id_int)
     assert handle is not None, "register_balancer_stable_pool returned a pool_id with no handle"
 
-    return pool_class(
-        handle,
-        address=address_checksum,
-        pool_id=pool_id,
-        vault=vault,
-        tokens=tokens,
-        fee=fee,
-        amp=amp,
-        scaling_factors=scaling_factors,
-        bpt_idx=bpt_idx,
-        base_scaling_factors=base_sf,
-        rate_provider=rate_provider,
-        invariant_version=invariant_version,
-        chain_id=resolved_chain_id,
-        state_block=state_block_int,
-    )
+    return pool_class._from_py_pool(handle)  # noqa: SLF001
 
 
 __all__ = [

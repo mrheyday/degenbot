@@ -18,6 +18,7 @@ from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.uniswap.v3_types import (
     UniswapV3PoolExternalUpdate,
 )
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v3_pool_factory import make_v3_pool
 
@@ -27,7 +28,7 @@ _PY_BOT = PyBot()
 def _make_test_config(tmp_path: pathlib.Path) -> DegenbotConfig:
     return DegenbotConfig(
         database=DatabaseSettings(path=tmp_path / "test.db"),
-        rpc={1: "https://eth.llamarpc.com/"},
+        rpc={1: ETHEREUM_ARCHIVE_NODE_HTTP_URI},
         default_chain_id=1,
     )
 
@@ -71,7 +72,6 @@ class TestV3PoolIOFreeConstructor:
 
         pool = make_v3_pool(
             address=USDC_WETH_V3_POOL,
-            chain_id=1,
             token0=weth,
             token1=usdc,
             factory=UNISWAP_V3_FACTORY,
@@ -84,9 +84,8 @@ class TestV3PoolIOFreeConstructor:
         )
 
         assert pool.address == get_checksum_address(USDC_WETH_V3_POOL)
-        assert pool.chain_id == 1
-        assert pool.token0 is weth
-        assert pool.token1 is usdc
+        assert pool.token0.address == weth.address
+        assert pool.token1.address == usdc.address
         assert pool.factory == get_checksum_address(UNISWAP_V3_FACTORY)
         assert pool.fee == V3_FEE
         assert pool.tick_spacing == V3_TICK_SPACING
@@ -118,7 +117,6 @@ class TestV3PoolIOFreeConstructor:
 
         pool = make_v3_pool(
             address=USDC_WETH_V3_POOL,
-            chain_id=1,
             token0=weth,
             token1=usdc,
             factory=UNISWAP_V3_FACTORY,
@@ -144,7 +142,6 @@ class TestV3PoolIOFreeConstructor:
 
         pool = make_v3_pool(
             address=USDC_WETH_V3_POOL,
-            chain_id=1,
             token0=weth,
             token1=usdc,
             factory=UNISWAP_V3_FACTORY,
@@ -186,9 +183,15 @@ class TestBotBuildV3Pool:
         provider.get_block_number.return_value = 18_000_000
         bot = Bot(config, provider=provider)
 
-        # Pre-register tokens
+        # Pre-register tokens (ADR-006: tokens must be in the same PyBot as the
+        # pool — _from_py_pool recovers them via py_pool.get_token0/get_token1).
         weth = _make_weth()
         usdc = _make_usdc()
+        for tok in (weth, usdc):
+            if bot._py_bot.get_token(tok.address) is None:  # noqa: SLF001
+                bot._py_bot.register_token(  # noqa: SLF001
+                    tok.address, tok.name, tok.symbol, tok.decimals, 1
+                )
         bot.tokens.add(token_address=weth_addr, chain_id=1, token=weth)
         bot.tokens.add(token_address=usdc_addr, chain_id=1, token=usdc)
 
@@ -281,7 +284,6 @@ class TestV3PoolTrackerWithBot:
         usdc = _make_usdc()
         mock_pool = make_v3_pool(
             address=USDC_WETH_V3_POOL,
-            chain_id=1,
             token0=weth,
             token1=usdc,
             factory=factory,

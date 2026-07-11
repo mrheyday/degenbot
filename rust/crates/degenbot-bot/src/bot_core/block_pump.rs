@@ -43,6 +43,7 @@ use futures_util::{stream, StreamExt};
 use tokio::time::timeout;
 
 use crate::bot_core::{drain_sink::DrainSink, BlockMetadata, Bot};
+use crate::bot_core::{BlockClock, HeaderDecision, LogDecision};
 use degenbot_decoders::v2_sync_decoder::V2_SYNC_TOPIC;
 use degenbot_decoders::v3_mint_burn_decoder::{V3_BURN_TOPIC, V3_MINT_TOPIC};
 use degenbot_decoders::v3_swap_decoder::V3_SWAP_TOPIC;
@@ -403,8 +404,26 @@ impl BlockPump {
         // each new log. When it fires, we send the accumulated result batch
         // to Python. This ensures one dispatch per burst of logs rather than
         // one per individual log.
-        let mut debounce = tokio::time::Instant::now() + Duration::from_millis(DEBOUNCE_MS);
-        let mut debounce_active = false;
+        // ADR-008 D2: solver-release gate (see the flush in the Err + Ok(None) arms
+        // below). `publish_pending` is armed when a forward log applies; the
+        // flush fires `on_send` (gated on `consume_quiesced`) at a settle
+        // point — a `DEBOUNCE_MS` window with no new event (coalescing a
+        // same-block burst into one publish at the tail) OR stream exhaustion.
+        // Replaces the wall-clock `DEBOUNCE_MS` send timer: publication is
+        // gated on the truth condition (all dispatched logs applied).
+        let mut publish_pending = false;
+
+        // ADR-008 per-block state machine. The clock is the authority for
+        // block completeness (the tombstone) and the cursor; the pump loop is
+        // a thin async driver translating its decisions into sink calls +
+        // backfill + shutdown. A header alone NEVER advances the cursor —
+        // only `advance_to_drained` (after the tombstone) does.
+        let mut clock = BlockClock::new();
+        // Per-block metadata, snapshotted from each block's header. A block's
+        // tombstone (first log for N+1) may arrive AFTER header N+1 overwrote
+        // `current_metadata`, so the result batch that finalizes N must carry
+        // N's OWN metadata, retrieved here (VTWCIG).
+        let mut block_metadata: HashMap<u64, BlockMetadata> = HashMap::new();
 
         // [DIAG]
         let mut diag_header_count: u64 = 0;
@@ -425,12 +444,13 @@ impl BlockPump {
                 }
             }
 
-            // Check if the debounce timer has expired — if so, send the
-            // accumulated results to Python (one dispatch per log burst).
-            if debounce_active && tokio::time::Instant::now() >= debounce {
-                debounce_active = false;
-                self.sink.on_send(&current_metadata);
-            }
+            // ADR-008 D2: solver-release gate. `publish_pending` is set when a forward
+            // log applies (block becomes quiesced). The flush below fires
+            // `on_send` (gated on `consume_quiesced`) only at a settle point —
+            // a timeout with no new event (coalescing a same-block burst into
+            // one publish at the tail) OR stream exhaustion. This replaces the
+            // wall-clock `DEBOUNCE_MS` send timer: publication is gated on the
+            // truth condition (all dispatched logs applied), not schedule.
 
             // Check shutdown
             if self.shutdown.load(Ordering::Relaxed) {
@@ -438,38 +458,39 @@ impl BlockPump {
                 return;
             }
 
-            // Wait for the next event. Use a shorter timeout when the debounce
-            // timer is active so we can fire it promptly.
-            let wait_timeout = if debounce_active {
-                // Wake up when the debounce timer fires (or earlier on new events)
+            // Wait for the next event. Use a shorter settle window when a publish is
+            // pending so the quiesce-gated flush fires promptly if no new log
+            // arrives (coalescing a same-block burst); otherwise the long
+            // inactivity backfill window. A new event arriving before the
+            // window elapses cancels the flush (the burst is still in flight).
+            let wait_timeout = if publish_pending {
                 Duration::from_millis(DEBOUNCE_MS)
-                    .saturating_sub(debounce.saturating_duration_since(tokio::time::Instant::now()))
             } else {
                 Duration::from_secs(BACKFILL_TIMEOUT_SECS)
             };
             let event = timeout(wait_timeout, combined.next()).await;
 
             match event {
-                // Timeout — check if it's the debounce timer or the backfill timer.
+                // Settle point — no new event in the window. Flush the
+                // quiesce-gated publish, OR (if nothing pending) the 60s
+                // inactivity backfill path.
                 Err(_) => {
-                    if debounce_active {
-                        // The timeout must be from the debounce timer (50ms),
-                        // not the backfill timer (60s). If the debounce has
-                        // expired, send the result batch. If not (due to
-                        // timing precision), just loop back — the next
-                        // iteration will handle it.
-                        if tokio::time::Instant::now() >= debounce {
-                            debounce_active = false;
-                            self.sink.on_send(&current_metadata);
+                    if publish_pending {
+                        if let Some(open) = clock.latest_observed() {
+                            if clock.consume_quiesced(open) {
+                                self.sink.on_send(&current_metadata);
+                            }
                         }
-                        // else: debounce timer hasn't quite expired yet.
-                        // Loop back — the next iteration will pick it up.
+                        publish_pending = false;
                     } else {
                         // No activity for 60s — try to backfill
                         self.handle_timeout_eager(
                             &mut current_block,
                             &mut last_solved_block,
                             &mut has_logs_this_block,
+                            &mut clock,
+                            &mut block_metadata,
+                            &mut publish_pending,
                         )
                         .await;
                     }
@@ -513,22 +534,34 @@ impl BlockPump {
                     // under-/over-priced backrun txs (VTWCIG). The incoming
                     // metadata (assigned just below) drives the empty-block
                     // send path, which is correctly about the NEW block.
-                    let finished_block_metadata = current_metadata;
-
-                    // Update metadata for the current block
+                    // ADR-008: a header alone NEVER finalizes/drain. The
+                    // clock records the block's metadata (so a later
+                    // tombstone-driven finalize carries the CORRECT block's
+                    // metadata — the tombstone log for N+1 may arrive AFTER
+                    // header N+1, at which point `current_metadata` would
+                    // already hold N+1's). `notify_block` still fires so
+                    // Python's block clock tracks `newHeads`.
                     current_metadata = BlockMetadata {
                         timestamp,
                         base_fee_per_gas,
                         gas_used,
                         gas_limit,
                     };
+                    let header_decision = clock.observe_header(number);
+                    if matches!(header_decision, HeaderDecision::Stale) {
+                        // duplicate/stale header — ignore
+                        continue;
+                    }
+                    // Snapshot this block's metadata so its (deferred)
+                    // tombstone-finalize carries the correct block's metadata.
+                    block_metadata.insert(number, current_metadata);
 
-                    if first_header {
+                    let is_first_header = first_header;
+                    if is_first_header {
                         // First header after backfill. The backfill already
-                        // solved up to this point — just record the anchor
-                        // and skip solving. Set up for normal operation.
+                        // solved up to this point — just record the anchor and
+                        // skip solving. Set up for normal operation.
                         if number > current_block {
-                            // Gap between backfill and this header — backfill it
                             if number > current_block + 1 {
                                 log::info!(
                                     "BlockPump: gap from block {} to {} — backfilling",
@@ -539,65 +572,44 @@ impl BlockPump {
                                     current_block + 1,
                                     number - 1,
                                     &mut current_block,
+                                    &mut clock,
+                                    &mut block_metadata,
+                                    &mut publish_pending,
                                 )
                                 .await;
                             }
                             current_block = number;
                             last_solved_block = number;
-                            // Forward the newHeads tick to the block-notification
-                            // channel (epic 6W35AI): Python's block clock tracks
-                            // `newHeads`, not `ResultBatch::solve_block`. Fires
-                            // after `current_block`/`current_metadata` are
-                            // advanced, in lockstep with the block the solver
-                            // solved against. Skipped on the backfill-only path
-                            // below where `number <= current_block`.
                             self.sink.notify_block(current_block, &current_metadata);
                         }
                         first_header = false;
                     } else if number > current_block {
-                        // New block header — finalize the current block.
-                        // Cancel the debounce timer and send immediately.
-                        debounce_active = false;
-                        // VTWCIG: pass the just-finished block's metadata
-                        // (snapshotted before the overwrite above), not the
-                        // incoming header's.
-                        self.finalize_if_dirty(
-                            current_block,
-                            &finished_block_metadata,
-                            &mut last_solved_block,
-                            &mut has_logs_this_block,
-                        );
-
-                        // Check for gap and backfill if needed
+                        // New block header, but the previous block is NOT
+                        // finalized here — only the tombstone (first log for
+                        // N+1) closes it (ADR-008 D1). Gap backfill still runs.
                         if number > current_block + 1 {
                             log::info!(
                                 "BlockPump: gap from block {} to {} — backfilling",
                                 current_block + 1,
                                 number,
                             );
-                            self.backfill_range(current_block + 1, number - 1, &mut current_block)
-                                .await;
+                            self.backfill_range(
+                                current_block + 1,
+                                number - 1,
+                                &mut current_block,
+                                &mut clock,
+                                &mut block_metadata,
+                                &mut publish_pending,
+                            )
+                            .await;
                         }
 
                         current_block = number;
-                        last_solved_block = number;
-
-                        // Forward the newHeads tick (epic 6W35AI) — see the
-                        // first-header branch for rationale.
                         self.sink.notify_block(current_block, &current_metadata);
-
-                        // For empty blocks (no logs arrived), send an
-                        // empty batch so Python sees the block boundary.
-                        // `process_block_and_send(&[], block, metadata)` decomposed:
-                        // empty logs (no dispatch) + on_drain + on_send.
-                        if !has_logs_this_block {
-                            self.sink.on_drain(current_block, &current_metadata);
-                            self.sink.on_send(&current_metadata);
-                        }
-
-                        has_logs_this_block = false;
                     }
-                    // else: stale/duplicate header — ignore
+                    // The `PendingSuccessor` / `OpenNew` decisions carry no
+                    // pump action beyond the above — the liveness-probe signal
+                    // (dead-logs-sub detection) is handled by the timeout path.
                 }
 
                 // Got a log event from the combined stream — apply eagerly.
@@ -623,51 +635,73 @@ impl BlockPump {
 
                     let log_block = log.block_number.unwrap_or(current_block);
 
-                    if log.removed {
-                        // Reorg signal (ADR-006 slice 7): this log was
-                        // orphaned by a fork at `log_block`. Restore the
-                        // TARGETED pool's state to just before `log_block` via
-                        // `ReorgCoordinator` (per-event, per-pool — replaces
-                        // the bulk `engine.handle_reorg`). The removed log's
-                        // content is unused; its block + pool identity drive
-                        // `ReorgJournal::restore_before_block` (idempotent +
-                        // order-insensitive). The restore fires the SAME
-                        // `on_pool_state_updated(P)` notify as a forward
-                        // update → the engine dirties P + re-solves at the
-                        // next drain tick; the debounce-bounded
-                        // `send_result_batch` emits `expired`/`updated` diffs
-                        // against `delivered` so Python sees the forked paths
-                        // vanish or change.
-                        //
-                        // A too-deep reorg (target at/below the journal's
-                        // earliest delta) returns `Err(NoStatePriorToBlock)`:
-                        // graceful shutdown, NOT panic. The bot cannot safely
-                        // continue with stale state, so set the shutdown flag
-                        // + return; Python observes the pump task exiting.
-                        if let Err(err) = self.reorg_coordinator.dispatch_reorg_log(&log) {
-                            log::error!("BlockPump: too-deep reorg — shutting down. {err:?}");
+                    // ADR-008: route the log via the per-block state machine.
+                    // The clock decides whether this is a forward dispatch, a
+                    // tombstone (first removed:false log for N+1), a reorg
+                    // signal, or an unreliable-WS late forward (→ shutdown).
+                    match clock.observe_log(log_block, log.removed) {
+                        LogDecision::EnterReorg(_) | LogDecision::ContinueReorg => {
+                            // Reorg: per-event per-pool restore via the
+                            // coordinator (ADR-006 slice 7). A too-deep reorg
+                            // → graceful shutdown.
+                            if let Err(err) = self.reorg_coordinator.dispatch_reorg_log(&log) {
+                                log::error!("BlockPump: too-deep reorg — shutting down. {err:?}");
+                                self.shutdown.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                            // Cancel any pending publish: results accumulated
+                            // from pre-reorg state are invalid.
+                            publish_pending = false;
+                            continue;
+                        }
+                        LogDecision::CloseReorg { new_head } => {
+                            // Reorg window closed — the coordinator restored
+                            // unwound pools per-event; this forward log's block
+                            // is the new head. Resume forward tracking from it.
+                            current_block = new_head;
+                            publish_pending = false;
+                            // Fall through to dispatch this forward log.
+                        }
+                        LogDecision::TombstonePrevious(prev) => {
+                            // First removed:false log for N+1 → tombstone N.
+                            // Finalize N with N's OWN metadata (snapshotted
+                            // when N's header arrived), not current_metadata
+                            // which may now hold N+1's — VTWCIG. The terminal
+                            // publish (finalize_block) supersedes any pending
+                            // quiesce publish for the open block.
+                            publish_pending = false;
+                            let prev_meta = block_metadata
+                                .get(&prev)
+                                .copied()
+                                .unwrap_or(current_metadata);
+                            self.finalize_if_dirty(
+                                prev,
+                                &prev_meta,
+                                &mut last_solved_block,
+                                &mut has_logs_this_block,
+                            );
+                            clock.advance_to_drained(prev);
+                            if log_block > current_block {
+                                current_block = log_block;
+                            }
+                        }
+                        LogDecision::DispatchForward => {
+                            if log_block > current_block {
+                                current_block = log_block;
+                            }
+                        }
+                        LogDecision::PanicLateForward(b) => {
+                            // A removed:false log on a tombstoned block, NOT
+                            // in a reorg → unreliable WS (out-of-order /
+                            // duplicated forward events). Unrecoverable for
+                            // correctness — shut down (ADR-008 D3).
+                            log::error!(
+                                "BlockPump: ADR-008 D3 late forward log on \
+                                 tombstoned block {b} — unreliable WS, shutting down"
+                            );
                             self.shutdown.store(true, Ordering::Relaxed);
                             return;
                         }
-                        // Cancel any pending debounce: results accumulated
-                        // from pre-reorg state are invalid.
-                        debounce_active = false;
-                        continue;
-                    }
-
-                    // Detect new block via log's block_number
-                    if log_block > current_block {
-                        // New block — finalize the current block first.
-                        // Cancel the debounce timer and send immediately.
-                        debounce_active = false;
-                        self.finalize_if_dirty(
-                            current_block,
-                            &current_metadata,
-                            &mut last_solved_block,
-                            &mut has_logs_this_block,
-                        );
-
-                        current_block = log_block;
                     }
 
                     // Apply the log immediately to engine state (no solve yet).
@@ -675,12 +709,15 @@ impl BlockPump {
                     // apply to BotState → notify EngineSubscriber → dirty the
                     // engine) — NOT `engine.apply_log`.
                     self.bot.dispatch_log(&log);
+                    clock.log_received(log_block);
+                    clock.log_applied(log_block);
 
                     has_logs_this_block = true;
 
-                    // Start or reset the debounce timer
-                    debounce = tokio::time::Instant::now() + Duration::from_millis(DEBOUNCE_MS);
-                    debounce_active = true;
+                    // ADR-008 D2: arm the quiesce-gated publish. The flush
+                    // fires at the next settle point (timeout or stream end)
+                    // if `consume_quiesced` is true — once per quiesce cycle.
+                    publish_pending = true;
 
                     // [DIAG] count logs + emit periodic stats so we can see,
                     // during a freeze, that the pump IS polling logs while
@@ -697,6 +734,16 @@ impl BlockPump {
                 }
 
                 Ok(None) => {
+                    // ADR-008 D2: stream exhausted — final settle point. Flush
+                    // any pending quiesce-gated publish before returning.
+                    if publish_pending {
+                        if let Some(open) = clock.latest_observed() {
+                            if clock.consume_quiesced(open) {
+                                self.sink.on_send(&current_metadata);
+                            }
+                        }
+                        publish_pending = false;
+                    }
                     log::warn!("BlockPump: both subscription streams ended");
                     return;
                 }
@@ -731,6 +778,9 @@ impl BlockPump {
         current_block: &mut u64,
         last_solved_block: &mut u64,
         has_logs_this_block: &mut bool,
+        clock: &mut BlockClock,
+        block_metadata: &mut HashMap<u64, BlockMetadata>,
+        publish_pending: &mut bool,
     ) {
         log::warn!("BlockPump: no activity for {BACKFILL_TIMEOUT_SECS}s — attempting backfill");
         let latest_block = match self.provider.provider_arc().get_block_number().await {
@@ -743,8 +793,15 @@ impl BlockPump {
 
         if latest_block > *current_block {
             let mut lpb = *current_block;
-            self.backfill_range(*current_block + 1, latest_block, &mut lpb)
-                .await;
+            self.backfill_range(
+                *current_block + 1,
+                latest_block,
+                &mut lpb,
+                clock,
+                block_metadata,
+                publish_pending,
+            )
+            .await;
             *current_block = lpb;
             *last_solved_block = lpb;
             *has_logs_this_block = false;
@@ -760,7 +817,15 @@ impl BlockPump {
     /// Backfill a range of blocks via `eth_getLogs`.
     ///
     /// Processes each block in the range sequentially.
-    async fn backfill_range(&self, from_block: u64, to_block: u64, last_processed_block: &mut u64) {
+    async fn backfill_range(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        last_processed_block: &mut u64,
+        clock: &mut BlockClock,
+        block_metadata: &mut HashMap<u64, BlockMetadata>,
+        publish_pending: &mut bool,
+    ) {
         if from_block > to_block {
             return;
         }
@@ -787,7 +852,12 @@ impl BlockPump {
             }
         }
 
-        // Process each block in order
+        // ADR-008 D4: backfilled logs flow through the SAME state machine as
+        // live WS logs (single branch — no distinguished `Backfilled` edge).
+        // Each log routes via `clock.observe_log`; a tombstoned predecessor is
+        // finalized + drained through the clock, and the backfilled block is
+        // solved via `on_drain` (results piggyback onto the next debounce
+        // `on_send` carrying real metadata).
         let mut any_processed = false;
         for block in from_block..=to_block {
             if self.shutdown.load(Ordering::Relaxed) {
@@ -796,20 +866,49 @@ impl BlockPump {
             }
 
             let block_logs = logs_by_block.remove(&block).unwrap_or_default();
-            if !block_logs.is_empty() {
-                // ADR-006 D4: `process_block(logs, block, metadata)` decomposed —
-                // each log routes through `Bot::dispatch_log` (decode → apply to
-                // BotState → notify EngineSubscriber → dirty the engine), then a
-                // single `on_drain` solves. NOTE: empty metadata here is fine —
-                // `on_drain` solves but does NOT send; accumulated results
-                // piggyback onto the next debounce `on_send(&current_metadata)`
-                // in `run_with_stream`, which carries real metadata (and the
-                // newer block's `results_block`).
-                for log in &block_logs {
-                    self.bot.dispatch_log(log);
+            for log in &block_logs {
+                match clock.observe_log(block, log.removed) {
+                    LogDecision::TombstonePrevious(prev) => {
+                        let prev_meta = block_metadata.get(&prev).copied().unwrap_or_default();
+                        self.sink.finalize_block(
+                            prev, &prev_meta,
+                            // backfill has no `last_solved_block`/`has_logs`
+                            // locals to pump; pass throwaways — `on_drain`
+                            // below is the solve trigger for the block itself.
+                            &mut 0, &mut false,
+                        );
+                        clock.advance_to_drained(prev);
+                        self.bot.dispatch_log(log);
+                        clock.log_received(block);
+                        clock.log_applied(block);
+                    }
+                    LogDecision::DispatchForward => {
+                        self.bot.dispatch_log(log);
+                        clock.log_received(block);
+                        clock.log_applied(block);
+                    }
+                    // Backfilled logs come from an authoritative eth_getLogs
+                    // against the canonical chain. Reorg/late-forward signals
+                    // are not expected here; if one surfaces, skip applying
+                    // this log (the canonical chain doesn't contain it) and let
+                    // the live stream reconcile.
+                    LogDecision::EnterReorg(_)
+                    | LogDecision::ContinueReorg
+                    | LogDecision::CloseReorg { .. }
+                    | LogDecision::PanicLateForward(_) => {
+                        log::warn!(
+                            "BlockPump: backfill saw unexpected decision for block {block}; skipping log"
+                        );
+                    }
                 }
+            }
+            if !block_logs.is_empty() {
                 self.sink.on_drain(block, &BlockMetadata::default());
                 any_processed = true;
+                // ADR-008 D2: arm the quiesce-gated publish so backfilled
+                // solved results flush at the next settle point (the live
+                // loop's on_send), carrying real metadata.
+                *publish_pending = true;
             }
             *last_processed_block = block;
         }
@@ -1044,23 +1143,17 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_carries_just_finished_blocks_metadata() {
-        // Contract (VTWCIG): when the header for block N+1 arrives, the result
-        // batch that finalizes block N must carry block N's metadata (held
-        // before the incoming header overwrites `current_metadata`), NOT N+1's.
-        // Python computes `base_fee_next` from this metadata; the previous
-        // ordering sent N+1's metadata with N's batch → systematically
-        // under-/over-priced backrun txs.
+        // Contract (VTWCIG, ADR-008): block N is finalized when the FIRST
+        // `removed: false` LOG for N+1 arrives (the tombstone — NOT a header).
+        // The result batch that finalizes N must carry N's OWN metadata, even
+        // though header N+1 (with distinct metadata) arrived earlier and
+        // overwrote `current_metadata`. Python computes `base_fee_next` from
+        // this metadata; carrying N+1's would systematically mis-price backruns.
         //
-        // Stream: header N (distinct metadata), header N+1 (distinct
-        // metadata), then end. Finalizing N on the N+1 header must pass N's
-        // metadata to `finalize_block(N, &N_metadata, …)`.
+        // Stream: header 101, header 102 (overwrites current_metadata to
+        // meta_102), then a forward log for block 102 (tombstones 101). The
+        // finalize(101) must carry meta_101, NOT meta_102.
         let (mut pump, sink) = pump_for_test(Some(100));
-        // The loop seeds `current_block` from `last_processed_block()` → 100.
-        // Feed header 101 (its arrival finalizes 100) and header 102 (its
-        // arrival finalizes 101). We must NOT skip the first header
-        // (`first_header` anchor logic just sets the cursor — it doesn't
-        // finalize). So: emit 101 → first_header anchor (current_block→101),
-        // then 102 → finalizes 101.
         let meta_101 = BlockMetadata {
             timestamp: 1_700_000_100,
             base_fee_per_gas: Some(1_000_000_001),
@@ -1073,6 +1166,17 @@ mod tests {
             gas_used: 20_000_002,
             gas_limit: 30_000_002,
         };
+        // header(101): first_header anchor → current_block 101.
+        // header(102): new block, current_metadata overwritten to meta_102,
+        //   but NO finalize on header (ADR-008).
+        // log(102, removed=false): tombstones 101 → finalize(101, meta_101).
+        let tombstone_log = make_v2_sync_log(
+            Address::from([0xfcu8; 20]),
+            U256::from(1),
+            U256::from(2),
+            102,
+            false,
+        );
         let events: Vec<WsEvent> = vec![
             WsEvent::BlockHeader {
                 number: 101,
@@ -1088,16 +1192,15 @@ mod tests {
                 gas_used: meta_102.gas_used,
                 gas_limit: meta_102.gas_limit,
             },
+            WsEvent::Log(tombstone_log),
         ];
         let combined = stream::iter(events).boxed();
         pump.run_test_loop(combined, 100).await;
 
-        // The first finalize is for block 101 (finalized when 102's header
-        // arrives). It must carry meta_101, NOT meta_102.
         let finalized = sink.finalized.lock().unwrap().clone();
         assert!(
             !finalized.is_empty(),
-            "header 102 should finalize block 101"
+            "log 102 should tombstone+finalize 101"
         );
         let (block, metadata) = &finalized[0];
         assert_eq!(*block, 101, "first finalize is for block 101");
@@ -1169,16 +1272,15 @@ mod tests {
     /// leans on: passing the REAL subscribe block W (instead of the legacy
     /// hard-coded `0`) means that if the `on_drain(first_block)` anchor were
     /// ever absent, the pump still cold-starts to W — NOT stuck at 0 to be
-    /// jumped out-of-order by the first WS log.
+    /// jumped out-of-order by the first WS log. Under ADR-008 the tombstone is
+    /// a real log for W+1 (not a header).
     #[tokio::test]
     async fn cold_start_anchors_to_first_observed_block() {
         // No prior processed block → `current_block` starts at 0. Pass the
-        // subscribe block W (a "huge" chain-head number) as
-        // `first_observed_block`. The cold-start branch
-        // (`current_block == 0 && first_observed_block > 0`) anchors
-        // `current_block` to W. Then header(W) is the first header (anchor
-        // confirmation, no finalize), and header(W+1) finalizes W in order —
-        // proving we cold-started to W, not 0.
+        // subscribe block W as `first_observed_block`. The cold-start branch
+        // anchors `current_block` to W. header(W) is the first header
+        // (anchor, no finalize); a forward log for W+1 tombstones W →
+        // finalize(W) carrying meta_w. Proves we cold-started to W, not 0.
         let (mut pump, sink) = pump_for_test(None);
         let w = 21_500_000u64; // a "huge" chain-head block number
         let meta_w = BlockMetadata {
@@ -1193,6 +1295,13 @@ mod tests {
             gas_used: 11,
             gas_limit: 12,
         };
+        let tombstone_log = make_v2_sync_log(
+            Address::from([0xfcu8; 20]),
+            U256::from(1),
+            U256::from(2),
+            w + 1,
+            false,
+        );
         let events: Vec<WsEvent> = vec![
             WsEvent::BlockHeader {
                 number: w,
@@ -1208,20 +1317,13 @@ mod tests {
                 gas_used: meta_w1.gas_used,
                 gas_limit: meta_w1.gas_limit,
             },
+            WsEvent::Log(tombstone_log),
         ];
         let combined = stream::iter(events).boxed();
         pump.run_test_loop(combined, w).await;
 
-        // header(W+1) finalizes W. Carrying meta_w (the just-finished
-        // block's metadata, held before W+1's header overwrote it — VTWCIG).
-        // The fact W was finalized proves `current_block` cold-started to W
-        // (not 0): had it stayed at 0, header(W) would have been the first
-        // header advancing 0→W, then header(W+1) would finalize W — looks
-        // similar, BUT the cold-start log line + the absence of a jump from
-        // 0 to W via a stray log is the invariant. We assert the finalized
-        // block is W with meta_w (in-order, anchored).
         let finalized = sink.finalized.lock().unwrap().clone();
-        assert!(!finalized.is_empty(), "header w+1 should finalize block w");
+        assert!(!finalized.is_empty(), "log w+1 should tombstone+finalize w");
         assert_eq!(
             finalized[0].0, w,
             "first finalize is for the anchored block w"
@@ -1279,9 +1381,16 @@ mod tests {
             "on_drain(W) must anchor the cursor (mirrors SolveCoordinator)"
         );
 
-        // Resume stream (post-fix: first_observed = W, not 0). header(W+1) is
-        // the first header → first_header anchor advances W→W+1; header(W+2)
-        // finalizes W+1. In-order W→W+1→W+2, no jump from 0.
+        // Resume stream (post-fix: first_observed = W, not 0). header(W+1)
+        // is the first header → first_header anchor advances W→W+1; then a
+        // forward log for W+2 tombstones W+1 → finalize(W+1, meta_w1).
+        let tombstone_log = make_v2_sync_log(
+            Address::from([0xfcu8; 20]),
+            U256::from(1),
+            U256::from(2),
+            w + 2,
+            false,
+        );
         let events: Vec<WsEvent> = vec![
             WsEvent::BlockHeader {
                 number: w + 1,
@@ -1297,17 +1406,18 @@ mod tests {
                 gas_used: meta_w2.gas_used,
                 gas_limit: meta_w2.gas_limit,
             },
+            WsEvent::Log(tombstone_log),
         ];
         let combined = stream::iter(events).boxed();
         pump.run_test_loop(combined, w).await;
 
-        // header(W+2) finalizes W+1 — carrying meta_w1 (just-finished block's
-        // metadata). This proves the anchor held: we advanced W→W+1→W+2 in
-        // order, never jumping from 0.
+        // log(W+2) tombstones W+1 — carrying meta_w1 (W+1's own metadata,
+        // snapshotted when header W+1 arrived). Proves the anchor held: we
+        // advanced W→W+1→W+2 in order, never jumping from 0.
         let finalized = sink.finalized.lock().unwrap().clone();
         assert!(
             !finalized.is_empty(),
-            "header w+2 should finalize block w+1"
+            "log w+2 should tombstone+finalize w+1"
         );
         assert_eq!(finalized[0].0, w + 1, "first finalize is for block w+1");
         assert_eq!(
@@ -1398,6 +1508,10 @@ mod tests {
             fee_token1: (997, 1000),
             factory: Address::from([0xf0u8; 20]),
             update_block,
+            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+            stable_swap: false,
+            fee_denominator: None,
+            ..Default::default()
         });
         let counting = Arc::new(FakeCountingSubscriber {
             notifies: Mutex::new(0),
@@ -1529,5 +1643,123 @@ mod tests {
         );
         // `run_test_loop` returned (this assert is reached), proving the pump
         // exited its loop instead of looping forever on a fatal reorg.
+    }
+
+    /// ADR-008 D3 pump-level: a contiguous `removed: true` chunk (delivered
+    /// in REVERSE log-index order — nodes may emit reorg events unordered)
+    /// enters + continues the reorg path, restoring the pool per-event via the
+    /// coordinator; the first `removed: false` event after entry closes the
+    /// window, its block becomes the new head, and the pump CONTINUES (no
+    /// shutdown). The forward log at the new head re-applies against the
+    /// restored state.
+    #[tokio::test]
+    async fn reorg_contiguous_chunk_closes_on_first_forward_and_continues() {
+        let pool_addr = Address::from([0x33u8; 20]);
+        // Genesis anchored at block 5: reserves (1000, 2000).
+        let (bot, pool_id, sub) = bot_with_registered_v2(pool_addr, 5);
+        let notify_count = || *sub.notifies.lock().unwrap();
+        let snapshot = || bot.state.read().v2_snapshot(pool_id);
+
+        // Drive 5 -> 7 (forward sync at 7) -> tombstone 7 via a forward sync
+        // at 8 (advance_to_drained(7) follows the tombstone).
+        let (mut pump, _sink, shutdown) = pump_for_test_with_bot(Arc::clone(&bot), Some(5));
+        let s7 = make_v2_sync_log(pool_addr, U256::from(1_500), U256::from(2_500), 7, false);
+        let s8 = make_v2_sync_log(pool_addr, U256::from(1_600), U256::from(2_600), 8, false);
+        let combined = stream::iter(vec![WsEvent::Log(s7), WsEvent::Log(s8)]).boxed();
+        pump.run_test_loop(combined, 5).await;
+        assert_eq!(notify_count(), 2, "two forward syncs applied");
+        assert_eq!(snapshot(), Some((U256::from(1_600), U256::from(2_600), 8)));
+        assert!(!shutdown.load(Ordering::Relaxed));
+
+        // Reorg over blocks 7 and 8: removed logs arrive in REVERSE order
+        // (8 then 7), then the first removed:false at block 9 closes it.
+        let (mut pump, _sink, shutdown) = pump_for_test_with_bot(Arc::clone(&bot), Some(5));
+        let r8 = make_v2_sync_log(pool_addr, U256::from(9), U256::from(9), 8, true);
+        let r7 = make_v2_sync_log(pool_addr, U256::from(9), U256::from(9), 7, true);
+        let s9 = make_v2_sync_log(pool_addr, U256::from(1_700), U256::from(2_700), 9, false);
+        let combined =
+            stream::iter(vec![WsEvent::Log(r8), WsEvent::Log(r7), WsEvent::Log(s9)]).boxed();
+        pump.run_test_loop(combined, 5).await;
+
+        // The reorg unwound 7 and 8 (restore to genesis), then the forward
+        // sync at 9 re-applied -> reserves reflect block 9's values.
+        assert_eq!(snapshot(), Some((U256::from(1_700), U256::from(2_700), 9)));
+        assert!(
+            !shutdown.load(Ordering::Relaxed),
+            "reorg path closed cleanly — pump did NOT shut down"
+        );
+    }
+
+    /// ADR-008 D3 pump-level: a `removed: false` log on a tombstoned block
+    /// (NOT a reorg) means the WS delivered a forward event out-of-order /
+    /// duplicated — unreliable. The pump must shut down rather than silently
+    /// re-apply. Cursor never silently regresses.
+    #[tokio::test]
+    async fn late_forward_log_on_tombstoned_block_shuts_down_pump() {
+        let pool_addr = Address::from([0x44u8; 20]);
+        let (bot, _pool_id, _sub) = bot_with_registered_v2(pool_addr, 5);
+
+        // Single pump session: forward sync(7) opens block 7; forward sync(8)
+        // tombstones 7 (open block becomes 8); THEN a forward (removed:false)
+        // sync at block 7 arrives late — block 7 is tombstoned and the open
+        // block is 8 -> late forward -> unreliable WS -> shutdown.
+        let (mut pump, _sink, shutdown) = pump_for_test_with_bot(Arc::clone(&bot), Some(5));
+        let s7 = make_v2_sync_log(pool_addr, U256::from(1_500), U256::from(2_500), 7, false);
+        let s8 = make_v2_sync_log(pool_addr, U256::from(1_600), U256::from(2_600), 8, false);
+        let late = make_v2_sync_log(pool_addr, U256::from(9_999), U256::from(9_999), 7, false);
+        let combined =
+            stream::iter(vec![WsEvent::Log(s7), WsEvent::Log(s8), WsEvent::Log(late)]).boxed();
+        pump.run_test_loop(combined, 5).await;
+
+        assert!(
+            shutdown.load(Ordering::Relaxed),
+            "late removed:false on a tombstoned block must shut the pump down (ADR-008 D3)"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // ADR-008 D2: `LogsQuiesced` solver-release gate.
+    //
+    // The pump must publish (`on_send`) only when the open block is
+    // quiesced (all dispatched logs fully applied), and coalesce a burst of
+    // same-block logs into ONE publish at the burst tail (not once per log).
+    // Re-arm on straggler is covered at the clock level by
+    // `consume_quiesced_publishes_once_per_cycle_and_re_arms_on_straggler`.
+    // -----------------------------------------------------------------
+
+    /// 3 same-block logs in a tight burst → exactly ONE `on_send`, fired at
+    /// the burst tail (after the 3rd log applies + the stream settles), NOT
+    /// 3× (one per log) and NOT zero. RED against the wall-clock timer: with
+    /// `stream::iter` (no delay between events) the 50ms `DEBOUNCE_MS` timer
+    /// never fires before the stream ends, so `on_send` is never called.
+    #[tokio::test]
+    async fn burst_of_logs_publishes_once_at_tail_via_quiesce_gate() {
+        let (mut pump, sink) = pump_for_test(Some(100));
+        let pool_addr = Address::from([0x55u8; 20]);
+        let mk = |r0, r1| {
+            WsEvent::Log(make_v2_sync_log(
+                pool_addr,
+                U256::from(r0),
+                U256::from(r1),
+                101,
+                false,
+            ))
+        };
+        // 3 same-block sync logs, then stream exhaustion. Under the wall-clock
+        // debounce the 50ms timer never fires before Ok(None) returns → 0
+        // sends. Under the quiesce gate, after the 3rd log applies the settle
+        // probe (timeout(ZERO) on the exhausted stream) flushes on_send once.
+        let combined =
+            stream::iter(vec![mk(1_500, 2_500), mk(1_600, 2_600), mk(1_700, 2_700)]).boxed();
+        pump.run_test_loop(combined, 100).await;
+
+        let sent = sink.sent.lock().unwrap().clone();
+        assert_eq!(
+            sent.len(),
+            1,
+            "a 3-log burst publishes exactly once at the tail via the quiesce \
+             gate (got {} sends)",
+            sent.len()
+        );
     }
 }

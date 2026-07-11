@@ -10,20 +10,27 @@ from hexbytes import HexBytes
 from sqlalchemy import select
 
 from degenbot.builders.request import BuildManagedPoolRequest
+from degenbot.builders.tick_data_fetcher import (
+    FetchedTickData,
+    TickDataTypes,
+    make_tick_data_fetcher_from_async_io,
+)
 from degenbot.builders.v4_builder_base import V4BuilderBase
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import ZERO_ADDRESS as _ZERO_ADDRESS
 from degenbot.database.models.pools import PoolManagerTable, UniswapV4PoolTable
+from degenbot.degenbot_rs import cl_get_tick_word_and_bit_position
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.exceptions.pool import LiquidityPoolError
 from degenbot.logging import logger
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
-from degenbot.uniswap.v3_functions import get_tick_word_and_bit_position
-from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
+from degenbot.uniswap.v4_liquidity_pool import ProtocolFee, UniswapV4Pool
 from degenbot.uniswap.v4_types import UniswapV4PoolExternalUpdate
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from web3.types import BlockIdentifier
 
     from degenbot.builders.async_context import AsyncBuilderContext
@@ -52,6 +59,46 @@ class AsyncV4PoolBuilder:
         self._managed_pools = ctx.managed_pools
         self._erc20_builder = ctx.erc20_builder
         self._py_bot = ctx.py_bot
+
+    def _make_tick_data_fetcher(
+        self,
+        pool_id: HexBytes,
+        pool_manager_address: str,
+        state_view_address: str,
+        chain_id: int,
+        io: AsyncPoolIO,
+    ) -> Callable[[int, int], FetchedTickData | None]:
+        """Create a tick data fetcher for an async-built sparse V4 pool.
+
+        AsyncBot parity counterpart of ``V4PoolBuilder._make_tick_data_fetcher``:
+        wraps the async IO in a daemon-loop sync bridge so the synchronous
+        Rust ``TickWordFetcher`` seam can issue async ``eth_call`` RPCs against
+        the V4 state-view contract to backfill neighbouring tick words on a
+        crossing swap.
+
+        Returns:
+            The fetcher callback.
+
+        """
+        pool_manager_address_ = get_checksum_address(pool_manager_address)
+        return make_tick_data_fetcher_from_async_io(
+            pool_lookup=lambda _: cast(
+                "UniswapV4Pool | None",
+                self._managed_pools.get(
+                    chain_id=chain_id,
+                    pool_manager_address=pool_manager_address_,
+                    pool_id=pool_id,
+                ),
+            ),
+            async_io=io,
+            types=TickDataTypes(
+                bitmap_at_word=BitmapAtWord,
+                liquidity_at_tick=LiquidityAtTick,
+                tick_struct_types=("uint128", "int128"),
+            ),
+            state_view_address=state_view_address,
+            pool_id=bytes(pool_id),
+        )
 
     async def build(
         self,
@@ -223,7 +270,7 @@ class AsyncV4PoolBuilder:
                         )
 
             if not db_snapshot_loaded:
-                word, _ = get_tick_word_and_bit_position(
+                word, _ = cl_get_tick_word_and_bit_position(
                     tick=int(slot0_data.tick),
                     tick_spacing=tick_spacing_for_pool,
                 )
@@ -338,6 +385,13 @@ class AsyncV4PoolBuilder:
             block=state_block,
             tick_data=register_rows,
             coverage=coverage,
+            tick_data_fetcher=self._make_tick_data_fetcher(
+                pool_id_bytes,
+                pool_manager_address,
+                state_view_address,
+                chain_id,
+                io=io,
+            ),
         )
         py_pool_handle = self._py_bot.get_pool(pool_handle_pool_id)
         assert py_pool_handle is not None, "register_v4_pool returned a pool_id with no handle"
@@ -346,25 +400,17 @@ class AsyncV4PoolBuilder:
         # call — that would `state.tick_data = …` REPLACE and clobber any live
         # pump ModifyLiquidity that landed in the (now closed) register→seed
         # window. Mirrors the V3 builder (no post-register seed).
-        pool = UniswapV4Pool(
-            py_pool_handle,
-            pool_id=pool_id_bytes,
-            pool_manager_address=pool_manager_address,
-            token0=token0,
-            token1=token1,
-            fee=fee_for_pool,
-            tick_spacing=tick_spacing_for_pool,
-            hook_address=hook_address,
-            state_view_address=state_view_address,
-            chain_id=chain_id,
-            protocol_fee_zero_for_one=slot0_data.protocol_fee_zero_to_one,
-            protocol_fee_one_for_zero=slot0_data.protocol_fee_one_to_zero,
-            lp_fee=slot0_data.lp_fee,
-            tick_bitmap=working_tick_bitmap if tick_map_is_tracked else None,
-            state_block=state_block,
-            tick_data_fetcher=None,
-            sparse_liquidity_map=not tick_map_is_tracked,
+        pool = UniswapV4Pool._from_py_pool(py_pool_handle)  # noqa: SLF001
+        # Builder-supplied values the seam defaults; override from RPC.
+        pool._state_view_address = (  # noqa: SLF001
+            get_checksum_address(state_view_address) if state_view_address else _ZERO_ADDRESS
         )
+        pool.protocol_fee = ProtocolFee(
+            zero_for_one=slot0_data.protocol_fee_zero_to_one,
+            one_for_zero=slot0_data.protocol_fee_one_to_zero,
+        )
+        pool.lp_fee = slot0_data.lp_fee
+        pool._sparse_liquidity_map = not tick_map_is_tracked  # noqa: SLF001
 
         # Register pool in managed pool registry
         self._managed_pools.add(
@@ -405,7 +451,6 @@ class AsyncV4PoolBuilder:
             msg = f"AsyncV4PoolBuilder cannot update {type(pool).__name__}"
             raise TypeError(msg)
 
-        assert pool.chain_id is not None
         assert io is not None
 
         raw_block = block_number if block_number is not None else await io.get_block_number()

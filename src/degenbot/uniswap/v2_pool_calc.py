@@ -53,7 +53,7 @@ class UniswapV2PoolCalc:
     reserves_token1: int
     state: UniswapV2PoolState
     tokens: tuple[Erc20Token, Erc20Token]
-    # PyLiquidityPool handle (set by the concrete LiquidityPool companion
+    # PyLiquidityPool handle (set by the concrete UniswapV2Pool companion
     # in MRO — ADR-005 slice 4). Calc delegation (slice 5) routes the
     # constant-product math through it on the non-override path.
     _py_pool: PyLiquidityPool
@@ -61,40 +61,6 @@ class UniswapV2PoolCalc:
     # These can be overridden by subclasses (e.g., PancakeSwap uses different fee)
     FEE: Fraction = Fraction(3, 1000)
     RESERVES_STRUCT_TYPES: tuple[str, ...] = ("uint112", "uint112")
-
-    def calculate_tokens_in_from_ratio_out(
-        self,
-        token_in: Erc20Token,
-        ratio_absolute: Fraction,
-    ) -> int:
-        """Calculate the maximum token input for the target output ratio after fees.
-
-        Returns:
-            The maximum input token amount.
-
-        Raises:
-            DegenbotValueError: If token_in is not held by this pool.
-
-        """
-        if token_in not in self.tokens:  # pragma: no cover
-            raise DegenbotValueError(message=f"Token in {token_in} not held by this pool.")
-
-        if token_in == self._token0:
-            return max(
-                0,
-                int(
-                    self.reserves_token1 / ratio_absolute
-                    - self.reserves_token0 / (1 - self._fee_token0),
-                ),
-            )
-
-        return max(
-            0,
-            int(
-                self.reserves_token0 / ratio_absolute
-                - self.reserves_token1 / (1 - self._fee_token1),
-            ),
-        )
 
     def calculate_tokens_in_from_tokens_out(
         self,

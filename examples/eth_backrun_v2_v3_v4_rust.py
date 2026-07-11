@@ -38,40 +38,42 @@ import json
 import operator
 import os
 import pathlib
+import signal
 import time
 import traceback
 from collections import deque
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import dotenv
 import eth_abi.abi
 import eth_account
 import web3
-from cmd_stream import compute_simulation_warmup_slots, mapping_slot, pack_expected_balance
+from degenbot import degenbot_rs
 from eth_backrun_helpers import (
     BackrunConfig,
     classify_revert,
-    encode_cmd_stream,
+    filter_thin_margin_results,
     format_failure_breakdown,
     format_sim_diag_line,
-    v4_input_is_native,
 )
 from eth_typing import ChainId, ChecksumAddress
 from hexbytes import HexBytes
-from web3 import AsyncWeb3, Web3
+from web3 import Web3
 from web3.exceptions import TransactionNotFound, Web3Exception
-from web3.types import BlockStateCallV1, SimulateV1Payload, StateOverrideParams, TxParams
-
-from degenbot import Bot, LiquidityPool, UniswapV3Pool, get_checksum_address
-from degenbot.arbitrage import (
-    EngineRegistry,
-    HopInfo,
-    V2HopInfo,
-    V3HopInfo,
-    V4HopInfo,
+from web3.types import (
+    HexStr,
+    Nonce,
+    StateOverride,
+    TxParams,
+    Wei,
 )
+
+from degenbot import Bot, UniswapV2Pool, UniswapV3Pool, get_checksum_address
 from degenbot.arbitrage.encoding import fits_int128
+from degenbot.arbitrage.engine_registry import EngineRegistry
+from degenbot.arbitrage.hop_info import HopInfo, V2HopInfo, V3HopInfo, V4HopInfo
 from degenbot.arbitrage.verification_retry import (
     VerificationRetryPolicy,
     retry_verification_call,
@@ -87,13 +89,20 @@ from degenbot.database.models.pools import (
     UniswapV4PoolTableBase,
 )
 from degenbot.degenbot_rs import (
+    AsyncAlloyProvider,
     DynamicFeePoolRejectedError,
     HookedPoolRejectedError,
+    PyDispatcher,
+    PySubmitCandidate,
+    PyTxSigner,
     VerificationMismatchError,
     VerificationRpcError,
+    dispatch_and_submit_py,
+    fetch_fee_history_py,
 )
 from degenbot.logging import logger as bot_logger
 from degenbot.pathfinding import find_paths_async
+from degenbot.provider.async_adapter import AsyncProviderAdapter
 from degenbot.provider.sync_adapter import ProviderAdapter
 from degenbot.uniswap.deployments import EthereumMainnetUniswapV4
 from degenbot.uniswap.trackers import UniswapV3PoolTracker
@@ -132,6 +141,11 @@ ETH_MAINNET_ALLOWED_TOKENS: set[str] = {
 }
 
 MIN_PROFIT_NET = 1  # was 5 * 10**9 (5 gwei)
+# T3 (GTOD23-IKJRGO): pre-sim profit-margin floor in bps of optimal_input.
+# S1 found the dominant IIA reverts are sub-0.2-bps-margin arb the chain has
+# already arbitraged away. 50 bps (0.5%) drops the bulk without losing genuine
+# arbs. 0 disables. Env-configurable for tuning without code changes.
+MIN_PROFIT_MARGIN_BPS = int(os.environ.get("DEGENBOT_MIN_PROFIT_MARGIN_BPS", "50"))
 FEE_HISTORY_WINDOW = 10
 FEE_PERCENTILES = (10, 50)
 TARGET_PROFIT_RATIO = 1.25
@@ -406,7 +420,7 @@ def build_simulation_state_overrides(
     executor_owner: str,
     inject_code: bool = False,
     injected_address: str | None = None,
-) -> dict[ChecksumAddress, StateOverrideParams]:
+) -> StateOverride:
     """Build the stateOverrides dict for eth_simulateV1.
 
     All fields (code, balance, nonce, state, stateDiff) go under
@@ -429,24 +443,24 @@ def build_simulation_state_overrides(
     When inject_code=False:
       - Only funds the executor owner with ETH for gas
     """
-    overrides: dict[ChecksumAddress, StateOverrideParams] = {}
+    overrides: dict[str, dict[str, Any]] = {}
 
     # Fund executor owner with ETH for gas
-    overrides[get_checksum_address(executor_owner)] = StateOverrideParams(balance=100 * 10**18)
+    overrides[get_checksum_address(executor_owner)] = {"balance": cast("Wei", 100 * 10**18)}
 
     if inject_code and injected_address:
         # Inject executor runtime bytecode at the fresh address.
         # CBOR metadata must remain intact — see IMPORTANT note in the
         # docstring and contracts/recompile.py.
         runtime_code = _load_executor_runtime_bytecode()
-        overrides[get_checksum_address(injected_address)] = StateOverrideParams(
-            code=runtime_code,
+        overrides[get_checksum_address(injected_address)] = {
+            "code": cast("HexStr", runtime_code),
             # Fund the injected executor with ETH for V4 settlement and
             # V3 callback WETH payments (the deployed contract wraps 10 ETH
             # at construction; code injection skips this, so we must set
             # the balance explicitly).
-            balance=10 * 10**18,
-        )
+            "balance": cast("Wei", 10 * 10**18),
+        }
 
         # Pre-warm ERC6909 and WETH storage slots to avoid cold SSTORE
         # penalties. compute_simulation_warmup_slots() returns stateDiff
@@ -454,7 +468,7 @@ def build_simulation_state_overrides(
         #   1. WETH9.balanceOf[executor] = 1 wei (mapping slot 3)
         #   2. PM.erc6909_balanceOf[executor][weth_id] = 1 (slot 4)
         #   3. PM.erc6909_balanceOf[executor][native_id] = 1 (slot 4)
-        warmup = compute_simulation_warmup_slots(
+        warmup = degenbot_rs.compute_simulation_warmup_slots(
             executor_address=injected_address,
             weth_address=WETH_ADDRESS,
             pool_manager_address=UNISWAP_V4_POOL_MANAGER_ADDRESS,
@@ -486,183 +500,14 @@ def build_simulation_state_overrides(
         # We overwrite the warmup's 1-wei entry with 10 ETH.
 
         WETH_BALANCEOF_MAPPING_SLOT = 3
-        weth_balance_slot = mapping_slot(WETH_BALANCEOF_MAPPING_SLOT, int(injected_address, 16))
-        overrides[Web3.to_checksum_address(WETH_ADDRESS)]["stateDiff"][
+        weth_balance_slot = degenbot_rs.mapping_slot(
+            WETH_BALANCEOF_MAPPING_SLOT, int(injected_address, 16)
+        )
+        overrides[get_checksum_address(WETH_ADDRESS)]["stateDiff"][
             f"0x{weth_balance_slot:064x}"
-        ] = "0x" + (10 * 10**18).to_bytes(32, "big").hex()
+        ] = cast("HexStr", "0x" + (10 * 10**18).to_bytes(32, "big").hex())
 
-    return overrides
-
-
-class PathSuppression:
-    """Track per-path simulation failures and suppress consistently failing paths.
-
-    After a path fails simulation PATH_SUPPRESS_THRESHOLD consecutive times,
-    it is suppressed — excluded from the simulation candidate list. Suppressed
-    paths are retried every PATH_SUPPRESS_RETRY_INTERVAL blocks. If a retry
-    succeeds, the path is permanently un-suppressed.
-    """
-
-    def __init__(self) -> None:
-        # path_id → consecutive failure count
-        self._fail_counts: dict[int, int] = {}
-        # path_id → block number when the path was last retried
-        self._last_retry_block: dict[int, int] = {}
-        # path_id → True if currently suppressed
-        self._suppressed: set[int] = set()
-        # Total paths suppressed (for logging)
-        self._total_suppressed: int = 0
-
-    def record_success(self, path_id: int) -> None:
-        """A path succeeded at simulation — reset its failure counter."""
-        self._fail_counts.pop(path_id, None)
-        if path_id in self._suppressed:
-            self._suppressed.discard(path_id)
-            bot_logger.debug(f"[suppress] path={path_id} un-suppressed after successful sim")
-
-    def record_failure(self, path_id: int) -> None:
-        """A path failed simulation — increment its counter, maybe suppress."""
-        count = self._fail_counts.get(path_id, 0) + 1
-        self._fail_counts[path_id] = count
-
-        if count >= PATH_SUPPRESS_THRESHOLD and path_id not in self._suppressed:
-            self._suppressed.add(path_id)
-            self._total_suppressed += 1
-            bot_logger.info(
-                f"[suppress] path={path_id} SUPPRESSED after {count} consecutive failures "
-                f"(total suppressed: {self._total_suppressed})",
-            )
-
-    def is_suppressed(self, path_id: int, current_block: int) -> bool:
-        """Check if a path is currently suppressed (with retry logic).
-
-        Returns True if the path should be skipped. Returns False if
-        the path is due for a retry — the caller should simulate it.
-        """
-        if path_id not in self._suppressed:
-            return False
-
-        # Check if it's time for a retry
-        last_retry = self._last_retry_block.get(path_id, 0)
-        if current_block - last_retry >= PATH_SUPPRESS_RETRY_INTERVAL:
-            # Allow this attempt — mark the retry block
-            self._last_retry_block[path_id] = current_block
-            bot_logger.debug(f"[suppress] path={path_id} retrying at block {current_block}")
-            return False
-
-        return True
-
-    @property
-    def total_suppressed(self) -> int:
-        return self._total_suppressed
-
-    def discard(self, path_id: int) -> None:
-        """Permanently discard suppression tracking for a de-registered path."""
-        self._fail_counts.pop(path_id, None)
-        self._suppressed.discard(path_id)
-        self._last_retry_block.pop(path_id, None)
-
-
-@dataclasses.dataclass
-class Dispatcher:
-    """Coordination state for the dispatch loop.
-
-    Bundles the seven mutable containers `main()` previously declared as
-    exploded locals and threaded through `consume_result_batches`,
-    `dispatch_profitable_results`, and `monitor_pending_transaction`. The
-    containers are mutable and mutated in place by the methods; the
-    dataclass binding itself is never rebound. `PathSuppression` is composed
-    (and delegated) so all dispatch coordination lives behind one object.
-    """
-
-    pending_nonces: set[int] = dataclasses.field(default_factory=set)
-    pending_pools: set[int] = dataclasses.field(default_factory=set)
-    active_tasks: set[asyncio.Task] = dataclasses.field(default_factory=set)
-    current_block_ref: list[int] = dataclasses.field(default_factory=lambda: [0])
-    block_times: deque[tuple[int, int]] = dataclasses.field(
-        default_factory=lambda: deque(maxlen=60),
-    )
-    block_priority_fees: dict[int, dict[int, int]] = dataclasses.field(default_factory=dict)
-    path_suppression: PathSuppression = dataclasses.field(default_factory=PathSuppression)
-
-    def __post_init__(self) -> None:
-        # `current_block_ref` is a single-element mutable list so monitor tasks
-        # can read the current block by reference across the consumer/monitor
-        # boundary without a lock.
-        if len(self.current_block_ref) == 0:
-            self.current_block_ref.append(0)
-
-    @classmethod
-    def for_block(cls, current_block: int) -> "Dispatcher":
-        """Construct a fresh Dispatcher seeded at `current_block`."""
-        return cls(current_block_ref=[current_block])
-
-    # ── nonce coordination ────────────────────────────────────────
-    def claim_nonce(self, start: int) -> int:
-        """Return the first int >= `start` not already pending, and reserve it."""
-        nonce = next(n for n in itertools.count(start) if n not in self.pending_nonces)
-        self.pending_nonces.add(nonce)
-        return nonce
-
-    def release_nonce(self, nonce: int) -> None:
-        """Release a nonce back to the free pool (tx confirmed or voided)."""
-        self.pending_nonces.discard(nonce)
-
-    # ── pool mutual exclusion ────────────────────────────────────
-    def reserve_pools(self, path_pools: set[int]) -> None:
-        """Mark Rust pool keys as locked by an in-flight tx."""
-        self.pending_pools.update(path_pools)
-
-    def release_pools(self, pools: set[int]) -> None:
-        """Release Rust pool keys when a tx confirms or expires."""
-        self.pending_pools.difference_update(pools)
-
-    def is_path_blocked(self, path_pools: set[int], committed_pools: set[int]) -> bool:
-        """True iff any path pool is already locked (pending) or committed this batch."""
-        return bool(path_pools & (self.pending_pools | committed_pools))
-
-    def release_tx(self, tx: "SubmittedTx") -> None:
-        """Release both the nonce and pools held by a completed/expired tx."""
-        self.release_nonce(tx.nonce)
-        self.release_pools(set(tx.pools))
-
-    # ── task tracking ─────────────────────────────────────────────
-    def track_task(self, task: asyncio.Task) -> None:
-        """Register an in-flight task; auto-discard on completion."""
-        self.active_tasks.add(task)
-        task.add_done_callback(self.active_tasks.discard)
-
-    # ── block / fee recording ─────────────────────────────────────
-    @property
-    def current_block(self) -> int:
-        return self.current_block_ref[0]
-
-    def advance_block(self, block: int) -> None:
-        """Update the current block (read by monitor tasks by reference)."""
-        self.current_block_ref[0] = block
-
-    def record_block_time(self, block: int, timestamp: int) -> None:
-        self.block_times.append((block, timestamp))
-
-    def record_priority_fees(self, block: int, fees: dict[int, int]) -> None:
-        """Record per-block percentile fees, pruning to FEE_HISTORY_WINDOW."""
-        self.block_priority_fees[block] = fees
-        if len(self.block_priority_fees) > FEE_HISTORY_WINDOW:
-            self.block_priority_fees.pop(min(self.block_priority_fees))
-
-    def latest_priority_fees(self) -> dict[int, int]:
-        """Return the most-recently recorded per-block percentile fees."""
-        return self.block_priority_fees[max(self.block_priority_fees)]
-
-    # ── PathSuppression delegation ────────────────────────────────
-    def record_success(self, path_id: int) -> None:
-        self.path_suppression.record_success(path_id)
-
-    def record_failure(self, path_id: int) -> None:
-        self.path_suppression.record_failure(path_id)
-
-    def is_suppressed(self, path_id: int, current_block: int) -> bool:
-        return self.path_suppression.is_suppressed(path_id, current_block)
+    return cast("StateOverride", overrides)
 
 
 def _hop_display_addr(hop: HopInfo) -> str:
@@ -674,7 +519,7 @@ def _hop_display_addr(hop: HopInfo) -> str:
     return hop.pool_id_hex
 
 
-def _hop_token_summary(hops: tuple[HopInfo, ...]) -> str:
+def _hop_token_summary(hops: list[HopInfo] | tuple[HopInfo, ...]) -> str:
     """One-line summary of hop input→output tokens for sim-fail diagnostics."""
     parts: list[str] = []
     for h in hops:
@@ -690,7 +535,11 @@ def _make_backrun_config(node_http: str) -> DegenbotConfig:
     """Build a single-chain DegenbotConfig for the backrun session (ADR-006 D5).
 
     The chain identity is Ethereum mainnet (1); the RPC is the caller's
-    ``node_http`` (an env-derived endpoint, not the config.toml ``rpc`` entry).
+    ``node_http`` — the cascade-resolved endpoint from
+    :func:`degenbot.config.resolve_rpc_uris` (CLI > OS env
+    ``DEGENBOT_RPC_HTTP_CHAINID_1`` > legacy ``NODE_HOST_*`` > config.toml
+    ``rpc[1]``). When config.toml was the winning source, ``node_http`` already
+    equals ``rpc[1]``, so the injection here is consistent rather than a bypass.
     The Bot enforces the connected RPC's ``eth_chainId`` matches at construction.
 
     The database path is read from the existing user config at
@@ -705,13 +554,13 @@ def _make_backrun_config(node_http: str) -> DegenbotConfig:
         # the database path (and any other settings) from the config file.
         return DegenbotConfig(
             database=base.database,
-            rpc={1: node_http},
+            rpc={1: cast("Any", node_http)},
             default_chain_id=1,
         )
 
     return DegenbotConfig(
         database=DatabaseSettings(path=Path("~/.config/degenbot/degenbot.db").expanduser()),
-        rpc={1: node_http},
+        rpc={1: cast("Any", node_http)},
         default_chain_id=1,
     )
 
@@ -722,7 +571,7 @@ def _make_backrun_config(node_http: str) -> DegenbotConfig:
 
 
 def resolve_directions(
-    pools: list[LiquidityPool | UniswapV3Pool | UniswapV4Pool],
+    pools: list[UniswapV2Pool | UniswapV3Pool | UniswapV4Pool],
     input_token_address: str,
 ) -> list[bool] | None:
     """Determine zero_for_one for each hop so the cycle closes.
@@ -805,10 +654,11 @@ class BackrunSession:
         *,
         bot: Bot | None = None,
         engine_registry: EngineRegistry | None = None,
-        async_w3: AsyncWeb3 | None = None,
+        async_w3: AsyncProviderAdapter | None = None,
         snapshots: tuple[Any, Any, Any, Any] | None = None,
         path_builder: Any = None,
         consumer: Any = None,
+        install_sigint: bool = True,
     ) -> None:
         self.cfg = cfg
         self._injected_bot = bot
@@ -820,14 +670,25 @@ class BackrunSession:
         # Resolved in start():
         self.bot: Bot | None = None
         self.engine_registry: EngineRegistry | None = None
-        self.async_w3: AsyncWeb3 | None = None
-        self.dispatcher: Dispatcher | None = None
+        self.async_w3: AsyncProviderAdapter | None = None
+        self.dispatcher: PyDispatcher | None = None
         self.v3_snapshot: Any = None
         self.v4_snapshot: Any = None
         self.current_block: int = 0
         self._started = False
         # Created in run():
         self._result_consumer_task: asyncio.Task | None = None
+        # SIGINT handler installed by `start()`, restored by `__aexit__`.
+        # Stores the previous handler so teardown restores it (the default
+        # SIGINT → KeyboardInterrupt machinery) rather than leaving a
+        # process-wide handler bound after the session ends.
+        self._previous_sigint_handler: object = signal.SIG_DFL
+        self._sigint_installed = False
+        # Production (main()) installs the SIGINT→engine.stop() handler so a
+        # Ctrl-C during the synchronous find_paths section stops the pump
+        # immediately. Tests pass install_sigint=False to avoid binding a
+        # process-global handler (signal.signal pollutes across tests).
+        self._install_sigint = install_sigint
 
     # ── Phase A: pre-resume startup ─────────────────────────────────
     async def start(self) -> "BackrunSession":
@@ -846,17 +707,17 @@ class BackrunSession:
 
         # ── Build the three actors (injected or from cfg) ──
         self.bot = self._injected_bot or self._build_bot(cfg)
-        self.async_w3 = self._injected_async_w3 or self._build_async_w3(cfg)
+        self.async_w3 = self._injected_async_w3 or await self._build_async_w3(cfg)
         self.engine_registry = self._injected_engine_registry or EngineRegistry(bot=self.bot)
 
         # ── Fetch current block (for the dispatcher + backfill comparison) ──
         # Note: main()'s start-phase base_fee_next/operator_nonce fetches were
         # dead state (recomputed per-batch inside consume_result_batches) — dropped.
-        latest_block = await self.async_w3.eth.get_block("latest")
+        latest_block = await self.async_w3.get_block("latest")
         self.current_block = latest_block["number"]
 
         # ── Coordination state ──
-        self.dispatcher = Dispatcher.for_block(self.current_block)
+        self.dispatcher = PyDispatcher.for_block(self.current_block)
 
         # ── Snapshots (injected or from the DB via get_snapshots) ──
         if self._injected_snapshots is not None:
@@ -882,6 +743,7 @@ class BackrunSession:
             self.current_block = backfill_target
             self.dispatcher.advance_block(backfill_target)
 
+        self._install_sigint_handler()
         return self
 
     # ── Phase B: the rolling-start main loop ──────────────────────────
@@ -904,7 +766,18 @@ class BackrunSession:
         cfg = self.cfg
         consumer = self._consumer or consume_result_batches
 
-        # 1. Attach the consumer BEFORE resume (consumer-safety invariant).
+        # 1. Acquire the once-only block_stream EXACTLY ONCE and fan it to two
+        # branches: the result consumer (full block dicts) + the recurring-
+        # verify ticker (block numbers). The pump's `engine.block_stream()`
+        # moves the mpsc receiver out of a Mutex on each call — a second call
+        # raises RuntimeError("block_stream() can only be called once"), which
+        # previously crashed entering the main loop (the consumer self-acquired
+        # one, run() acquired another for recurring-verify). See
+        # `_tee_block_stream` for the full rationale + regression.
+        _block_stream = self.engine_registry.engine.block_stream()
+        _consumer_branch, _verify_branch, _tee_driver = _tee_block_stream(_block_stream)
+
+        # Attach the consumer BEFORE resume (consumer-safety invariant).
         self._result_consumer_task = asyncio.create_task(
             consumer(
                 engine_registry=self.engine_registry,
@@ -914,6 +787,7 @@ class BackrunSession:
                 operator_private_key=cfg.operator_private_key,
                 dispatcher=self.dispatcher,
                 dry_run=cfg.dry_run,
+                block_stream=_consumer_branch,
             ),
             name="result-consumer",
         )
@@ -931,16 +805,20 @@ class BackrunSession:
             retry_policy=cfg.verification_retry_policy,
         )
 
-        # 3b. Verify liquidity maps against on-chain before the hot loop.
-        # Emits [verify] V3 + V4 liquidity maps OK — the line the permutation
-        # analyzer keys on for `verify_basis` ("verified"). With the
-        # shared-BotState design the register-gated verify never fires, so this
-        # batch check is the one that actually runs. ``block_number=None`` (the
-        # default) resolves to the engine's ``last_processed_block()`` — engine-
-        # state@N vs chain@N is deterministic; a pass transitively confirms the
-        # snapshot seed (see EngineRegistry.verify_liquidity_maps). Fail-fast
-        # on mismatch.
-        await self.engine_registry.verify_liquidity_maps()
+        # 3b. STARTUP batch verify REMOVED — redundant with the per-pool two-step
+        # verify and racy at the moving head. Step-1 (seed @ snapshot block) runs
+        # inside build_paths for each Tracked pool and proves the snapshot was
+        # good; step-2 (post-drain @ backfill block) proves the drain/pump
+        # applied buffered events correctly. Re-verifying the whole batch at
+        # `last_processed_block()` (the live head) re-checked what step-1/step-2
+        # just verified AND raced the pump's WS log-application lag: a block's
+        # header can advance `last_processed_block()` past it before its Mint
+        # log is dispatched (V2-V2-V3 crash — Mint at 25397047 unapplied when
+        # 25397049's header advanced the cursor, false-mismatching tick
+        # -887270). The per-pool gates are race-free (frozen-block pin); the
+        # T7 recurring-verify carries in-loop drift detection. The analyzer
+        # now keys `verify_basis` on the per-pool `[verify-seed]`/`[verify-drain]`
+        # lines (see permutation_analyzer._VERIFY_OK_RE).
 
         # 4. Trim redundant Python state — Rust engine owns canonical pool state.
         self.bot.release_python_state()
@@ -964,21 +842,23 @@ class BackrunSession:
         # re-checks liquidity maps so post-release / in-loop desyncs surface
         # instead of trading silently. Both complete together.
         assert self._result_consumer_task is not None
-        block_stream = self.engine_registry.engine.block_stream()
         recurring_verify = asyncio.ensure_future(
             run_recurring_verify_until_done(
                 registry=self.engine_registry,
-                block_ticker=(b["number"] async for b in block_stream),
+                block_ticker=(b["number"] async for b in _verify_branch),
                 interval=RECURRING_VERIFY_INTERVAL,
                 retry_policy=cfg.verification_retry_policy,
-            )
+            ),
         )
         try:
             await self._result_consumer_task
         finally:
             recurring_verify.cancel()
+            _tee_driver.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await recurring_verify
+            with contextlib.suppress(asyncio.CancelledError):
+                await _tee_driver
 
     # ── Actor builders (production path — only used when not injected) ──
     @staticmethod
@@ -989,40 +869,160 @@ class BackrunSession:
         return Bot(config_obj, provider=ProviderAdapter.from_web3(sync_w3))
 
     @staticmethod
-    def _build_async_w3(cfg: BackrunConfig) -> AsyncWeb3:
-        w3 = AsyncWeb3(web3.AsyncHTTPProvider(cfg.node_http))
-        w3.middleware_onion.clear()
-        return w3
+    async def _build_async_w3(cfg: BackrunConfig) -> AsyncProviderAdapter:
+        """Build the dispatch-path RPC provider (PAGQCK).
+
+        Returns an ``AsyncProviderAdapter`` wrapping a Rust
+        ``AsyncAlloyProvider`` — every dispatch-side ``eth_*`` call the hot
+        loop makes goes through Rust (releasing the GIL), not raw
+        ``AsyncWeb3(AsyncHTTPProvider(...))``. The four typed calls
+        (``eth_simulateV1`` / ``eth_feeHistory`` / ``eth_createAccessList`` /
+        ``eth_sendRawTransaction``) route via ``make_request`` on the alloy
+        backend; the generic ones (``get_block`` / ``get_transaction_count`` /
+        ``eth_call`` / ``get_code`` / ``get_transaction_receipt``) route via
+        the adapter's typed methods.
+
+        Returns:
+            An ``AsyncProviderAdapter`` (alloy backend) for the dispatch path.
+
+        """
+        alloy = await AsyncAlloyProvider.create(cfg.node_http)
+        return AsyncProviderAdapter.from_alloy(async_alloy=alloy)
 
     # ── Async context manager ────────────────────────────────────────
     async def __aenter__(self) -> "BackrunSession":
         await self.start()
         return self
 
+    def _install_sigint_handler(self) -> None:
+        """Bind a SIGINT handler that stops the Rust pump *immediately*.
+
+        The ``__aexit__`` → ``shutdown()`` → ``engine.stop()`` path only fires
+        once the awaited coroutine unwinds — and during ``build_paths`` the
+        main thread is blocked inside the synchronous ``find_paths`` graph
+        prep / the Rust ``find_paths_rust`` DFS. Python's default SIGINT →
+        raise ``KeyboardInterrupt`` mechanism is *deferred* until that section
+        yields control to the eval loop, so the first Ctrl-C appeared to be
+        swallowed: the pump (on the shared tokio runtime, a separate thread)
+        kept running, the operator pressed Ctrl-C again, and only when
+        ``find_paths`` finally returned did the deferred exception unwind to
+        ``__aexit__`` and stop the pump.
+
+        Installing this handler closes the gap: the moment SIGINT arrives,
+        ``engine.stop()`` runs (it just sets the shutdown flag + aborts the
+        pump task — cheap, GIL-only, idempotent) regardless of what the main
+        thread is doing. The Rust ``find_paths_rust`` DFS releases the GIL via
+        ``py.detach()``, so the handler *can* run even mid-DFS. We then
+        re-raise so the normal ``KeyboardInterrupt`` unwind proceeds to
+        ``__aexit__`` (which runs ``shutdown()`` again — a no-op — for the
+        consumer cancellation).
+
+        Idempotent: if already installed (or if ``signal`` can't bind — e.g. a
+        non-main thread), it's a no-op so the call site in ``start()`` is safe
+        to re-enter.
+        """
+        if self._sigint_installed or not self._install_sigint:
+            return
+        engine = self.engine_registry.engine if self.engine_registry is not None else None
+        if engine is None:
+            return
+        try:
+            self._previous_sigint_handler = signal.getsignal(signal.SIGINT)
+        except ValueError:
+            # `signal.signal` only works on the main thread; if start() is
+            # ever driven off-thread there is nothing to bind — rely on
+            # __aexit__'s shutdown() alone.
+            return
+
+        def _on_sigint(_signum: int, _frame: object) -> None:
+            # Stop the pump first — fires even while the main thread is
+            # blocked in find_paths (Rust DFS released the GIL). Wrapped
+            # because the engine may have been torn down concurrently.
+            try:
+                engine.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            # Re-raise KeyboardInterrupt so the awaiting coroutine unwinds
+            # through __aexit__ → shutdown() (idempotent) + consumer cancel.
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGINT, _on_sigint)
+        self._sigint_installed = True
+
+    def _restore_sigint_handler(self) -> None:
+        if not self._sigint_installed:
+            return
+        try:
+            signal.signal(signal.SIGINT, cast("Any", self._previous_sigint_handler))
+        except (ValueError, TypeError):
+            pass
+        self._sigint_installed = False
+
     async def __aexit__(self, *exc: object) -> None:
         """Best-effort cleanup; never suppresses.
 
-        If ``run()`` raised before awaiting the consumer task, cancel it so the
-        hanging background task doesn't outlive the session. The bot is already
-        released (or never built) — nothing to close there.
+        Signals the Rust pump to stop, then cancels the consumer task so no
+        hanging background task outlives the session. ``shutdown()`` is
+        best-effort: it swallows any error from the Rust ``stop()`` so a
+        torn-down engine during a partial startup can't mask the original
+        exception (the one this ``__aexit__`` is unwinding).
+
+        Ordering rationale: the pump must be stopped BEFORE the consumer task
+        is cancelled. The consumer awaits ``engine.__anext__()`` which blocks
+        on the pump's result channel; cancelling the consumer first leaves the
+        pump's WS task running on the shared tokio runtime, blocking process
+        exit until the WS subscription closes itself (up to 60s on a silent
+        stream). Stopping the pump first closes the channels → the consumer's
+        next ``__anext__`` raises ``StopAsyncIteration`` → the consumer task
+        ends cleanly, and the ``await task`` below returns without needing the
+        ``CancelledError`` path in the common case.
         """
+        await self.shutdown()
+        self._restore_sigint_handler()
         task = self._result_consumer_task
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
+    async def shutdown(self) -> None:
+        """Signal the Rust core to stop the pump (best-effort).
+
+        Safe to call at any point in the lifecycle — before ``start()`` finished
+        (``engine_registry`` may be ``None``), after ``run()`` exited, or from a
+        ``SIGINT``/``KeyboardInterrupt`` handler. Mirrors the Rust ``stop()``
+        contract: idempotent, sets the shutdown flag + aborts the pump task so
+        the WS stream's ``combined.next().await`` unblocks immediately (60s
+        cold-shutdown otherwise). Any exception is swallowed and logged so a
+        partial-startup teardown can't mask the original in-flight exception.
+
+        This is the one place that closes the Rust core's pump — the
+        ``KeyboardInterrupt``-exits-slowly bug was the pump task (spawned on the
+        shared tokio runtime, decoupled from the asyncio loop) blocking on a
+        silent WS subscription, which ``asyncio.run``'s teardown did not reach
+        until the OS closed the socket.
+        """
+        registry = getattr(self, "engine_registry", None)
+        engine = getattr(registry, "engine", None) if registry is not None else None
+        if engine is None:
+            return
+        try:
+            engine.stop()
+        except Exception as exc:  # noqa: BLE001 — best-effort teardown
+            bot_logger.warning(f"[shutdown] engine.stop() failed: {exc!r}")
+
 
 async def _shim_run_recurring_verify_until_done(
     *,
     registry: EngineRegistry,
-    block_ticker: "asyncio.AsyncIterator[int]",
+    block_ticker: AsyncIterator[int],
     interval: int,
     retry_policy: VerificationRetryPolicy,
 ) -> None:
     """T7: delegate to the library recurring-verify (kept in
     degenbot.arbitrage.recurring_verify so tests can import it without the
-    example's cmd_stream import chain)."""
+    example's cmd_stream import chain).
+    """
     from degenbot.arbitrage.recurring_verify import run_recurring_verify_until_done
 
     await run_recurring_verify_until_done(
@@ -1103,7 +1103,7 @@ async def build_paths(
     v4_hook_rejected = 0
     v4_dynamic_fee_rejected = 0
     other_exc_count = 0
-    registered_path_sigs: set[tuple[str, ...]] = set()
+    registered_path_sigs: set[tuple[str | bool, ...]] = set()
 
     start = time.perf_counter()
 
@@ -1147,7 +1147,7 @@ async def build_paths(
                 pool_type_strs.append("")
 
         # Build pools through appropriate constructors
-        pools: list[LiquidityPool | UniswapV3Pool | UniswapV4Pool] = []
+        pools: list[UniswapV2Pool | UniswapV3Pool | UniswapV4Pool] = []
         skip = False
         # V4 admission refusals (hook/dynamic-fee) surface from the builder at
         # `bot.build_managed_pool` time — the Rust core enforces them in
@@ -1234,7 +1234,7 @@ async def build_paths(
             else:
                 skip = True
                 break
-            pools.append(pool)
+            pools.append(cast("UniswapV2Pool | UniswapV3Pool | UniswapV4Pool", pool))
 
         if skip:
             # V4 admission refusals have their own dedicated counters; don't
@@ -1250,12 +1250,16 @@ async def build_paths(
                     retry_verification_call(_retry_policy, engine_registry.register_v2_pool, pool)
                 elif pt == "V3":
                     await retry_verification_call_async(
-                        _retry_policy, engine_registry.register_v3_pool, pool
+                        _retry_policy,
+                        engine_registry.register_v3_pool,
+                        pool,
                     )
                 elif pt == "V4":
                     v4_pool_count += 1
                     await retry_verification_call_async(
-                        _retry_policy, engine_registry.register_v4_pool, pool
+                        _retry_policy,
+                        engine_registry.register_v4_pool,
+                        pool,
                     )
         except VerificationMismatchError as exc:
             # Verification mismatch — on-chain tick state does not match the
@@ -1457,41 +1461,6 @@ def _compute_priority_fee(
     )
 
 
-@dataclasses.dataclass
-class SubmittedTx:
-    tx_hash: HexBytes
-    nonce: int
-    pools: set[int]  # Rust pool keys
-    submission_block: int
-
-
-async def monitor_pending_transaction(
-    tx: SubmittedTx,
-    async_w3: AsyncWeb3,
-    dispatcher: Dispatcher,
-) -> None:
-    """Monitor a submitted transaction until it confirms or expires.
-
-    On confirmation: release the nonce and pools.
-    On expiry (N blocks without inclusion): void the nonce and release pools.
-    """
-    while True:
-        await asyncio.sleep(1)
-
-        try:
-            await async_w3.eth.get_transaction_receipt(tx.tx_hash)
-        except TransactionNotFound:
-            blocks_waited = dispatcher.current_block - tx.submission_block
-            if blocks_waited > BLOCKS_BEFORE_NONCE_EXPIRES:
-                dispatcher.release_tx(tx)
-                bot_logger.info(
-                    f"Voided expired nonce {tx.nonce} ({blocks_waited} blocks without inclusion)",
-                )
-                return
-        else:
-            dispatcher.release_tx(tx)
-            bot_logger.info(f"Confirmed tx {tx.tx_hash.to_0x_hex()} nonce={tx.nonce}")
-            return
 
 
 async def dispatch_profitable_results(
@@ -1499,14 +1468,14 @@ async def dispatch_profitable_results(
         tuple[int, int, int, tuple[int, ...], tuple[int, ...], int]
     ],  # (path_id, opt_input, profit, hop_outputs, consumed_inputs, solve_block)
     engine_registry: EngineRegistry,
-    async_w3: AsyncWeb3,
+    async_w3: AsyncProviderAdapter,
     executor_address: str,
     operator_address: str,
     operator_private_key: str,
     base_fee_next: int,
     current_block: int,
     operator_nonce: int,
-    dispatcher: Dispatcher,
+    dispatcher: PyDispatcher,
     dry_run: bool,
 ) -> None:
     """Encode, simulate, and submit profitable results from the Rust engine.
@@ -1531,15 +1500,19 @@ async def dispatch_profitable_results(
     This correctly measures profit in WETH (physical ERC-20), native ETH,
     and ERC-6909 WETH held inside the PoolManager (from V4_MINT_COMPACT).
 
-    Submitted transactions are tracked via monitor_pending_transaction tasks
-    that release nonces and pools on confirmation or expiry.
+    Submitted transactions are tracked by the Rust submit leaf
+    (`dispatch_and_submit_py` spawns Rust monitor tasks that release
+    nonces and pools on confirmation or expiry).
     """
     bot_logger.info(f"[dispatch] entered with {len(results)} results, dry_run={dry_run}")
 
     # The RPC endpoint string the [sim-diag] diagnostic snapshot needs to fetch
     # on-chain per-hop state (slot0/liquidity) inside diagnostic_inspect_path.
-    # Derived from the injected async_w3 — no new RPC beyond this endpoint.
-    node_rpc_url = str(getattr(getattr(async_w3, "provider", None), "endpoint_uri", ""))
+    # Derived from the AsyncProviderAdapter — no new RPC beyond this endpoint.
+    # (PAGQCK: the dispatch path no longer holds a raw AsyncWeb3, so the
+    # web3-specific ``async_w3.provider.endpoint_uri`` is replaced by the
+    # adapter's ``rpc_url`` — same underlying endpoint, Rust-owned surface.)
+    node_rpc_url = async_w3.rpc_url
 
     # Per-dispatch trace dedup — prevents log spam from debug_traceCall
     _traced_reverts_local: set[tuple[int, str]] = set()
@@ -1548,10 +1521,11 @@ async def dispatch_profitable_results(
     # Per-dump deduplication for JSONL state dumps
     _state_dump_keys: set[tuple[int, int]] = set()
 
-    _executor_contract = async_w3.eth.contract(
-        address=executor_address,
-        abi=EXECUTOR_ABI,
-    )
+    # PAGQCK: the former ``async_w3.eth.contract(address=..., abi=EXECUTOR_ABI)``
+    # binding is dropped — it constructed ``_executor_contract`` but never read
+    # it (dead code; the dispatch loop uses raw calldata + ``make_request``
+    # for executor calls, not the web3.py contract object). The web3.py-only
+    # ``.contract()`` surface has no equivalent on AsyncProviderAdapter.
 
     # Pre-build the balanceOf call for the executor
     weth_balance_calldata = encode_balanceof_calldata(executor_address)
@@ -1590,7 +1564,7 @@ async def dispatch_profitable_results(
     results.sort(key=operator.itemgetter(2), reverse=True)
 
     # ── Slice 4: Mutual exclusivity — pools already claimed by this dispatch ──
-    committed_pools: set[int] = set()
+    committed_pools: set[str] = set()
 
     # ── Slice 1: Parallel simulation ──────────────────────────────────────
     # Budget for INFO-level logging of simulation failures (same pattern as
@@ -1705,7 +1679,7 @@ async def dispatch_profitable_results(
         hop_outputs: tuple[int, ...],
         consumed_inputs: tuple[int, ...],
         solve_block: int,
-    ) -> tuple[int, int, int, int, dict, Any] | None:
+    ) -> tuple[int, int, int, int, TxParams, Any] | None:
         """Simulate a single path. Returns (path_id, gross_profit, net_profit, gas_used, tx_params, path_info) or None."""
         path_info = engine_registry.paths.get(path_id)
         if path_info is None:
@@ -1745,7 +1719,7 @@ async def dispatch_profitable_results(
                     return None
 
         # Encode as cmd_executor command stream
-        cmd_bytes = encode_cmd_stream(
+        cmd_bytes = degenbot_rs.encode_cmd_stream(
             path_info,
             optimal_input,
             hop_outputs,
@@ -1769,34 +1743,37 @@ async def dispatch_profitable_results(
             _dumped_path_types.add(dump_type)
             if dump_type == "V4-V2":
                 hop_v4, hop_v2 = path_info.hops[0], path_info.hops[1]
-                bot_logger.info(
-                    f"[sim-dump] V4-V2 path={path_id} "
-                    f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
-                    f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
-                    f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                    f"cmd_len={len(cmd_bytes)}",
-                )
+                if isinstance(hop_v4, V4HopInfo) and isinstance(hop_v2, (V2HopInfo, V3HopInfo)):
+                    bot_logger.info(
+                        f"[sim-dump] V4-V2 path={path_id} "
+                        f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
+                        f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
+                        f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
+                        f"cmd_len={len(cmd_bytes)}",
+                    )
             elif dump_type == "V2-V4":
                 hop_v2, hop_v4 = path_info.hops[0], path_info.hops[1]
-                v4_in_native = v4_input_is_native(hop_v4)
-                bot_logger.info(
-                    f"[sim-dump] V2-V4 path={path_id} "
-                    f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
-                    f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
-                    f"v4_native_in={v4_in_native} input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                    f"cmd_len={len(cmd_bytes)}",
-                )
+                if isinstance(hop_v2, (V2HopInfo, V3HopInfo)) and isinstance(hop_v4, V4HopInfo):
+                    v4_in_native = degenbot_rs.v4_input_is_native(hop_v4)
+                    bot_logger.info(
+                        f"[sim-dump] V2-V4 path={path_id} "
+                        f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
+                        f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
+                        f"v4_native_in={v4_in_native} input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
+                        f"cmd_len={len(cmd_bytes)}",
+                    )
             elif dump_type == "V4-V4":
                 hop_a, hop_b = path_info.hops[0], path_info.hops[1]
-                bot_logger.info(
-                    f"[sim-dump] V4-V4 path={path_id} "
-                    f"a_c0={hop_a.currency0_address} a_c1={hop_a.currency1_address} "
-                    f"a_zfo={hop_a.zfo} a_fee={hop_a.fee} "
-                    f"b_c0={hop_b.currency0_address} b_c1={hop_b.currency1_address} "
-                    f"b_zfo={hop_b.zfo} b_fee={hop_b.fee} "
-                    f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                    f"cmd_len={len(cmd_bytes)}",
-                )
+                if isinstance(hop_a, V4HopInfo) and isinstance(hop_b, V4HopInfo):
+                    bot_logger.info(
+                        f"[sim-dump] V4-V4 path={path_id} "
+                        f"a_c0={hop_a.currency0_address} a_c1={hop_a.currency1_address} "
+                        f"a_zfo={hop_a.zfo} a_fee={hop_a.fee} "
+                        f"b_c0={hop_b.currency0_address} b_c1={hop_b.currency1_address} "
+                        f"b_zfo={hop_b.zfo} b_fee={hop_b.fee} "
+                        f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
+                        f"cmd_len={len(cmd_bytes)}",
+                    )
             else:
                 # Generic dump for all other path types (V3-V3-V3 etc.)
                 _hop_parts = []
@@ -1822,7 +1799,7 @@ async def dispatch_profitable_results(
         # config=0 (check_mode=0, no bribe): skip on-chain profit check,
         # operator verifies profitability off-chain via the pre/post balance reads.
         # For bribes or on-chain checks, build config via pack_config().
-        config = pack_expected_balance(check_mode=0, expected_value=0)
+        config = degenbot_rs.pack_expected_balance(check_mode=0, expected_value=0)
         selector = web3.Web3.keccak(text="execute(bytes,uint256)")[:4]
         calldata = selector + eth_abi.abi.encode(
             types=["bytes", "uint256"],
@@ -1836,18 +1813,21 @@ async def dispatch_profitable_results(
             data=calldata,
             chainId=1,
             type=2,
-            value=0,
+            value=cast("Wei", 0),
             gas=5_000_000,  # Generous gas for V3 tick-crossing swaps
-            maxFeePerGas=0,
-            maxPriorityFeePerGas=0,
-            nonce=0,
+            maxFeePerGas=cast("Wei", 0),
+            maxPriorityFeePerGas=cast("Wei", 0),
+            nonce=cast("Nonce", 0),
         )
         tx_params["from"] = get_checksum_address(EXECUTOR_OWNER)
 
         # Compute EIP-2930 access list before simulation so gas_used
         # reflects the savings from pre-warmed storage slots
         try:
-            al_result = await async_w3.eth.create_access_list(tx_params, block_identifier="pending")
+            al_result = await async_w3.make_request(
+                "eth_createAccessList",
+                [tx_params, "pending"],
+            )
         except Exception as al_exc:
             # If AL computation fails (e.g. revert), simulate without it.
             # The simulation itself will reject this path.
@@ -1859,30 +1839,39 @@ async def dispatch_profitable_results(
         try:
             # All override fields (code, balance, nonce, state, stateDiff)
             # go under stateOverrides per the Alloy AccountOverride spec.
-            sim = await async_w3.eth.simulate_v1(
-                payload=SimulateV1Payload(
-                    blockStateCalls=[
-                        BlockStateCallV1(
-                            stateOverrides=build_simulation_state_overrides(
-                                executor_owner=EXECUTOR_OWNER,
-                                inject_code=INJECT_EXECUTOR_CODE,
-                                injected_address=INJECTED_EXECUTOR_ADDRESS
-                                if INJECT_EXECUTOR_CODE
-                                else None,
-                            ),
-                            calls=[
-                                weth_balance_call,  # [0] WETH balance before
-                                eth_balance_call,  # [1] ETH balance before
-                                erc6909_balance_call,  # [2] ERC-6909 WETH balance before
-                                tx_params,  # [3] execute(commands)
-                                weth_balance_call,  # [4] WETH balance after
-                                eth_balance_call,  # [5] ETH balance after
-                                erc6909_balance_call,  # [6] ERC-6909 WETH balance after
-                            ],
+            # PAGQCK: the former ``async_w3.eth.simulate_v1(payload=SimulateV1Payload(...),
+            # block_identifier="pending")`` is routed via ``make_request`` —
+            # the ``SimulateV1Payload``/``BlockStateCallV1`` web3.py dataclasses
+            # serialize to exactly this raw JSON shape (``blockStateCalls`` with
+            # ``stateOverrides`` + ``calls``), and ``make_request`` converts the
+            # ``HexBytes`` call-data values to hex strings via ``python_to_json``.
+            # The typed PyO3 seam (alloy ``SimulatePayload`` conversion) is a
+            # follow-on sibling task — this routes off raw ``AsyncWeb3`` NOW.
+            sim_payload = {
+                "blockStateCalls": [
+                    {
+                        "stateOverrides": build_simulation_state_overrides(
+                            executor_owner=EXECUTOR_OWNER,
+                            inject_code=INJECT_EXECUTOR_CODE,
+                            injected_address=INJECTED_EXECUTOR_ADDRESS
+                            if INJECT_EXECUTOR_CODE
+                            else None,
                         ),
-                    ],
-                ),
-                block_identifier="pending",
+                        "calls": [
+                            weth_balance_call,  # [0] WETH balance before
+                            eth_balance_call,  # [1] ETH balance before
+                            erc6909_balance_call,  # [2] ERC-6909 WETH balance before
+                            tx_params,  # [3] execute(commands)
+                            weth_balance_call,  # [4] WETH balance after
+                            eth_balance_call,  # [5] ETH balance after
+                            erc6909_balance_call,  # [6] ERC-6909 WETH balance after
+                        ],
+                    },
+                ],
+            }
+            sim = await async_w3.make_request(
+                "eth_simulateV1",
+                [sim_payload, "pending"],
             )
         except Web3Exception as e:
             _sim_log(
@@ -2086,14 +2075,22 @@ async def dispatch_profitable_results(
                         hop_amount = amounts_per_hop[hi] if hi < len(amounts_per_hop) else "?"
                         if isinstance(hop, V2HopInfo):
                             pool_addr = hop.pool_address
-                            try:
-                                reserves = await async_w3.eth.call(
-                                    {
-                                        "to": Web3.to_checksum_address(pool_addr),
-                                        "data": web3.Web3.keccak(text="getReserves()")[:4],
-                                    },
-                                    "pending",
+                            try:  # noqa: PLW0717
+                                # PAGQCK: ``eth_call`` via ``make_request`` — the
+                                # raw RPC returns a hex string; decode to bytes
+                                # for the ``[0:32]`` reserve slicing below.
+                                get_reserves_sel = web3.Web3.keccak(text="getReserves()")[:4].hex()
+                                reserves_hex = await async_w3.make_request(
+                                    "eth_call",
+                                    [
+                                        {
+                                            "to": Web3.to_checksum_address(pool_addr),
+                                            "data": "0x" + get_reserves_sel,
+                                        },
+                                        "pending",
+                                    ],
                                 )
+                                reserves = bytes.fromhex(reserves_hex.removeprefix("0x"))
                                 if len(reserves) >= 96:
                                     r0 = int.from_bytes(reserves[0:32], "big")
                                     r1 = int.from_bytes(reserves[32:64], "big")
@@ -2108,11 +2105,13 @@ async def dispatch_profitable_results(
                                 pass
                         elif isinstance(hop, V3HopInfo):
                             pool_addr = hop.pool_address
-                            try:
-                                # Check pool has code at pending
-                                _code = await async_w3.eth.get_code(
-                                    Web3.to_checksum_address(pool_addr),
-                                    "pending",
+                            try:  # noqa: PLW0717
+                                # Check pool has code at pending. PAGQCK:
+                                # ``eth_getCode`` via ``make_request`` (raw hex
+                                # string); normalize the empty/zero cases.
+                                _code = await async_w3.make_request(
+                                    "eth_getCode",
+                                    [Web3.to_checksum_address(pool_addr), "pending"],
                                 )
                                 if (
                                     not _code
@@ -2124,20 +2123,30 @@ async def dispatch_profitable_results(
                                         f"pool={pool_addr} NO CODE at block {current_block}",
                                     )
                                     continue
-                                slot0_data = await async_w3.eth.call(
-                                    {
-                                        "to": Web3.to_checksum_address(pool_addr),
-                                        "data": web3.Web3.keccak(text="slot0()")[:4],
-                                    },
-                                    "pending",
+                                slot0_sel = web3.Web3.keccak(text="slot0()")[:4].hex()
+                                slot0_hex = await async_w3.make_request(
+                                    "eth_call",
+                                    [
+                                        {
+                                            "to": Web3.to_checksum_address(pool_addr),
+                                            "data": "0x" + slot0_sel,
+                                        },
+                                        "pending",
+                                    ],
                                 )
-                                liq_data = await async_w3.eth.call(
-                                    {
-                                        "to": Web3.to_checksum_address(pool_addr),
-                                        "data": web3.Web3.keccak(text="liquidity()")[:4],
-                                    },
-                                    "pending",
+                                liq_sel = web3.Web3.keccak(text="liquidity()")[:4].hex()
+                                liq_hex = await async_w3.make_request(
+                                    "eth_call",
+                                    [
+                                        {
+                                            "to": Web3.to_checksum_address(pool_addr),
+                                            "data": "0x" + liq_sel,
+                                        },
+                                        "pending",
+                                    ],
                                 )
+                                slot0_data = bytes.fromhex(slot0_hex.removeprefix("0x"))
+                                liq_data = bytes.fromhex(liq_hex.removeprefix("0x"))
                                 if len(slot0_data) < 64:
                                     bot_logger.info(
                                         f"[v3-state] path={path_id} hop[{hi}] "
@@ -2278,6 +2287,16 @@ async def dispatch_profitable_results(
             f"[dispatch] {suppressed_count}/{pre_filter_count} results filtered by suppression",
         )
 
+    # T3 (GTOD23-IKJRGO): drop razor-thin arb that can't survive 1-block drift.
+    # S1 found the dominant IIA reverts are sub-0.2-bps-margin arb the chain
+    # has already arbitraged away. Filter pre-sim to save RPC + revert budget.
+    # 0 disables (backwards-compatible default).
+    results, thin_dropped = filter_thin_margin_results(results, MIN_PROFIT_MARGIN_BPS)
+    if thin_dropped > 0:
+        bot_logger.info(
+            f"[filter] dropped {thin_dropped} thin-margin (<{MIN_PROFIT_MARGIN_BPS} bps) candidates",
+        )
+
     candidates = results[:MAX_SIMULATE_CONCURRENT]
     # Log candidate summary for observability
     cand_types = {}
@@ -2298,8 +2317,8 @@ async def dispatch_profitable_results(
     # ── Categorize simulation results ────────────────────────────────
     # Separate into gas-profitable (net >= MIN_PROFIT_NET) and
     # onchain-valid but gas-unprofitable (gross > 0, net below threshold).
-    gas_profitable: list[tuple[int, int, int, int, dict, Any]] = []
-    gas_unprofitable: list[tuple[int, int, int, int, dict, Any]] = []
+    gas_profitable: list[tuple[int, int, int, int, TxParams, Any]] = []
+    gas_unprofitable: list[tuple[int, int, int, int, TxParams, Any]] = []
     exception_count = 0
     _exc_log_limit = 5
     for result in sim_results:
@@ -2323,11 +2342,14 @@ async def dispatch_profitable_results(
             continue
         if result is None:
             continue
-        path_id, gross_profit, net_profit, gas_used, tx_params, path_info = result
+        path_id, gross_profit, net_profit, gas_used, tx_params, path_info = cast(
+            "tuple[int, int, int, int, TxParams, Any]", result
+        )
+        sim_result = cast("tuple[int, int, int, int, TxParams, Any]", result)
         if net_profit >= MIN_PROFIT_NET:
-            gas_profitable.append(result)
+            gas_profitable.append(sim_result)
         else:
-            gas_unprofitable.append(result)
+            gas_unprofitable.append(sim_result)
 
     # ── Summary log ──────────────────────────────────────────────────
     sim_ok_count = len(gas_profitable) + len(gas_unprofitable)
@@ -2350,7 +2372,7 @@ async def dispatch_profitable_results(
     failed_count = len(candidates) - len(succeeded_path_ids)
     if failed_count > 0:
         bot_logger.debug(
-            f"[suppress] {failed_count}/{len(candidates)} candidates failed, {dispatcher.path_suppression.total_suppressed} total suppressed",
+            f"[suppress] {failed_count}/{len(candidates)} candidates failed, {dispatcher.total_suppressed} total suppressed",
         )
     for pid, _inp, _pft, _ho, _ci, _sb in candidates:
         if pid in succeeded_path_ids:
@@ -2404,17 +2426,25 @@ async def dispatch_profitable_results(
             f"net_gwei={net_profit // 10**9}gwei",
         )
 
-    # ── Submit gas-profitable with mutual exclusivity (Slice 4) ────
-    for path_id, gross_profit, net_profit, gas_used, tx_params, path_info in gas_profitable:
-        # ── Slice 4: mutual exclusivity ──
+    # ── Submit gas-profitable via the Rust submit leaf (7UIYJ6) ────
+    # The mutual-excl guard / claim_nonce / access-list re-compute / sign /
+    # eth_sendRawTransaction / reserve_pools / monitor-spawn now happen in
+    # Rust (degenbot-submission dispatch_and_submit). Python builds the
+    # PySubmitCandidate list (priority_fee computed here — S3 stay-Python —
+    # + passed IN), hands the batch + coordination args, then renders the
+    # [dispatch] summary from the SubmitOutcome records.
+    async_alloy = async_w3.as_async_alloy()
+    if async_alloy is None:
+        bot_logger.error("[dispatch] async_w3 is not an Alloy-backed adapter; cannot submit")
+        return
+    signer = PyTxSigner(key=operator_private_key, chain_id=1)
+
+    candidates: list[PySubmitCandidate] = []
+    for path_id, gross_profit, _net_in, gas_used, tx_params, path_info in gas_profitable:
         path_pools = {
             h.pool_id_hex if isinstance(h, V4HopInfo) else h.pool_address for h in path_info.hops
         }
-        if dispatcher.is_path_blocked(path_pools, committed_pools):
-            bot_logger.debug(f"[dispatch] skip path={path_id}: pools claimed after sim")
-            continue
-
-        # Compute final priority fee (re-evaluate with current state)
+        # Compute final priority fee (re-evaluate with current state — S3)
         priority_fee = _compute_priority_fee(
             gross_profit=gross_profit,
             gas_used=gas_used,
@@ -2433,75 +2463,61 @@ async def dispatch_profitable_results(
             f"prio={priority_fee // 10**9}gwei",
         )
 
-        if dry_run:
-            committed_pools.update(path_pools)
-            continue
-
-        # Safety: never submit a real transaction when using code injection
-        # (the injected contract doesn't exist on-chain)
-        if INJECT_EXECUTOR_CODE:
-            bot_logger.warning(
-                f"[dispatch] path={path_id}: skipping submission — INJECT_EXECUTOR_CODE is active",
-            )
-            committed_pools.update(path_pools)
-            continue
-
-        # Submit
-        nonce = dispatcher.claim_nonce(operator_nonce)
-        tx_params["nonce"] = nonce
-        tx_params["maxPriorityFeePerGas"] = priority_fee
-        tx_params["maxFeePerGas"] = int(1.5 * base_fee_next) + priority_fee
-
-        # Access list was computed during simulation. Re-compute with
-        # updated nonce/fees for accuracy.
-        try:
-            al_result = await async_w3.eth.create_access_list(tx_params, block_identifier="pending")
-            tx_params["accessList"] = al_result["accessList"]
-        except Exception as al_exc:
-            bot_logger.debug(f"[dispatch] access list re-computation failed: {al_exc}")
-
-        try:
-            tx_hash = await async_w3.eth.send_raw_transaction(
-                eth_account.Account.sign_transaction(
-                    transaction_dict=tx_params,
-                    private_key=operator_private_key,
-                ).raw_transaction,
-            )
-        except Web3Exception as exc:
-            bot_logger.debug(f"Send failed: {exc}")
-            continue
-
-        bot_logger.info(f"Submitted path {path_id} hash={tx_hash.to_0x_hex()} nonce={nonce}")
-        dispatcher.reserve_pools(path_pools)
-        committed_pools.update(path_pools)
-
-        # Spawn monitor task to release nonce + pools on confirmation/expiry
-        task = asyncio.create_task(
-            monitor_pending_transaction(
-                tx=SubmittedTx(
-                    tx_hash=tx_hash,
-                    nonce=nonce,
-                    pools=path_pools,
-                    submission_block=current_block,
-                ),
-                async_w3=async_w3,
-                dispatcher=dispatcher,
+        candidates.append(
+            PySubmitCandidate(
+                path_id=path_id,
+                gross_profit=gross_profit,
+                net_profit=net_profit,
+                gas_used=gas_used,
+                priority_fee=priority_fee,
+                base_fee_next=base_fee_next,
+                execute_calldata=cast("bytes", tx_params["data"]),
+                executor_address=cast("str", tx_params["to"]),
+                access_list=cast("list[Any]", tx_params.get("accessList")),
+                path_pools=path_pools,
             ),
         )
-        dispatcher.track_task(task)
+
+    records = await dispatch_and_submit_py(
+        candidates=candidates,
+        dispatcher=dispatcher,
+        provider=async_alloy,
+        signer=signer,
+        operator_nonce=operator_nonce,
+        current_block=current_block,
+        dry_run=dry_run,
+        inject_code=INJECT_EXECUTOR_CODE,
+    )
+    for record in records:
+        if record["kind"] == "submitted":
+            bot_logger.info(
+                f"Submitted path {record['path_id']} "
+                f"hash={record['tx_hash']} nonce={record['nonce']}",
+            )
+        elif record["reason"] == "pools_claimed":
+            bot_logger.debug(f"[dispatch] skip path={record['path_id']}: pools claimed after sim")
+        elif record["reason"] == "dry_run":
+            pass  # dry_run skip already logged above
+        elif record["reason"] == "inject_code":
+            bot_logger.warning(
+                f"[dispatch] path={record['path_id']}: skipping submission — "
+                "INJECT_EXECUTOR_CODE is active",
+            )
+        elif record["reason"] == "broadcast_failed":
+            bot_logger.debug(f"Send failed: {record.get('detail', '')}")
 
 
 async def consume_result_batches(
     engine_registry: EngineRegistry,
-    async_w3: AsyncWeb3,
+    async_w3: AsyncProviderAdapter,
     executor_address: str,
     operator_address: str,
     operator_private_key: str,
-    dispatcher: Dispatcher,
+    dispatcher: PyDispatcher,
     dry_run: bool,
     *,
-    block_stream: "asyncio.AsyncIterator[dict[str, int]] | None" = None,
-    result_iter: "asyncio.AsyncIterator[dict[str, object]] | None" = None,
+    block_stream: AsyncIterator[dict[str, int]] | None = None,
+    result_iter: AsyncIterator[dict[str, object]] | None = None,
 ) -> None:
     """Consume the block stream (clock) + result batches (dispatch) in parallel.
 
@@ -2527,13 +2543,15 @@ async def consume_result_batches(
     if block_stream is None:
         block_stream = engine_registry.engine.block_stream()
     if result_iter is None:
-        result_iter = engine_registry.engine.__aiter__()
+        result_iter = aiter(engine_registry.engine)
 
     # Prime both streams. Each completed future is re-primed unless its stream
     # ended (StopAsyncIteration); the loop exits when both are exhausted.
-    block_fut: asyncio.Task[dict[str, int]] | None = asyncio.ensure_future(block_stream.__anext__())
-    result_fut: asyncio.Task[dict[str, object]] | None = asyncio.ensure_future(
-        result_iter.__anext__()
+    block_fut = cast(
+        "asyncio.Task[dict[str, int]] | None", asyncio.ensure_future(anext(block_stream))
+    )
+    result_fut = cast(
+        "asyncio.Task[dict[str, object]] | None", asyncio.ensure_future(anext(result_iter))
     )
 
     while block_fut is not None or result_fut is not None:
@@ -2542,10 +2560,16 @@ async def consume_result_batches(
 
         for fut in done:
             if fut is block_fut:
-                block_fut = _reprime(block_stream, fut, "block stream")
+                block_fut = cast(
+                    "asyncio.Task[dict[str, int]] | None",
+                    _reprime(block_stream, fut, "block stream"),
+                )
                 await _apply_block_if_ready(fut, dispatcher, async_w3)
             elif fut is result_fut:
-                result_fut = _reprime(result_iter, fut, "result stream")
+                result_fut = cast(
+                    "asyncio.Task[dict[str, object]] | None",
+                    _reprime(result_iter, fut, "result stream"),
+                )
                 await _apply_result_if_ready(
                     fut,
                     dispatcher,
@@ -2558,11 +2582,65 @@ async def consume_result_batches(
                 )
 
 
+_TEE_SENTINEL: Any = object()
+
+
+def _tee_block_stream(
+    source: AsyncIterator[dict[str, int]],
+) -> tuple[
+    AsyncIterator[dict[str, int]],
+    AsyncIterator[dict[str, int]],
+    asyncio.Task[None],
+]:
+    """Fan a single once-only block stream to two independent async iterators.
+
+    The pump's `engine.block_stream()` is single-consumer: `BlockStream.__anext__`
+    moves the mpsc receiver out of an `Arc<Mutex<Option<rx>>>` per call, so two
+    `async for` loops over one stream object race (the second sees `None` and
+    raises `StopAsyncIteration` immediately). This tee drives the source once and
+    copies each block to two unbounded queues (eth ~1 block/12s — no backpressure
+    deadlock risk), yielding two independent iterators that EACH see every block.
+
+    Regression: `run()` previously called `engine.block_stream()` twice (the real
+    `consume_result_batches` self-acquires when `block_stream=None`; `run()` line
+    ~967 acquired another for the recurring-verify ticker). The real seam is
+    once-only — the second call raised
+    `RuntimeError("block_stream() can only be called once")` entering the main
+    loop, crashing every permutation run. Acquire once + tee fixes it.
+
+    Returns `(branch_a, branch_b, driver_task)`. `branch_a` feeds the result
+    consumer; `branch_b` feeds the recurring-verify ticker. The driver completes
+    when the source exhausts (production: never — the pump runs indefinitely; the
+    driver stays pending on the source and is cancelled by the caller on exit).
+    """
+    q_a: asyncio.Queue[Any] = asyncio.Queue()
+    q_b: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def _driver() -> None:
+        try:
+            async for block in source:
+                await q_a.put(block)
+                await q_b.put(block)
+        finally:
+            await q_a.put(_TEE_SENTINEL)
+            await q_b.put(_TEE_SENTINEL)
+
+    async def _branch(q: asyncio.Queue[Any]) -> AsyncIterator[dict[str, int]]:
+        while True:
+            item = await q.get()
+            if item is _TEE_SENTINEL:
+                return
+            yield item
+
+    driver = asyncio.create_task(_driver(), name="block-stream-tee")
+    return _branch(q_a), _branch(q_b), driver
+
+
 def _reprime(
-    stream: object,
-    fut: asyncio.Task[object],
+    stream: AsyncIterator[Any],
+    fut: asyncio.Task[Any],
     label: str,
-) -> asyncio.Task[object] | None:
+) -> asyncio.Task[Any] | None:
     """If `fut`'s stream ended, return None; else schedule the next pull."""
     try:
         fut.result()
@@ -2571,13 +2649,13 @@ def _reprime(
         return None
     except BaseException:  # noqa: BLE001 — surfaced via fut.result() in caller
         return None
-    return asyncio.ensure_future(stream.__anext__())  # type: ignore[attr-defined]
+    return asyncio.ensure_future(anext(stream))
 
 
 async def _apply_block_if_ready(
     fut: asyncio.Task[dict[str, int]],
-    dispatcher: Dispatcher,
-    async_w3: AsyncWeb3,
+    dispatcher: PyDispatcher,
+    async_w3: AsyncProviderAdapter,
 ) -> None:
     """Drive the block clock from a forwarded ``newHeads`` tick if fut resolved.
 
@@ -2604,24 +2682,24 @@ async def _apply_block_if_ready(
         parent_gas_limit=gas_limit,
     )
 
-    try:
-        fee_history = await async_w3.eth.fee_history(
+    # 7UIYJ6: ``eth_feeHistory`` + hex-decode + ``record_priority_fees`` now
+    # happen in the Rust submit leaf (``fetch_fee_history_py`` extracts the
+    # AsyncAlloyProvider, calls eth_feeHistory, records into the dispatcher's
+    # ring internally, no-ops on RPC failure — matching the prior
+    # ``except Web3Exception: pass``).
+    async_alloy = async_w3.as_async_alloy()
+    if async_alloy is not None:
+        await fetch_fee_history_py(
+            provider=async_alloy,
+            dispatcher=dispatcher,
             block_count=1,
-            newest_block=block_number,
+            last_block=block_number,
             reward_percentiles=[float(p) for p in FEE_PERCENTILES],
         )
-        reward = fee_history.get("reward", [[]])
-        if reward and reward[-1]:
-            dispatcher.record_priority_fees(
-                block_number,
-                dict(zip(FEE_PERCENTILES, reward[-1], strict=True)),
-            )
-    except Web3Exception:
-        pass
 
     dispatcher.record_block_time(block_number, block_timestamp)
-    if len(dispatcher.block_times) >= 2:
-        oldest_bn, _oldest_ts = dispatcher.block_times[0]
+    if dispatcher.block_time_count() >= 2:
+        oldest_bn, _oldest_ts = dispatcher.block_times_oldest()
         if block_number != oldest_bn:
             latency = time.time() - block_timestamp
             bot_logger.info(
@@ -2635,9 +2713,9 @@ async def _apply_block_if_ready(
 
 async def _apply_result_if_ready(
     fut: asyncio.Task[dict[str, object]],
-    dispatcher: Dispatcher,
+    dispatcher: PyDispatcher,
     engine_registry: EngineRegistry,
-    async_w3: AsyncWeb3,
+    async_w3: AsyncProviderAdapter,
     executor_address: str,
     operator_address: str,
     operator_private_key: str,
@@ -2657,11 +2735,11 @@ async def _apply_result_if_ready(
         return
 
     current_block = dispatcher.current_block
-    operator_nonce = await async_w3.eth.get_transaction_count(operator_address)
-    solve_block = int(batch["solve_block"])  # per-result age metadata, not the clock
+    operator_nonce = await async_w3.get_transaction_count(cast("ChecksumAddress", operator_address))
+    solve_block = int(cast("Any", batch["solve_block"]))  # per-result age metadata, not the clock
 
     results: list[tuple[int, int, int, tuple[int, ...], tuple[int, ...], int]] = []
-    for item in batch["fresh"]:
+    for item in cast("Any", batch["fresh"]):
         path_id, opt_input, profit, hop_outs, consumed_ins = item
         results.append((
             int(path_id),
@@ -2671,7 +2749,7 @@ async def _apply_result_if_ready(
             tuple(int(c) for c in consumed_ins),
             solve_block,
         ))
-    for item in batch["updated"]:
+    for item in cast("Any", batch["updated"]):
         path_id, opt_input, profit, hop_outs, consumed_ins = item
         results.append((
             int(path_id),
@@ -2682,8 +2760,8 @@ async def _apply_result_if_ready(
             solve_block,
         ))
 
-    for path_id in batch["removed"]:
-        dispatcher.path_suppression.discard(int(path_id))
+    for path_id in cast("Any", batch["removed"]):
+        dispatcher.discard_path(int(path_id))
 
     if results:
         await dispatch_profitable_results(
@@ -2694,9 +2772,9 @@ async def _apply_result_if_ready(
             operator_address=operator_address,
             operator_private_key=operator_private_key,
             base_fee_next=next_base_fee(
-                parent_base_fee=int(batch.get("base_fee_per_gas") or 0),
-                parent_gas_used=int(batch["gas_used"]),
-                parent_gas_limit=int(batch["gas_limit"]),
+                parent_base_fee=int(cast("Any", batch.get("base_fee_per_gas") or 0)),
+                parent_gas_used=int(cast("Any", batch["gas_used"])),
+                parent_gas_limit=int(cast("Any", batch["gas_limit"])),
             ),
             current_block=current_block,
             operator_nonce=operator_nonce,
@@ -2705,7 +2783,17 @@ async def _apply_result_if_ready(
         )
 
 
-async def main() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the backrun example's argument parser.
+
+    Extracted from ``main()`` so the CLI surface (especially the
+    ``--node-http`` / ``--node-ws`` cascade overrides) is testable without
+    running the full async session.
+
+    Returns:
+        The configured ``ArgumentParser`` (caller invokes ``parse_args``).
+
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--live",
@@ -2722,6 +2810,33 @@ async def main() -> None:
             "Overrides PATH_PERMUTATION_FILTER in the source file."
         ),
     )
+    parser.add_argument(
+        "--node-http",
+        type=str,
+        default=None,
+        help=(
+            "HTTP RPC endpoint for the backrun chain (Ethereum mainnet). "
+            "Highest-priority source in the RPC URI cascade: "
+            "--node-http > DEGENBOT_RPC_HTTP_CHAINID_1 > NODE_HOST_HTTP "
+            "> config.toml rpc[1] > error."
+        ),
+    )
+    parser.add_argument(
+        "--node-ws",
+        type=str,
+        default=None,
+        help=(
+            "WebSocket RPC endpoint for the backrun chain (Ethereum mainnet). "
+            "Highest-priority source in the RPC URI cascade: "
+            "--node-ws > DEGENBOT_RPC_WS_CHAINID_1 > NODE_HOST_WEBSOCKET "
+            "> config.toml ws[1] > error."
+        ),
+    )
+    return parser
+
+
+async def main() -> None:
+    parser = _build_arg_parser()
     args = parser.parse_args()
     dry_run = not args.live
 
@@ -2735,7 +2850,13 @@ async def main() -> None:
 
     env = dotenv.dotenv_values("examples/mainnet.env")
     try:
-        cfg = BackrunConfig.from_env(env, live=not dry_run, permutation=args.permutation)
+        cfg = BackrunConfig.from_env(
+            env,
+            live=not dry_run,
+            permutation=args.permutation,
+            cli_http=args.node_http,
+            cli_ws=args.node_ws,
+        )
     except ValueError as exc:
         bot_logger.error(str(exc))
         return
@@ -2749,8 +2870,19 @@ async def main() -> None:
     # The early release inside run() preserves the hot-loop memory profile:
     # the loop keeps only engine_registry + async_w3 + dispatcher once the
     # Rust engine owns canonical pool state.
-    async with BackrunSession(cfg) as session:
-        await session.run()
+    #
+    # Ctrl-C handling: a SIGINT during ``await session.run()`` unwinds through
+    # ``BackrunSession.__aexit__`` → ``shutdown()`` (calls ``engine.stop()``,
+    # which aborts the Rust pump task so it doesn't block process exit on a
+    # silent WS stream). The KeyboardInterrupt is then caught here so the
+    # operator sees a single clean line instead of a traceback. ``CancelledError``
+    # is caught too: some asyncio versions surface SIGINT inside the awaited
+    # coroutine as a cancelled task.
+    try:
+        async with BackrunSession(cfg) as session:
+            await session.run()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        bot_logger.info("[shutdown] interrupted — Rust pump stopped, exiting.")
 
 
 if __name__ == "__main__":

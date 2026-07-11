@@ -16,6 +16,7 @@ use alloy::primitives::{Address, I256, U160, U256};
 
 use crate::bot_core::state_history::{ReorgJournal, V3BlockDelta};
 use crate::bot_core::tick_bitmap::{compute_tick_ranges, gen_ticks, V3TickRangeForSolver};
+use crate::bot_core::tick_fetch::TickWordFetcher;
 use crate::bot_core::v3_state::{PoolTickCoverage, SimulateSwapError, V3SwapOutcome};
 use crate::bot_core::TickInfo;
 use crate::solvers::liquidity_event_buffer::LiquidityEvent;
@@ -106,6 +107,10 @@ pub struct RegisterV4PoolParams {
     pub tick_data: HashMap<i32, TickInfo>,
     pub update_block: u64,
     pub coverage: PoolTickCoverage,
+    /// Sparse-tick backfill fetcher (stored on `V4PoolState` at registration;
+    /// `None` for `Tracked` pools or when no Python fetcher was supplied).
+    /// ADR-006 I/O trait object — same shape as V3.
+    pub fetcher: Option<Arc<dyn TickWordFetcher>>,
 }
 
 /// Typed rejection from [`crate::bot_core::BotState::register_v4_pool`].
@@ -172,16 +177,26 @@ struct TickRangeCache {
     ofz: Option<Arc<[V3TickRangeForSolver]>>,
 }
 
+/// Immutable V4 registration identity (ADR-005 identity slice).
+///
+/// Pure registration data — the pool manager, on-chain `pool_id`, and
+/// the V4 pool key (`currency0/currency1/fee/tick_spacing/hooks`). Set once at
+/// `register_v4_pool` and never mutated. Mirrors `V3PoolIdentity`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct V4PoolIdentity {
+    pub pool_manager: Address,
+    pub pool_id: PoolId,
+    pub pool_key: V4PoolKey,
+}
+
 /// V4 concentrated-liquidity pool state owned by [`crate::bot_core::BotState`].
 /// Carries authoritative mutable state plus a per-pool reorg journal (same
 /// `V3BlockDelta` shape — V4 `ModifyLiquidity` carries a signed liquidity
 /// delta, but the journal records the same scalar + per-tick priors as V3).
+/// Immutable identity lives on [`V4PoolIdentity`]; look it up via
+/// [`crate::bot_core::BotState::get_v4_identity`].
 #[derive(Debug)]
 pub struct V4PoolState {
-    pub pool_manager: Address,
-    pub pool_id: PoolId,
-    pub pool_key: V4PoolKey,
-
     // --- Mutable state (authoritative) ---
     pub sqrt_price_x96: U256,
     pub liquidity: u128,
@@ -192,10 +207,37 @@ pub struct V4PoolState {
     pub tick_data: HashMap<i32, TickInfo>,
     pub coverage: PoolTickCoverage,
 
+    /// The pinned snapshot seed (CBCH6H — see `V3PoolState::snapshot_seed`).
+    /// A copy of the registration `tick_data`, immutable across pump
+    /// `ModifyLiquidity` events, retained so step-1 verify compares the seed
+    /// vs on-chain@snapshot_block. `Some` only for `Tracked` pools; cleared by
+    /// `take_v4_snapshot_seed` after step-1 verify.
+    pub snapshot_seed: Option<HashMap<i32, TickInfo>>,
+
+    /// The pinned **post-drain** `(tick_data, block)` pair (step-2 rolling-start
+    /// race fix, V4 twin of `V3PoolState::post_drain_snapshot`). Captured
+    /// atomically with `apply_buffer_v4`'s final drain by
+    /// `pin_v4_post_drain_snapshot`, consumed once by
+    /// `take_v4_post_drain_snapshot` for step-2 verify. The pair carries the
+    /// frozen `tick_data` AND the `update_block` it was computed at; step-2
+    /// verify compares against on-chain@**the pinned block**, not a
+    /// start()-time `verify_backfill_block` constant (see
+    /// `V3PoolState::post_drain_snapshot` for the full rationale). `Some` only
+    /// for `Tracked` pools.
+    pub post_drain_snapshot: Option<(HashMap<i32, TickInfo>, u64)>,
+
     /// Tick-bitmap word positions known to be fetched. See
     /// [`V3PoolState::known_bitmap_words`] — V4 shares the same sparse
     /// miss-detection discipline (ADR-005 sparse-map feature parity).
     pub known_bitmap_words: HashSet<i32>,
+
+    /// The sparse-tick backfill fetcher (ADR-006 I/O trait object). Set once
+    /// at `register_v4_pool`; the fetch+retry loop in
+    /// `calculate_tokens_out_with_fetch` / `simulate_*_with_fetch` clones
+    /// this `Arc` out and calls it on a `MissingTickWord` miss. `None` for
+    /// `Tracked` pools (complete tick data) or when no Python fetcher was
+    /// supplied at registration.
+    pub fetcher: Option<Arc<dyn TickWordFetcher>>,
 
     /// Reorg journal — scalar priors + per-tick priors for rollback (V4 uses
     /// the same `V3BlockDelta` shape; `tick_priors` store `ModifyLiquidity` reversal
@@ -208,9 +250,6 @@ pub struct V4PoolState {
 impl Clone for V4PoolState {
     fn clone(&self) -> Self {
         Self {
-            pool_manager: self.pool_manager,
-            pool_id: self.pool_id,
-            pool_key: self.pool_key.clone(),
             sqrt_price_x96: self.sqrt_price_x96,
             liquidity: self.liquidity,
             tick: self.tick,
@@ -218,7 +257,13 @@ impl Clone for V4PoolState {
             tick_data: self.tick_data.clone(),
             coverage: self.coverage,
             known_bitmap_words: self.known_bitmap_words.clone(),
+            fetcher: self.fetcher.clone(),
             journal: self.journal.clone(),
+            // Clones (e.g. `v4_pools_snapshot()`) do NOT carry the pinned seed or
+            // the pinned post-drain snapshot (CBCH6H + step-2 race fix — see
+            // V3PoolState::Clone).
+            snapshot_seed: None,
+            post_drain_snapshot: None,
             cached_tick_ranges: parking_lot::Mutex::new(TickRangeCache::default()),
         }
     }
@@ -233,11 +278,11 @@ impl V4PoolState {
 
     /// Seed `known_bitmap_words` from the current `tick_data` keys' word
     /// positions (Sparse pools only; Tracked bypasses detection).
-    pub fn seed_known_bitmap_words(&mut self) {
+    pub fn seed_known_bitmap_words(&mut self, tick_spacing: i32) {
         self.known_bitmap_words = self
             .tick_data
             .keys()
-            .map(|&t| Self::word_of(t, self.pool_key.tick_spacing))
+            .map(|&t| Self::word_of(t, tick_spacing))
             .collect();
     }
 
@@ -255,11 +300,12 @@ impl V4PoolState {
 
     /// Construct from registration params with a journal of the given depth.
     #[must_use]
-    pub fn from_params(params: RegisterV4PoolParams, journal_depth: usize) -> Self {
-        let mut out = Self {
-            pool_manager: params.pool_manager,
-            pool_id: params.pool_id,
-            pool_key: params.pool_key,
+    pub fn from_params(
+        params: RegisterV4PoolParams,
+        journal_depth: usize,
+    ) -> (V4PoolIdentity, V4PoolState) {
+        let tick_spacing = params.pool_key.tick_spacing;
+        let mut state = Self {
             sqrt_price_x96: params.sqrt_price_x96,
             liquidity: params.liquidity,
             tick: params.tick,
@@ -267,16 +313,32 @@ impl V4PoolState {
             tick_data: params.tick_data,
             coverage: params.coverage,
             known_bitmap_words: HashSet::new(),
+            fetcher: params.fetcher,
             journal: ReorgJournal::<V3BlockDelta>::new(journal_depth),
+            snapshot_seed: None,
+            post_drain_snapshot: None,
             cached_tick_ranges: parking_lot::Mutex::new(TickRangeCache::default()),
+        };
+        let identity = V4PoolIdentity {
+            pool_manager: params.pool_manager,
+            pool_id: params.pool_id,
+            pool_key: params.pool_key,
         };
         // Seed the known-bitmap-word set from the tick_data keys for EVERY
         // coverage (mirrors `sync_tick_data_by_pool_id`). Pre-fix this only ran
         // for `Sparse`, so a `Tracked` inline seed (ADR-006 race closure)
         // relied on a later separate `update_tick_data` — the clobber the
         // closure removes. Seeding here makes the inline seed complete.
-        out.seed_known_bitmap_words();
-        out
+        state.seed_known_bitmap_words(tick_spacing);
+        // CBCH6H: pin the snapshot seed for Tracked pools so step-1 verify
+        // compares the seed (not pump-mutated `tick_data`) against
+        // on-chain@snapshot_block. Sparse pools have no complete seed.
+        state.snapshot_seed = if params.coverage == PoolTickCoverage::Tracked {
+            Some(state.tick_data.clone())
+        } else {
+            None
+        };
+        (identity, state)
     }
 
     /// Invalidate the cached tick ranges (call after any state mutation).
@@ -286,7 +348,11 @@ impl V4PoolState {
         cache.ofz = None;
     }
 
-    fn get_cached_tick_ranges(&self, zero_for_one: bool) -> Option<Arc<[V3TickRangeForSolver]>> {
+    fn get_cached_tick_ranges(
+        &self,
+        tick_spacing: i32,
+        zero_for_one: bool,
+    ) -> Option<Arc<[V3TickRangeForSolver]>> {
         {
             let cache = self.cached_tick_ranges.lock();
             let slot = if zero_for_one { &cache.zfo } else { &cache.ofz };
@@ -298,7 +364,7 @@ impl V4PoolState {
         let ranges = compute_tick_ranges(
             &self.tick_data,
             self.tick,
-            self.pool_key.tick_spacing,
+            tick_spacing,
             self.liquidity,
             zero_for_one,
             15,
@@ -325,13 +391,15 @@ impl V4PoolState {
     #[must_use]
     pub fn build_int_v4_sequence(
         &self,
+        tick_spacing: i32,
+        fee: u32,
         zero_for_one: bool,
         max_ranges: usize,
     ) -> Option<IntV3TickRangeSequence> {
-        let ranges = self.get_cached_tick_ranges(zero_for_one)?;
+        let ranges = self.get_cached_tick_ranges(tick_spacing, zero_for_one)?;
         let use_ranges = ranges.get(..ranges.len().min(max_ranges))?;
 
-        let gamma_numer = u64::from(1_000_000 - self.pool_key.fee);
+        let gamma_numer = u64::from(1_000_000 - fee);
         let fee_denom = 1_000_000u64;
 
         let mut int_ranges = Vec::with_capacity(use_ranges.len());
@@ -407,6 +475,8 @@ impl V4PoolState {
 #[allow(unused_assignments)] // `tick` tracks the contract's post-step tick; faithful to the loop.
 pub fn v4_simulate_swap(
     state: &V4PoolState,
+    fee: u32,
+    tick_spacing: i32,
     zero_for_one: bool,
     amount_specified: I256,
     sqrt_price_limit: U256,
@@ -428,8 +498,8 @@ pub fn v4_simulate_swap(
     let mut liquidity =
         i128::try_from(state.liquidity).map_err(|_| SimulateSwapError::NotComputable)?;
 
-    let fee_pips = U256::from(state.pool_key.fee);
-    let tick_spacing = state.pool_key.tick_spacing;
+    let fee_pips = U256::from(fee);
+    // `tick_spacing` is the immutable-config parameter (threaded from identity).
 
     // Sparse-map miss detection (V3/V4-shared; see `v3_simulate_swap`).
     let sparse = state.coverage == PoolTickCoverage::Sparse;

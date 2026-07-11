@@ -4,10 +4,8 @@ See: contract_reference/uniswap/V2/UniswapV2Factory.sol
 (UniswapV2Pair, UniswapV2Factory, Math, UQ112x112)
 """
 
-import itertools
 from collections.abc import Iterable
 from fractions import Fraction
-from typing import TYPE_CHECKING
 
 import eth_abi.packed
 from eth_typing import ChecksumAddress
@@ -15,10 +13,6 @@ from eth_utils.crypto import keccak
 from hexbytes import HexBytes
 
 from degenbot.contract.addresses import create2_address
-
-if TYPE_CHECKING:
-    from degenbot.uniswap.liquidity_pool import LiquidityPool
-    from degenbot.uniswap.trackers import UniswapV2PoolTracker
 
 
 def generate_v2_pool_address(
@@ -51,28 +45,6 @@ def generate_v2_pool_address(
         salt=salt,
         init_code_hash=init_hash,
     )
-
-
-def get_v2_pools_from_token_path(
-    tx_path: Iterable[ChecksumAddress | str],
-    pool_tracker: "UniswapV2PoolTracker",
-) -> list["LiquidityPool"]:
-    """Return v2 pools from token path.
-
-    Returns:
-        A list of V2 pool instances for each consecutive token pair.
-
-    """
-    result: list[LiquidityPool] = []
-    for token_addresses in itertools.pairwise(tx_path):
-        pool = pool_tracker.get_pool_from_tokens(
-            token_addresses=token_addresses,
-            silent=True,
-        )
-        if TYPE_CHECKING:
-            assert isinstance(pool, LiquidityPool)
-        result.append(pool)
-    return result
 
 
 def constant_product_calc_exact_in(

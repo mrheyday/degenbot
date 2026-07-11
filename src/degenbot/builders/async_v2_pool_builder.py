@@ -16,7 +16,7 @@ from degenbot.exceptions.pool import LiquidityPoolError
 from degenbot.logging import logger
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.registry.pool_type import pool_type_registry
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 class AsyncV2PoolBuilder:
     """Async counterpart of V2PoolBuilder.
 
-    Builds LiquidityPool instances using AsyncPoolIO for I/O.
+    Builds UniswapV2Pool instances using AsyncPoolIO for I/O.
     Shares pure decode/resolve logic with V2BuilderBase via static methods.
     """
 
@@ -123,7 +123,6 @@ class AsyncV2PoolBuilder:
         deployer, resolved_init_hash = V2BuilderBase.resolve_deployer_and_init_hash(
             chain_id=chain_id,
             factory=factory,
-            default_init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
         )
 
         return V2CommonData(
@@ -210,6 +209,12 @@ class AsyncV2PoolBuilder:
         gamma_numer1 = common.fee_token1.denominator - common.fee_token1.numerator
         fee_denom1 = common.fee_token1.denominator
 
+        # Descriptor params (ADR-005 slice 7 / FMO2GE): the DEX variant flows into
+        # Rust as a ``V2PoolDescriptor`` on the ``PyLiquidityPool`` handle. The
+        # async builder has no Camelot branch, so stable_swap/fee_denominator
+        # stay at their defaults.
+        variant = dex.variant if dex is not None else "uniswap-v2"
+
         pool_id = self._py_bot.register_v2_pool(
             address=common.pool_address,
             token0=common.token0_address,
@@ -222,23 +227,14 @@ class AsyncV2PoolBuilder:
             fee_denom1=fee_denom1,
             factory=common.factory,
             update_block=common.state_block,
+            variant=variant,
+            stable_swap=False,
+            fee_denominator=None,
         )
         py_pool = self._py_bot.get_pool(pool_id)
         assert py_pool is not None, "register_v2_pool returned a pool_id with no handle"
 
-        pool = pool_class(
-            py_pool,
-            address=common.pool_address,
-            token0=token0,
-            token1=token1,
-            dex=dex,
-            chain_id=common.chain_id,
-            factory=common.factory,
-            fee_token0=common.fee_token0,
-            fee_token1=common.fee_token1,
-            deployer_address=common.deployer,
-            init_hash=common.init_hash,
-        )
+        pool = pool_class._from_py_pool(py_pool)  # noqa: SLF001
 
         # Register pool
         self._pools.add(pool_address=pool.address, chain_id=chain_id, pool=pool)
@@ -267,11 +263,9 @@ class AsyncV2PoolBuilder:
 
         """
         assert io is not None, "io must be provided for update()"
-        if not isinstance(pool, LiquidityPool):
+        if not isinstance(pool, UniswapV2Pool):
             msg = f"AsyncV2PoolBuilder cannot update {type(pool).__name__}"
             raise TypeError(msg)
-
-        assert pool.chain_id is not None
 
         raw_block = block_number if block_number is not None else await io.get_block_number()
         block_number_ = int(raw_block) if not isinstance(raw_block, int) else raw_block

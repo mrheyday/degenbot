@@ -164,22 +164,17 @@ mod tests {
                 return;
             }
 
-            // hexbytes >= 1.0 made `.hex()` follow stdlib `bytes.hex()` semantics (no 0x prefix);
-            // `.to_0x_hex()` is the canonical 1.x API for the 0x-prefixed string.
-            // Test empty bytes
+            // Test empty bytes. `HexBytes.hex()` returns a bare hex string
+            // with no `0x` prefix (hexbytes 1.x); empty bytes → empty string.
             let empty_hb = create_hexbytes(py, &[]).unwrap();
-            let hex_str: String = empty_hb
-                .call_method0("to_0x_hex")
-                .unwrap()
-                .extract()
-                .unwrap();
-            assert_eq!(hex_str, "0x");
+            let hex_str: String = empty_hb.call_method0("hex").unwrap().extract().unwrap();
+            assert_eq!(hex_str, "");
 
             // Test some bytes
             let test_bytes = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
             let hb = create_hexbytes(py, &test_bytes).unwrap();
-            let hex_str: String = hb.call_method0("to_0x_hex").unwrap().extract().unwrap();
-            assert_eq!(hex_str, "0x0123456789abcdef");
+            let hex_str: String = hb.call_method0("hex").unwrap().extract().unwrap();
+            assert_eq!(hex_str, "0123456789abcdef");
         });
     }
 

@@ -1,11 +1,12 @@
 [package]
-authors = ["BowTiedDevil <devil@bowtieddevil.com>"]
 name = "degenbot_rs"
 description = "Rust implementations used by the degenbot Python package."
-edition = "2021"
-publish = false
-repository = "https://github.com/BowTiedDevil/degenbot"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [lints.rust]
 warnings = "deny"
@@ -38,6 +39,16 @@ degenbot-decoders = { path = "../degenbot-decoders", optional = true }
 degenbot-uniswap = { path = "../degenbot-uniswap", optional = true }
 degenbot-abi = { path = "../degenbot-abi", optional = true }
 degenbot-cl-math = { path = "../degenbot-cl-math", optional = true }
+degenbot-db = { path = "../degenbot-db", optional = true }
+degenbot-balancer-math = { path = "../degenbot-balancer-math", optional = true }
+degenbot-curve-math = { path = "../degenbot-curve-math", optional = true }
+degenbot-solidly-math = { path = "../degenbot-solidly-math", optional = true }
+degenbot-pathfinding = { path = "../degenbot-pathfinding", optional = true }
+degenbot-price = { path = "../degenbot-price", optional = true, features = ["pyo3"] }
+degenbot-submission = { path = "../degenbot-submission", optional = true, features = ["pyo3"] }
+degenbot-executor = { path = "../degenbot-executor", optional = true }
+degenbot-pool-updater = { path = "../degenbot-pool-updater", optional = true }
+degenbot-aave-updater = { path = "../degenbot-aave-updater", optional = true }
 degenbot-core = { path = "../degenbot-core", features = ["pyo3"] }
 dashmap = { version = "^6.1" }
 futures-util = { version = "^0.3", default-features = false, features = ["async-await", "std"] }
@@ -62,15 +73,25 @@ tokio = { version = "^1.52", features = ["rt-multi-thread", "time", "macros", "s
 # (the engine wrapper references degenbot_rpc::provider::AlloyProvider + degenbot_decoders::PoolId
 # + degenbot_uniswap::dex_identity directly), and `rpc` implies `abi` (rpc/contract wraps
 # crate::abi_types). `async` gates the rpc/ async submodules (no new dep).
-default = ["auto-initialize", "bot", "rpc", "abi", "cl-math", "uniswap", "async"]
+default = ["auto-initialize", "bot", "rpc", "price", "submission", "abi", "cl-math", "balancer-math", "curve-math", "solidly-math", "uniswap", "pathfinding", "async", "db", "executor", "pool", "aave-updater"]
 extension-module = ["pyo3/extension-module"]
 auto-initialize = ["pyo3/auto-initialize"]
 bot = ["dep:degenbot-bot", "rpc", "decoders", "uniswap"]
+price = ["dep:degenbot-price", "rpc"]
+submission = ["dep:degenbot-submission", "rpc"]
+executor = ["dep:degenbot-executor"]
 rpc = ["dep:degenbot-rpc", "abi"]
 abi = ["dep:degenbot-abi"]
 cl-math = ["dep:degenbot-cl-math"]
+db = ["dep:degenbot-db"]
+pool = ["dep:degenbot-pool-updater", "db", "rpc"]
+aave-updater = ["dep:degenbot-aave-updater", "db", "rpc"]
+balancer-math = ["dep:degenbot-balancer-math"]
+curve-math = ["dep:degenbot-curve-math"]
+solidly-math = ["dep:degenbot-solidly-math"]
 uniswap = ["dep:degenbot-uniswap"]
 decoders = ["dep:degenbot-decoders"]
+pathfinding = ["dep:degenbot-pathfinding"]
 async = []
 
 [dev-dependencies]

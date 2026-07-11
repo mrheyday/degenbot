@@ -106,6 +106,89 @@ impl PyUniswapArbEngine {
             .verify_v4_liquidity_maps(py, rpc_url, state_view_address, block_number)
     }
 
+    /// Verify a single V3 pool's pinned snapshot seed against on-chain@snapshot
+    /// block (CBCH6H — the rolling-start race fix). Step-1 of the two-step
+    /// verify routes here. Delegates to the shared `PumpState`.
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (address, rpc_url, block_number))]
+    fn verify_v3_snapshot_seed<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        rpc_url: String,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump
+            .verify_v3_snapshot_seed(py, address, rpc_url, block_number)
+    }
+
+    /// Verify a single V4 pool's pinned snapshot seed against on-chain@snapshot
+    /// block (CBCH6H — V4 twin of `verify_v3_snapshot_seed`).
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (pool_manager_address, pool_id_hex, rpc_url, state_view_address, block_number))]
+    fn verify_v4_snapshot_seed<'py>(
+        &self,
+        py: Python<'py>,
+        pool_manager_address: String,
+        pool_id_hex: String,
+        rpc_url: String,
+        state_view_address: String,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump.verify_v4_snapshot_seed(
+            py,
+            pool_manager_address,
+            pool_id_hex,
+            rpc_url,
+            state_view_address,
+            block_number,
+        )
+    }
+
+    /// Verify a single V3 pool's **pinned post-drain** `tick_data` against
+    /// on-chain@**pinned block** (step-2 of the two-step verify — the
+    /// rolling-start race fix, twin of `verify_v3_snapshot_seed`). The block
+    /// is the one captured atomically with the drain inside
+    /// `pin_v3_post_drain_snapshot` (the `update_block` at pin time) — NOT a
+    /// caller-supplied constant; for an active pool on a slow `build_paths`,
+    /// pumping Mint/Burn events land at blocks PAST the start()-time
+    /// `verify_backfill_block`, and verifying against that constant
+    /// fabricated a mismatch and crashed the bot (2026-06-29). Delegates to
+    /// the shared `PumpState`.
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (address, rpc_url))]
+    fn verify_v3_post_drain_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        rpc_url: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump
+            .verify_v3_post_drain_snapshot(py, address, rpc_url)
+    }
+
+    /// Verify a single V4 pool's **pinned post-drain** `tick_data` against
+    /// on-chain@**pinned block** (step-2 of the two-step verify — V4 twin of
+    /// `verify_v3_post_drain_snapshot`).
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (pool_manager_address, pool_id_hex, rpc_url, state_view_address))]
+    fn verify_v4_post_drain_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        pool_manager_address: String,
+        pool_id_hex: String,
+        rpc_url: String,
+        state_view_address: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump.verify_v4_post_drain_snapshot(
+            py,
+            pool_manager_address,
+            pool_id_hex,
+            rpc_url,
+            state_view_address,
+        )
+    }
+
     /// Verify a single V3 pool's liquidity map against on-chain state.
     ///
     /// Takes a pool address and verifies the `tick_data` at the given block.
@@ -137,8 +220,9 @@ impl PyUniswapArbEngine {
                 )));
             };
             let mut map = std::collections::HashMap::new();
-            if let Some(pool) = core.get_v3_pool(key) {
-                map.insert(key, pool.clone());
+            if let (Some(identity), Some(pool)) = (core.get_v3_identity(key), core.get_v3_pool(key))
+            {
+                map.insert(key, (*identity, pool.clone()));
             }
             map
         };
@@ -202,7 +286,7 @@ impl PyUniswapArbEngine {
             // V4 pools are registered with the actual pool_manager address,
             // not ZERO. Fallback: scan all V4 pools for matching pool_id.
             for (key, pool) in core.v4_pools_snapshot() {
-                if pool.pool_id == pool_id {
+                if pool.0.pool_id == pool_id {
                     return Some(key);
                 }
             }
@@ -211,8 +295,10 @@ impl PyUniswapArbEngine {
 
         let v4_pools = if let Some(fwd_key) = v4_key {
             let mut map = std::collections::HashMap::new();
-            if let Some(pool) = core.get_v4_pool(fwd_key) {
-                map.insert(fwd_key, pool.clone());
+            if let (Some(identity), Some(pool)) =
+                (core.get_v4_identity(fwd_key), core.get_v4_pool(fwd_key))
+            {
+                map.insert(fwd_key, (identity.clone(), pool.clone()));
             }
             map
         } else {

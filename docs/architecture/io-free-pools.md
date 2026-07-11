@@ -205,7 +205,7 @@ class V2PoolBuilder:
     def build(self, pool_address, *, chain_id, ...):
         provider = self._connections.get_provider(chain_id)  # Builder handles I/O
         ...
-        pool = LiquidityPool(
+        pool = UniswapV2Pool(
             address=pool_address,
             token0=token0, token1=token1,
             reserves_token0=reserves0, reserves_token1=reserves1,
@@ -358,7 +358,6 @@ Pools participating in the Rust solver cache implement the `CacheablePool` proto
 
 ## References
 
-- `src/degenbot/curve/CONTEXT.md` — Curve domain terminology
 - `src/degenbot/curve/types.py` — CurveDataProvider protocol, DyCalculationInputs dataclass, DyCalculator protocol definitions
 - `src/degenbot/types/pool_protocols.py` — Pool simulation and cacheable protocols
 - `plans/completed/017-v2-v3-io-free-migration.md` — Plan to complete ADR-001 Phase 3 (complete)

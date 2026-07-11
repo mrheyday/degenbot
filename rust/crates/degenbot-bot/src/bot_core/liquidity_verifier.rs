@@ -6,13 +6,13 @@
 //! verified here — it would always be stale. The map is only updated by
 //! Mint/Burn (V3) or `ModifyLiquidity` (V4) events, which is what we validate.
 //!
-//! This is the {Slot0 Head / Tick Bookkeeping Map} split (see `rust/CONTEXT.md`
-//! and ADR-004): the live variants (`verify_v3_pool` / `verify_v4_pool`) take
-//! `&V3PoolState` / `&V4PoolState` and recover the "don't read slot0" rule
-//! from this module doc; ADR-004 introduces a `TickMap` trait that narrows
-//! these to take `&impl TickMap`, carrying the rule in the type system. The
-//! snapshot-block variants (`verify_v3_liquidity_map` / `verify_v4_liquidity_map`)
-//! already take a typed `&HashMap<i32, TickInfo>` + `Address` + block — the
+//! This is the {Slot0 Head / Tick Bookkeeping Map} split (see ADR-004): the
+//! live variants (`verify_v3_pool` / `verify_v4_pool`) take `&V3PoolState` /
+//! `&V4PoolState` and recover the "don't read slot0" rule from this module
+//! doc; ADR-004 introduces a `TickMap` trait that narrows these to take
+//! `&impl TickMap`, carrying the rule in the type system. The snapshot-block
+//! variants (`verify_v3_liquidity_map` / `verify_v4_liquidity_map`) already
+//! take a typed `&HashMap<i32, TickInfo>` + `Address` + block — the
 //! typed-boundary precedent ADR-004 generalizes.
 //!
 //! - **V3**: `pool.tickBitmap(word)` discovers populated words,
@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use alloy::dyn_abi::DynSolValue;
 use alloy::primitives::{Address, Bytes, B256, I256, U256};
 
-use crate::bot_core::{TickMap, V3PoolState, V4PoolState};
+use crate::bot_core::{TickMap, V3PoolIdentity, V3PoolState, V4PoolIdentity, V4PoolState};
+use degenbot_rpc::multicall3::{multicall3_batch, MulticallResult};
 use degenbot_rpc::provider::AlloyProvider;
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,13 @@ const fn tick_bitmap_position(compressed_tick: i32) -> (i16, u8) {
 /// This is used for the snapshot-block verification: compare the DB-derived
 /// `tick_data` against on-chain at the snapshot block, before any buffer events
 /// are applied. Catches snapshot loading/serialization bugs.
+///
+/// # Panics
+///
+/// Panics if a tick in `tick_data` is absent from the internally-built
+/// `ticks()` batch (logically impossible — the batch is built from
+/// `tick_data.keys()` — so a panic indicates a logic bug, not bad input).
+///
 /// # Errors
 ///
 /// Returns `Err(VerificationMismatch)` if any tick's `liquidityGross` or
@@ -162,13 +170,41 @@ pub async fn verify_v3_liquidity_map<S: std::hash::BuildHasher>(
     tick_data: &HashMap<i32, crate::bot_core::TickInfo, S>,
     block_number: u64,
 ) -> Result<(), LiquidityVerifyError> {
+    let block_tag = format!("block={block_number}");
+    // Batch-fetch all `ticks(tick)` in ONE Multicall3 `aggregate3` eth_call.
+    let mut ticks: Vec<i32> = tick_data.keys().copied().collect();
+    ticks.sort_unstable();
+    let ticks_calls: Vec<(Address, Bytes)> = ticks
+        .iter()
+        .map(|&tick_idx| {
+            (
+                pool_address,
+                encode_calldata(
+                    V3_TICKS_SELECTOR,
+                    &[DynSolValue::Int(
+                        I256::unchecked_from(i128::from(tick_idx)),
+                        24,
+                    )],
+                ),
+            )
+        })
+        .collect();
+    let results = multicall3_batch(provider, &ticks_calls, Some(block_number))
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!("V3 pool {pool_address} {block_tag}: ticks batch failed: {e}"),
+        })?;
+    let on_chain: std::collections::HashMap<i32, &MulticallResult> =
+        ticks.iter().copied().zip(&results).collect();
     for (&tick_idx, our_info) in tick_data {
         let our_gross = our_info.liquidity_gross.to::<u128>();
         let our_net: i128 = our_info.liquidity_net.try_into().unwrap_or_default();
-
+        let result = on_chain
+            .get(&tick_idx)
+            .copied()
+            .expect("tick in tick_data is in the batch");
         let (on_chain_gross, on_chain_net) =
-            call_v3_ticks(provider, pool_address, tick_idx, Some(block_number)).await?;
-
+            decode_v3_ticks_result(result, pool_address, tick_idx, &block_tag)?;
         if our_gross != on_chain_gross || our_net != on_chain_net {
             return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
                 message: format!(
@@ -189,6 +225,20 @@ pub async fn verify_v3_liquidity_map<S: std::hash::BuildHasher>(
 ///
 /// Returns `Err(VerificationMismatch)` if any tick's `liquidityGross` or
 /// `liquidityNet` differs from on-chain.
+/// This is used for the snapshot-block verification: compare the DB-derived
+/// `tick_data` against on-chain at the snapshot block, before any buffer events
+/// are applied. Catches snapshot loading/serialization bugs.
+///
+/// # Panics
+///
+/// Panics if a tick in `tick_data` is absent from the internally-built
+/// `getTickLiquidity` batch (logically impossible — the batch is built from
+/// `tick_data.keys()` — so a panic indicates a logic bug, not bad input).
+///
+/// # Errors
+///
+/// Returns `Err(VerificationMismatch)` if any tick's `liquidityGross` or
+/// `liquidityNet` differs from on-chain.
 pub async fn verify_v4_liquidity_map<S: std::hash::BuildHasher>(
     provider: &AlloyProvider,
     state_view: Address,
@@ -196,19 +246,44 @@ pub async fn verify_v4_liquidity_map<S: std::hash::BuildHasher>(
     tick_data: &HashMap<i32, crate::bot_core::TickInfo, S>,
     block_number: u64,
 ) -> Result<(), LiquidityVerifyError> {
+    let pool_id_hex = degenbot_core::hex_utils::encode_hex(&pool_id);
+    let block_tag = format!("block={block_number}");
+    // Batch all `StateView.getTickLiquidity(poolId, tick)` calls in ONE
+    // Multicall3 `aggregate3` eth_call (replacing one serial eth_call per tick).
+    let mut ticks: Vec<i32> = tick_data.keys().copied().collect();
+    ticks.sort_unstable();
+    let calls: Vec<(Address, Bytes)> = ticks
+        .iter()
+        .map(|&tick_idx| {
+            (
+                state_view,
+                encode_calldata(
+                    STATE_VIEW_GET_TICK_LIQUIDITY_SELECTOR,
+                    &[
+                        DynSolValue::FixedBytes(B256::from(pool_id), 32),
+                        DynSolValue::Int(I256::unchecked_from(i128::from(tick_idx)), 24),
+                    ],
+                ),
+            )
+        })
+        .collect();
+    let results = multicall3_batch(provider, &calls, Some(block_number))
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!(
+                "V4 pool {pool_id_hex} {block_tag}: getTickLiquidity batch failed: {e}"
+            ),
+        })?;
+    let on_chain: HashMap<i32, &MulticallResult> = ticks.iter().copied().zip(&results).collect();
     for (&tick_idx, our_info) in tick_data {
         let our_gross = our_info.liquidity_gross.to::<u128>();
         let our_net: i128 = our_info.liquidity_net.try_into().unwrap_or_default();
-
-        let (on_chain_gross, on_chain_net) = call_state_view_tick_liquidity(
-            provider,
-            state_view,
-            pool_id,
-            tick_idx,
-            Some(block_number),
-        )
-        .await?;
-
+        let result = on_chain
+            .get(&tick_idx)
+            .copied()
+            .expect("tick in tick_data is in the batch");
+        let (on_chain_gross, on_chain_net) =
+            decode_v4_tick_liquidity_result(result, &pool_id_hex, &block_tag, tick_idx)?;
         if our_gross != on_chain_gross || our_net != on_chain_net {
             let pool_id_hex = degenbot_core::hex_utils::encode_hex(&pool_id);
             return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
@@ -236,7 +311,7 @@ pub async fn verify_v4_liquidity_map<S: std::hash::BuildHasher>(
 pub async fn verify_v3_pools<S: std::hash::BuildHasher>(
     provider: &AlloyProvider,
     _tick_lens: Address, // Kept for API compatibility; not used
-    pools: &HashMap<u64, V3PoolState, S>,
+    pools: &HashMap<u64, (V3PoolIdentity, V3PoolState), S>,
     block_number: Option<u64>,
 ) -> Result<(), LiquidityVerifyError> {
     for pool in pools.values() {
@@ -245,6 +320,7 @@ pub async fn verify_v3_pools<S: std::hash::BuildHasher>(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn verify_v3_pool<T: TickMap + ?Sized>(
     provider: &AlloyProvider,
     pool: &T,
@@ -265,7 +341,7 @@ async fn verify_v3_pool<T: TickMap + ?Sized>(
     };
 
     // 1. Discover on-chain tick bitmap words
-    // Scan words from our tick_data plus ±2 around the current tick
+    // Scan words from our tick_data plus ±2 around the current tick.
     let mut words_to_check: std::collections::HashSet<i16> = std::collections::HashSet::new();
     for &tick_idx in tick_data.keys() {
         let compressed = compress_tick(tick_idx, tick_spacing);
@@ -277,35 +353,45 @@ async fn verify_v3_pool<T: TickMap + ?Sized>(
     for w in (current_word - 2)..=(current_word + 2) {
         words_to_check.insert(w);
     }
+    // Deterministic ordering (sorted ascending) so the Multicall3 sub-call
+    // order — and thus the result-to-word mapping — is reproducible (also aids
+    // caching/replay). Sort once, use everywhere.
+    let mut words: Vec<i16> = words_to_check.into_iter().collect();
+    words.sort_unstable();
 
-    // Collect all on-chain tick indices from bitmap scanning
+    // Batch ALL `tickBitmap(word)` calls into ONE Multicall3 `aggregate3`
+    // eth_call (replacing one serial eth_call per word). Reverted sub-call →
+    // hard Rpc error (verified is a hard gate — a reverted bitmap read is
+    // genuine RPC/contract trouble, not a zero bitmap).
+    let bitmap_calls: Vec<(Address, Bytes)> = words
+        .iter()
+        .map(|&word| {
+            (
+                pool_addr,
+                encode_calldata(
+                    V3_TICK_BITMAP_SELECTOR,
+                    &[DynSolValue::Int(
+                        I256::unchecked_from(i128::from(i64::from(word))),
+                        16,
+                    )],
+                ),
+            )
+        })
+        .collect();
+    let bitmap_results = multicall3_batch(provider, &bitmap_calls, block_number)
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!("V3 pool {pool_addr} {block_tag}: tickBitmap batch failed: {e}"),
+        })?;
+
+    // Collect all on-chain tick indices from bitmap scanning.
     let mut on_chain_tick_indices: std::collections::HashSet<i32> =
         std::collections::HashSet::new();
-
-    for word in &words_to_check {
-        // Encode: tickBitmap(int16)
-        let calldata = encode_calldata(
-            V3_TICK_BITMAP_SELECTOR,
-            &[DynSolValue::Int(
-                I256::unchecked_from(i128::from(i64::from(*word))),
-                16,
-            )],
-        );
-
-        let result = provider
-            .eth_call(&pool_addr, calldata, block_number)
-            .await
-            .map_err(|e| LiquidityVerifyError::Rpc {
-                message: format!(
-                    "V3 pool {pool_addr} {block_tag}: tickBitmap({word}) RPC call failed: {e}"
-                ),
-            })?;
-
-        let bitmap_val = decode_uint256(&result[0..32]);
+    for (word, result) in words.iter().zip(&bitmap_results) {
+        let bitmap_val = decode_v3_bitmap_result(result, pool_addr, *word, &block_tag)?;
         if bitmap_val.is_zero() {
             continue;
         }
-
         for bit in 0..256u64 {
             // SAFETY: bit is 0..255, so cast to usize is safe on any target.
             #[allow(clippy::cast_possible_truncation)]
@@ -319,13 +405,55 @@ async fn verify_v3_pool<T: TickMap + ?Sized>(
         }
     }
 
-    // 2. Verify each tick in our tick_data by calling pool.ticks() directly
+    // 2 + 3. Batch-fetch `ticks(tick)` for the UNION of engine ticks and
+    // on-chain-discovered ticks in ONE Multicall3 `aggregate3` eth_call, then
+    // compare. This folds the old phase-3 "re-fetch the first missing on-chain
+    // tick" into the same batch (its lg/ln is already in the result set).
+    let mut ticks_to_fetch: std::collections::HashSet<i32> = on_chain_tick_indices.clone();
+    for &tick_idx in tick_data.keys() {
+        ticks_to_fetch.insert(tick_idx);
+    }
+    let mut ticks: Vec<i32> = ticks_to_fetch.into_iter().collect();
+    ticks.sort_unstable();
+    let ticks_calls: Vec<(Address, Bytes)> = ticks
+        .iter()
+        .map(|&tick_idx| {
+            (
+                pool_addr,
+                encode_calldata(
+                    V3_TICKS_SELECTOR,
+                    &[DynSolValue::Int(
+                        I256::unchecked_from(i128::from(tick_idx)),
+                        24,
+                    )],
+                ),
+            )
+        })
+        .collect();
+    let ticks_results = multicall3_batch(provider, &ticks_calls, block_number)
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!("V3 pool {pool_addr} {block_tag}: ticks batch failed: {e}"),
+        })?;
+    // tick_index → (gross, net) from the batch (for O(1) lookup in the
+    // comparison loop). unwrap_or_default() is unreachable: `ticks` and
+    // `ticks_results` are the same length (multicall3_batch returns one
+    // result per call, in order).
+    let on_chain_ticks: std::collections::HashMap<i32, (u128, i128)> = ticks
+        .iter()
+        .zip(&ticks_results)
+        .map(|(&tick_idx, result)| {
+            let (gross, net) = decode_v3_ticks_result(result, pool_addr, tick_idx, &block_tag)?;
+            Ok::<_, LiquidityVerifyError>((tick_idx, (gross, net)))
+        })
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+
+    // 2. Verify each tick in our tick_data against the batched on-chain values.
     for (&tick_idx, our_info) in tick_data {
         let our_gross = our_info.liquidity_gross.to::<u128>();
         let our_net: i128 = our_info.liquidity_net.try_into().unwrap_or_default();
-
         let (on_chain_gross, on_chain_net) =
-            call_v3_ticks(provider, pool_addr, tick_idx, block_number).await?;
+            on_chain_ticks.get(&tick_idx).copied().unwrap_or((0, 0));
 
         if our_gross != on_chain_gross {
             // TEMP DEBUG: dump journal depth + update_block for the failing pool
@@ -350,14 +478,15 @@ async fn verify_v3_pool<T: TickMap + ?Sized>(
             }));
         }
 
-        // Remove from on-chain set (we've verified this tick)
+        // Remove from on-chain set (we've verified this tick).
         on_chain_tick_indices.remove(&tick_idx);
     }
 
-    // 3. Check for on-chain ticks we're missing
+    // 3. Check for on-chain ticks we're missing (any remaining discovered tick
+    // not in engine). Its (lg, ln) is already in the batched map — no extra RPC.
     if let Some(&tick_idx) = on_chain_tick_indices.iter().next() {
         let (on_chain_gross, on_chain_net) =
-            call_v3_ticks(provider, pool_addr, tick_idx, block_number).await?;
+            on_chain_ticks.get(&tick_idx).copied().unwrap_or((0, 0));
         return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
             message: format!(
                 "V3 pool {pool_addr} {block_tag}: tick {tick_idx} exists on-chain (lg={on_chain_gross}, ln={on_chain_net}) but NOT in engine"
@@ -368,88 +497,128 @@ async fn verify_v3_pool<T: TickMap + ?Sized>(
     Ok(())
 }
 
-/// Call `ticks(int24)` on a V3 pool and return `(liquidityGross, liquidityNet)`.
-async fn call_v3_ticks(
-    provider: &AlloyProvider,
+/// Decode a `tickBitmap(word)` `Multicall3` sub-call result into the bitmap
+/// word. Preserves the pre-multicall hard-error contract: a reverted sub-call
+/// (`success == false`) is a hard `LiquidityVerifyError::Rpc` (the verifier is
+/// a hard gate — a reverted bitmap read is genuine RPC/contract trouble, not
+/// a zero bitmap). In practice `tickBitmap()` never reverts for a valid int16,
+/// so this only fires on real trouble.
+fn decode_v3_bitmap_result(
+    result: &MulticallResult,
     pool_addr: Address,
-    tick: i32,
-    block_number: Option<u64>,
-) -> Result<(u128, i128), LiquidityVerifyError> {
-    let block_tag = match block_number {
-        Some(b) => format!("block={b}"),
-        None => "block=pending".to_string(),
-    };
-    let calldata = encode_calldata(
-        V3_TICKS_SELECTOR,
-        &[DynSolValue::Int(I256::unchecked_from(i128::from(tick)), 24)],
-    );
-
-    let result = provider
-        .eth_call(&pool_addr, calldata, block_number)
-        .await
-        .map_err(|e| LiquidityVerifyError::Rpc {
-            message: format!("V3 pool {pool_addr} {block_tag}: ticks({tick}) RPC call failed: {e}"),
-        })?;
-
-    // ticks() returns (uint128 liquidityGross, int128 liquidityNet, ...)
-    // We only need the first two fields.
-    if result.len() < 64 {
+    word: i16,
+    block_tag: &str,
+) -> Result<U256, LiquidityVerifyError> {
+    if !result.success {
+        return Err(LiquidityVerifyError::Rpc {
+            message: format!(
+                "V3 pool {pool_addr} {block_tag}: tickBitmap({word}) RPC call failed: reverted"
+            ),
+        });
+    }
+    if result.return_data.len() < 32 {
         return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
             message: format!(
-                "V3 pool {pool_addr} {block_tag}: ticks({tick}) returned {} bytes, expected at least 64",
-                result.len()
+                "V3 pool {pool_addr} {block_tag}: tickBitmap({word}) returned {} bytes, expected at least 32",
+                result.return_data.len()
             ),
         }));
     }
+    Ok(decode_uint256(&result.return_data[0..32]))
+}
 
-    let lg = decode_uint128(&result[0..32]);
-    let ln = decode_int128(&result[32..64]);
+/// Decode a `ticks(tick)` `Multicall3` sub-call result into
+/// `(liquidityGross, liquidityNet)`. Preserves the pre-multicall hard-error
+/// contract: a reverted sub-call is a hard `Rpc` error (the verifier is a hard
+/// gate). A too-short successful return is a `Mismatch` (byte-identical to
+/// the old `call_v3_ticks` inner check).
+fn decode_v3_ticks_result(
+    result: &MulticallResult,
+    pool_addr: Address,
+    tick: i32,
+    block_tag: &str,
+) -> Result<(u128, i128), LiquidityVerifyError> {
+    if !result.success {
+        return Err(LiquidityVerifyError::Rpc {
+            message: format!(
+                "V3 pool {pool_addr} {block_tag}: ticks({tick}) RPC call failed: reverted"
+            ),
+        });
+    }
+    // ticks() returns (uint128 liquidityGross, int128 liquidityNet, ...)
+    // We only need the first two fields.
+    if result.return_data.len() < 64 {
+        return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
+            message: format!(
+                "V3 pool {pool_addr} {block_tag}: ticks({tick}) returned {} bytes, expected at least 64",
+                result.return_data.len()
+            ),
+        }));
+    }
+    let lg = decode_uint128(&result.return_data[0..32]);
+    let ln = decode_int128(&result.return_data[32..64]);
     Ok((lg, ln))
 }
 
 /// Call `StateView.getTickLiquidity(bytes32,int24)` and return `(liquidityGross, liquidityNet)`.
-async fn call_state_view_tick_liquidity(
-    provider: &AlloyProvider,
-    state_view: Address,
-    pool_id: [u8; 32],
-    tick: i32,
-    block_number: Option<u64>,
-) -> Result<(u128, i128), LiquidityVerifyError> {
-    let pool_id_hex = degenbot_core::hex_utils::encode_hex(&pool_id);
-    let block_tag = match block_number {
-        Some(b) => format!("block={b}"),
-        None => "block=pending".to_string(),
-    };
-
-    let calldata = encode_calldata(
-        STATE_VIEW_GET_TICK_LIQUIDITY_SELECTOR,
-        &[
-            DynSolValue::FixedBytes(B256::from(pool_id), 32),
-            DynSolValue::Int(I256::unchecked_from(i128::from(tick)), 24),
-        ],
-    );
-
-    let result = provider
-        .eth_call(&state_view, calldata, block_number)
-        .await
-        .map_err(|e| LiquidityVerifyError::Rpc {
+/// Decode a `StateView.getTickBitmap(poolId, word)` Multicall3 sub-call result
+/// into the bitmap word. Preserves the hard-error contract: a reverted
+/// sub-call (`success == false`) is a hard `Rpc` error (the verifier is a hard
+/// gate — a reverted bitmap read is genuine RPC/contract trouble, not a zero
+/// bitmap). Adds a length check the old `fetch_v4_tick_bitmap` lacked (it
+/// index-panicked on a <32-byte return).
+fn decode_v4_bitmap_result(
+    result: &MulticallResult,
+    pool_id_hex: &str,
+    block_tag: &str,
+    word: i16,
+) -> Result<U256, LiquidityVerifyError> {
+    if !result.success {
+        return Err(LiquidityVerifyError::Rpc {
             message: format!(
-                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick}) RPC call failed: {e}"
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickBitmap({word}) RPC call failed: reverted"
             ),
-        })?;
-
-    if result.len() < 64 {
+        });
+    }
+    if result.return_data.len() < 32 {
         return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
             message: format!(
-                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick}) returned {} bytes, expected 64",
-                result.len()
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickBitmap({word}) returned {} bytes, expected at least 32",
+                result.return_data.len()
             ),
         }));
     }
+    Ok(decode_uint256(&result.return_data[0..32]))
+}
 
-    let lg = decode_uint128(&result[0..32]);
-    let ln = decode_int128(&result[32..64]);
-    Ok((lg, ln))
+/// Decode a `StateView.getTickLiquidity(poolId, tick)` Multicall3 sub-call
+/// result into `(liquidityGross, liquidityNet)`. Preserves the hard-error
+/// contract: a reverted sub-call is a hard `Rpc` error; a too-short successful
+/// return is the byte-identical `Mismatch` 'returned N bytes, expected 64'.
+fn decode_v4_tick_liquidity_result(
+    result: &MulticallResult,
+    pool_id_hex: &str,
+    block_tag: &str,
+    tick: i32,
+) -> Result<(u128, i128), LiquidityVerifyError> {
+    if !result.success {
+        return Err(LiquidityVerifyError::Rpc {
+            message: format!(
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick}) RPC call failed: reverted"
+            ),
+        });
+    }
+    if result.return_data.len() < 64 {
+        return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
+            message: format!(
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick}) returned {} bytes, expected 64",
+                result.return_data.len()
+            ),
+        }));
+    }
+    let gross = decode_uint128(&result.return_data[0..32]);
+    let net = decode_int128(&result.return_data[32..64]);
+    Ok((gross, net))
 }
 
 // ---------------------------------------------------------------------------
@@ -470,14 +639,14 @@ async fn call_state_view_tick_liquidity(
 pub async fn verify_v4_pools<S: std::hash::BuildHasher>(
     provider: &AlloyProvider,
     state_view: Address,
-    pools: &HashMap<u64, V4PoolState, S>,
+    pools: &HashMap<u64, (V4PoolIdentity, V4PoolState), S>,
     block_number: Option<u64>,
 ) -> Result<(), LiquidityVerifyError> {
     // Deduplicate by pool_id — both forward and reverse orientations share the same
     // on-chain state, so we only need to verify each pool_id once.
-    let mut seen_pool_ids: HashMap<[u8; 32], &V4PoolState> = HashMap::new();
+    let mut seen_pool_ids: HashMap<[u8; 32], &(V4PoolIdentity, V4PoolState)> = HashMap::new();
     for pool in pools.values() {
-        seen_pool_ids.entry(pool.pool_id).or_insert(pool);
+        seen_pool_ids.entry(pool.0.pool_id).or_insert(pool);
     }
 
     for (pool_id, pool) in seen_pool_ids {
@@ -512,47 +681,102 @@ async fn verify_v4_pool<T: TickMap + ?Sized>(
     // 1. Discover on-chain populated bitmap words
     let mut words_to_check: std::collections::HashSet<i16> = std::collections::HashSet::new();
     collect_bitmap_words(tick_data, active_tick, tick_spacing, &mut words_to_check);
+    // Deterministic ordering (sorted ascending) so the Multicall3 sub-call
+    // order — and thus the result-to-word mapping — is reproducible.
+    let mut words: Vec<i16> = words_to_check.into_iter().collect();
+    words.sort_unstable();
 
-    let mut on_chain_ticks: HashMap<i32, (u128, i128)> = HashMap::new();
+    // Batch ALL `StateView.getTickBitmap(poolId, word)` calls into ONE
+    // Multicall3 `aggregate3` eth_call. A reverted sub-call → hard Rpc error
+    // (the verifier is a hard gate). Reverted sub-calls do NOT mask a zero
+    // bitmap (genuine RPC/contract trouble, not an empty word).
+    let bitmap_calls: Vec<(Address, Bytes)> = words
+        .iter()
+        .map(|&word| {
+            (
+                state_view,
+                encode_calldata(
+                    STATE_VIEW_GET_TICK_BITMAP_SELECTOR,
+                    &[
+                        DynSolValue::FixedBytes(B256::from(pool_id_bytes), 32),
+                        DynSolValue::Int(I256::unchecked_from(i128::from(i64::from(word))), 16),
+                    ],
+                ),
+            )
+        })
+        .collect();
+    let bitmap_results = multicall3_batch(provider, &bitmap_calls, block_number)
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!(
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickBitmap batch failed: {e}"
+            ),
+        })?;
 
-    for word in &words_to_check {
-        let bitmap_val = fetch_v4_tick_bitmap(
-            provider,
-            state_view,
-            pool_id_bytes,
-            pool_id_hex.as_str(),
-            block_tag.as_str(),
-            *word,
-            block_number,
-        )
-        .await?;
-
+    // Collect the on-chain tick indices (defer ALL `getTickLiquidity` fetches
+    // to phase 2 — today's code fetches liquidity per-bit INSIDE this loop,
+    // which is the biggest single fan-out: a dense word yields up to 256 serial
+    // calls. Here we only discover tick indices; phase 2 batches every
+    // getTickLiquidity across all words at once.)
+    let mut on_chain_tick_indices: std::collections::HashSet<i32> =
+        std::collections::HashSet::new();
+    for (word, result) in words.iter().zip(&bitmap_results) {
+        let bitmap_val = decode_v4_bitmap_result(result, &pool_id_hex, &block_tag, *word)?;
         if bitmap_val.is_zero() {
             continue;
         }
-
-        // Enumerate set bits in the bitmap
         #[allow(clippy::cast_possible_truncation)]
         for bit in 0..256u64 {
             if bitmap_val.bit(bit as usize) {
                 let compressed_tick = i32::from(*word) * 256 + i32::try_from(bit).unwrap();
                 let tick_i32 = compressed_tick * tick_spacing;
-
-                let (gross, net) = fetch_v4_tick_liquidity(
-                    provider,
-                    state_view,
-                    pool_id_bytes,
-                    pool_id_hex.as_str(),
-                    block_tag.as_str(),
-                    tick_i32,
-                    block_number,
-                )
-                .await?;
-
-                on_chain_ticks.insert(tick_i32, (gross, net));
+                on_chain_tick_indices.insert(tick_i32);
             }
         }
     }
+
+    // 2 + 3. Batch-fetch `StateView.getTickLiquidity(poolId, tick)` for the UNION
+    // of engine ticks and on-chain-discovered ticks in ONE Multicall3
+    // `aggregate3` eth_call, then compare. Folds today's phase-3 "detect
+    // missing on-chain tick" into the same batch (its (lg,ln) is already
+    // fetched — today it re-calls getTickLiquidity lazily via the map).
+    let mut ticks_to_fetch: std::collections::HashSet<i32> = on_chain_tick_indices.clone();
+    for &tick_idx in tick_data.keys() {
+        ticks_to_fetch.insert(tick_idx);
+    }
+    let mut ticks: Vec<i32> = ticks_to_fetch.into_iter().collect();
+    ticks.sort_unstable();
+    let ticks_calls: Vec<(Address, Bytes)> = ticks
+        .iter()
+        .map(|&tick_idx| {
+            (
+                state_view,
+                encode_calldata(
+                    STATE_VIEW_GET_TICK_LIQUIDITY_SELECTOR,
+                    &[
+                        DynSolValue::FixedBytes(B256::from(pool_id_bytes), 32),
+                        DynSolValue::Int(I256::unchecked_from(i128::from(tick_idx)), 24),
+                    ],
+                ),
+            )
+        })
+        .collect();
+    let ticks_results = multicall3_batch(provider, &ticks_calls, block_number)
+        .await
+        .map_err(|e| LiquidityVerifyError::Rpc {
+            message: format!(
+                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity batch failed: {e}"
+            ),
+        })?;
+    let on_chain_ticks: HashMap<i32, (u128, i128)> = ticks
+        .iter()
+        .zip(&ticks_results)
+        .map(|(&tick_idx, result)| {
+            let (gross, net) =
+                decode_v4_tick_liquidity_result(result, &pool_id_hex, &block_tag, tick_idx)?;
+            Ok::<_, LiquidityVerifyError>((tick_idx, (gross, net)))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
 
     // 2. Compare every tick in our tick_data against on-chain
     for (&tick_idx, our_info) in tick_data {
@@ -617,77 +841,6 @@ fn collect_bitmap_words<S: std::hash::BuildHasher>(
     }
 }
 
-/// Fetch a V4 tick bitmap word from the `StateView` contract.
-async fn fetch_v4_tick_bitmap(
-    provider: &AlloyProvider,
-    state_view: Address,
-    pool_id_bytes: [u8; 32],
-    pool_id_hex: &str,
-    block_tag: &str,
-    word: i16,
-    block_number: Option<u64>,
-) -> Result<U256, LiquidityVerifyError> {
-    let bitmap_calldata = encode_calldata(
-        STATE_VIEW_GET_TICK_BITMAP_SELECTOR,
-        &[
-            DynSolValue::FixedBytes(B256::from(pool_id_bytes), 32),
-            DynSolValue::Int(I256::unchecked_from(i128::from(i64::from(word))), 16),
-        ],
-    );
-
-    let bitmap_result = provider
-        .eth_call(&state_view, bitmap_calldata, block_number)
-        .await
-        .map_err(|e| LiquidityVerifyError::Rpc {
-            message: format!(
-                "V4 pool 0x{pool_id_hex} {block_tag}: getTickBitmap({word}) RPC call failed: {e}"
-            ),
-        })?;
-
-    Ok(decode_uint256(&bitmap_result[0..32]))
-}
-
-/// Fetch a V4 tick's `(liquidityGross, liquidityNet)` from the `StateView` contract.
-async fn fetch_v4_tick_liquidity(
-    provider: &AlloyProvider,
-    state_view: Address,
-    pool_id_bytes: [u8; 32],
-    pool_id_hex: &str,
-    block_tag: &str,
-    tick_i32: i32,
-    block_number: Option<u64>,
-) -> Result<(u128, i128), LiquidityVerifyError> {
-    let tick_liq_calldata = encode_calldata(
-        STATE_VIEW_GET_TICK_LIQUIDITY_SELECTOR,
-        &[
-            DynSolValue::FixedBytes(B256::from(pool_id_bytes), 32),
-            DynSolValue::Int(I256::unchecked_from(i128::from(tick_i32)), 24),
-        ],
-    );
-
-    let tick_liq_result = provider
-        .eth_call(&state_view, tick_liq_calldata, block_number)
-        .await
-        .map_err(|e| LiquidityVerifyError::Rpc {
-            message: format!(
-                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick_i32}) RPC call failed: {e}"
-            ),
-        })?;
-
-    if tick_liq_result.len() < 64 {
-        return Err(LiquidityVerifyError::Mismatch(VerificationMismatch {
-            message: format!(
-                "V4 pool 0x{pool_id_hex} {block_tag}: getTickLiquidity({tick_i32}) returned {} bytes, expected 64",
-                tick_liq_result.len()
-            ),
-        }));
-    }
-
-    let gross = decode_uint128(&tick_liq_result[0..32]);
-    let net = decode_int128(&tick_liq_result[32..64]);
-    Ok((gross, net))
-}
-
 // ---------------------------------------------------------------------------
 // ABI encoding helper
 // ---------------------------------------------------------------------------
@@ -733,6 +886,9 @@ fn decode_int128(word: &[u8]) -> i128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bot_core::TickInfo;
+    use alloy::transports::mock::Asserter;
+    use std::sync::Arc;
 
     // --- compress_tick tests ---
     // Solidity V4 TickBitmap.compress(tick, tickSpacing) floors toward -∞:
@@ -957,5 +1113,243 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Multicall3 batching integration tests (MockTransport) ---
+    //
+    // These pin the contract that `verify_v3_pool` folds the per-word
+    // `tickBitmap()` fan-out + the per-tick `ticks()` fan-out into ONE
+    // Multicall3 `aggregate3` eth_call per phase (2 total), instead of
+    // K_words + T_ticks serial round-trips. A revert on a batched sub-call is
+    // a hard `Rpc` error (the verifier is a hard gate). See task DHAZQF.
+
+    /// Minimal `TickMap` test double — owns a pool address, `tick_spacing`,
+    /// `active_tick` + a `tick_data` map. `verify_v3_pool<T: TickMap>` takes `&T`,
+    /// so this avoids constructing a full `V3PoolState`.
+    struct TestV3Pool {
+        address: Address,
+        tick_spacing: i32,
+        active_tick: i32,
+        tick_data: HashMap<i32, TickInfo>,
+    }
+
+    impl TickMap for TestV3Pool {
+        fn address(&self) -> Address {
+            self.address
+        }
+        fn tick_spacing(&self) -> i32 {
+            self.tick_spacing
+        }
+        fn active_tick(&self) -> i32 {
+            self.active_tick
+        }
+        fn tick_data(&self) -> &HashMap<i32, TickInfo> {
+            &self.tick_data
+        }
+    }
+
+    /// Build a mock `AlloyProvider` whose `Asserter` queue is preloaded with
+    /// `responses` (one JSON `result` per expected `eth_call`, FIFO). Mirrors the
+    /// `block_pump` mock-transport harness.
+    fn mock_provider(responses: Vec<String>) -> (AlloyProvider, Asserter) {
+        use alloy::network::Ethereum as NetEth;
+        use alloy::providers::{Provider, ProviderBuilder};
+        use alloy::rpc::client::ClientBuilder;
+        use alloy::transports::mock::MockTransport;
+        let asserter = Asserter::new();
+        for resp in responses {
+            asserter.push_success(&resp);
+        }
+        let client = ClientBuilder::default().transport(MockTransport::new(asserter.clone()), true);
+        let dyn_provider = ProviderBuilder::new().connect_client(client).erased();
+        let provider = AlloyProvider::from_provider(
+            Arc::new(dyn_provider) as Arc<dyn alloy::providers::Provider<NetEth>>
+        );
+        (provider, asserter)
+    }
+
+    /// Encode a Multicall3 `aggregate3` return payload — `(bool,bytes)[]` —
+    /// as a `0x`-prefixed hex string (the shape an `eth_call` result takes).
+    /// One `(success, return_data)` tuple per sub-call, in batch order.
+    fn encode_mc3_return(results: &[(bool, Vec<u8>)]) -> String {
+        let arr = DynSolValue::Array(
+            results
+                .iter()
+                .map(|(ok, data)| {
+                    DynSolValue::Tuple(vec![
+                        DynSolValue::Bool(*ok),
+                        DynSolValue::Bytes(data.clone()),
+                    ])
+                })
+                .collect(),
+        );
+        format!("0x{}", alloy::primitives::hex::encode(arr.abi_encode()))
+    }
+
+    /// 32-byte ABI word for a u256 bitmap value.
+    fn u256_word(val: u64) -> Vec<u8> {
+        U256::from(val).to_be_bytes::<32>().to_vec()
+    }
+
+    /// 64-byte `ticks()` return: `(uint128 liquidityGross, int128 liquidityNet)`
+    /// (the remaining tuple fields are irrelevant — the decoder reads bytes 0..64).
+    fn ticks_return(gross: u128, net: i128) -> Vec<u8> {
+        let mut buf = vec![0u8; 64];
+        buf[16..32].copy_from_slice(&gross.to_be_bytes());
+        buf[48..64].copy_from_slice(&net.to_be_bytes());
+        buf
+    }
+
+    /// tick → (gross, net) the mock on-chain state reports.
+    const TICK_0: (u128, i128) = (100, 50);
+    const TICK_60: (u128, i128) = (200, -30);
+
+    /// Build the bitmap-batch return for the 5-word ±2 scan around `active_tick=0`
+    /// with `tick_spacing=60` (words sorted ascending: [-2,-1,0,1,2]). Only word 0
+    /// has bits set (ticks 0 + 60 → bits 0 + 1 → bitmap value 3).
+    fn bitmap_batch_return() -> String {
+        // Sorted words: [-2, -1, 0, 1, 2].
+        encode_mc3_return(&[
+            (true, u256_word(0)), // word -2
+            (true, u256_word(0)), // word -1
+            (true, u256_word(3)), // word  0  → bits 0,1 (ticks 0, 60 @ spacing 60)
+            (true, u256_word(0)), // word  1
+            (true, u256_word(0)), // word  2
+        ])
+    }
+
+    /// Build the ticks-batch return for ticks sorted ascending [0, 60].
+    fn ticks_batch_return() -> String {
+        encode_mc3_return(&[
+            (true, ticks_return(TICK_0.0, TICK_0.1)),
+            (true, ticks_return(TICK_60.0, TICK_60.1)),
+        ])
+    }
+
+    fn tick_info(gross: u128, net: i128) -> TickInfo {
+        TickInfo {
+            liquidity_gross: alloy::primitives::U128::from(gross),
+            liquidity_net: alloy::primitives::I256::unchecked_from(net),
+            block: 0,
+        }
+    }
+
+    fn v3_pool_matching() -> TestV3Pool {
+        let mut tick_data = HashMap::new();
+        tick_data.insert(0, tick_info(TICK_0.0, TICK_0.1));
+        tick_data.insert(60, tick_info(TICK_60.0, TICK_60.1));
+        TestV3Pool {
+            address: Address::from([0xaau8; 20]),
+            tick_spacing: 60,
+            active_tick: 0,
+            tick_data,
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_v3_pool_batches_into_two_eth_calls() {
+        // Preload EXACTLY 2 responses (1 bitmap batch + 1 ticks batch). If
+        // verify_v3_pool makes any 3rd eth_call (e.g. still serial per-word /
+        // per-tick), the asserter queue empties → transport error → verify
+        // returns Err and the `is_ok()` assertion fails. If it makes FEWER,
+        // `read_q()` is non-empty after.
+        let (provider, asserter) = mock_provider(vec![bitmap_batch_return(), ticks_batch_return()]);
+        let pool = v3_pool_matching();
+
+        let result = verify_v3_pool(&provider, &pool, Some(42)).await;
+
+        assert!(
+            result.is_ok(),
+            "matching scenario must verify green: {result:?}"
+        );
+        assert!(
+            asserter.read_q().is_empty(),
+            "exactly 2 eth_calls expected (1 bitmap batch + 1 ticks batch); leftover responses: {}",
+            asserter.read_q().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_v3_pool_surfaces_gross_mismatch_byte_identical() {
+        // Same batched fetch, but the engine's tick-0 gross disagrees with the
+        // on-chain (mock) value → must surface the exact pre-multicall message.
+        let (provider, asserter) = mock_provider(vec![bitmap_batch_return(), ticks_batch_return()]);
+        let mut pool = v3_pool_matching();
+        pool.tick_data.get_mut(&0).unwrap().liquidity_gross =
+            alloy::primitives::U128::from(999u128); // ≠ on-chain TICK_0.0 (100)
+
+        let expected_addr = format!("{}", pool.address());
+        let err = verify_v3_pool(&provider, &pool, Some(42))
+            .await
+            .unwrap_err();
+        match err {
+            LiquidityVerifyError::Mismatch(m) => {
+                assert_eq!(
+                    m.message,
+                    format!("V3 pool {expected_addr} block=42: tick 0 liquidityGross mismatch — engine: 999, on-chain: 100")
+                );
+            }
+            other @ LiquidityVerifyError::Rpc { .. } => panic!("expected Mismatch, got {other:?}"),
+        }
+        // Both batches were still consumed (decode happens after fetch).
+        assert!(asserter.read_q().is_empty());
+    }
+
+    // --- V4 batching integration tests ---
+    //
+    // `verify_v4_pool` calls `StateView` (not the pool address) for both
+    // `getTickBitmap` + `getTickLiquidity`. The V4 fan-out today is the worst:
+    // phase 1 fetches `getTickLiquidity` per-bit INSIDE the bitmap loop (a dense
+    // word = up to 256 serial calls). The batched version defers ALL liquidity
+    // fetches to one phase-2 batch → 2 eth_calls total.
+
+    fn v4_pool_id() -> [u8; 32] {
+        [0xbbu8; 32]
+    }
+    fn v4_state_view() -> Address {
+        Address::from([0x55u8; 20])
+    }
+
+    #[tokio::test]
+    async fn verify_v4_pool_batches_into_two_eth_calls() {
+        let (provider, asserter) = mock_provider(vec![bitmap_batch_return(), ticks_batch_return()]);
+        let pool = v3_pool_matching();
+
+        let result =
+            verify_v4_pool(&provider, v4_state_view(), v4_pool_id(), &pool, Some(42)).await;
+
+        assert!(
+            result.is_ok(),
+            "matching V4 scenario must verify green: {result:?}"
+        );
+        assert!(
+            asserter.read_q().is_empty(),
+            "exactly 2 eth_calls expected (1 getTickBitmap batch + 1 getTickLiquidity batch); \
+             leftover responses: {}",
+            asserter.read_q().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_v4_pool_surfaces_gross_mismatch_byte_identical() {
+        let (provider, asserter) = mock_provider(vec![bitmap_batch_return(), ticks_batch_return()]);
+        let mut pool = v3_pool_matching();
+        pool.tick_data.get_mut(&0).unwrap().liquidity_gross =
+            alloy::primitives::U128::from(999u128); // ≠ on-chain TICK_0.0 (100)
+
+        let expected_pid = degenbot_core::hex_utils::encode_hex(&v4_pool_id());
+        let err = verify_v4_pool(&provider, v4_state_view(), v4_pool_id(), &pool, Some(42))
+            .await
+            .unwrap_err();
+        match err {
+            LiquidityVerifyError::Mismatch(m) => {
+                assert_eq!(
+                    m.message,
+                    format!("V4 pool 0x{expected_pid} block=42: tick 0 liquidityGross mismatch — engine: 999, on-chain: 100")
+                );
+            }
+            other @ LiquidityVerifyError::Rpc { .. } => panic!("expected Mismatch, got {other:?}"),
+        }
+        assert!(asserter.read_q().is_empty());
     }
 }

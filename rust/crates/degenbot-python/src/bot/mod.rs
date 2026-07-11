@@ -4,11 +4,13 @@
 //! relocates the other `bot` / `bot::pool` wrappers alongside.
 //! (ergo UG6FKN task WXHGOH.)
 
+pub mod deployments;
 pub mod dex_identity;
 pub mod engine;
 pub mod pool;
 pub mod pump;
 pub mod py_bot_io;
+pub mod subscriber;
 pub mod token;
 
 // === PyBot (moved from the former root `py_bot.rs`) ===
@@ -31,10 +33,11 @@ use crate::bot::token::PyErc20Token;
 use degenbot_bot::bot_core::state_history::JournalError;
 use degenbot_bot::bot_core::PoolTickCoverage;
 use degenbot_bot::bot_core::{
-    Bot, RegisterBalancerStablePoolParams, RegisterBalancerWeightedPoolParams,
-    RegisterCurvePoolParams, RegisterV2PoolParams, RegisterV3PoolParams, RegisterV4PoolParams,
-    V4PoolKey,
+    Bot, RegisterAerodromeV2PoolParams, RegisterBalancerStablePoolParams,
+    RegisterBalancerWeightedPoolParams, RegisterCurvePoolParams, RegisterV2PoolParams,
+    RegisterV3PoolParams, RegisterV4PoolParams, V4PoolKey,
 };
+use degenbot_uniswap::dex_identity::DexVariant;
 use pyo3::types::{PyDict, PyList};
 use pyo3::Bound;
 
@@ -202,6 +205,18 @@ impl PyBot {
         self.pump_state()?.resume()
     }
 
+    /// Stop the pump and signal the Rust core to clean up (ADR-006 D4).
+    ///
+    /// The symmetric teardown half of the `subscribe` → `backfill_from_snapshot`
+    /// → `resume` lifecycle. Sets the shutdown flag and aborts the spawned
+    /// pump task so a Ctrl-C exits promptly (the pump loop otherwise blocks
+    /// up to 60s on a silent WS stream). Idempotent — safe to call from both
+    /// the `__aexit__` path and a signal handler. Delegates to the shared
+    /// `PumpState`.
+    fn stop(&self, _py: Python<'_>) -> PyResult<()> {
+        self.pump_state()?.stop()
+    }
+
     /// Set the HTTP RPC URL used for verification (ADR-006 D4 T4).
     /// Delegates to the shared `PumpState`.
     #[pyo3(signature = (rpc_url))]
@@ -267,11 +282,90 @@ impl PyBot {
             .verify_v4_liquidity_maps(py, rpc_url, state_view_address, block_number)
     }
 
+    /// Verify a single V3 pool's pinned snapshot seed against on-chain@snapshot
+    /// block (CBCH6H — the rolling-start race fix). Step-1 of the two-step
+    /// verify at the registry drain seam routes here.
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (address, rpc_url, block_number))]
+    fn verify_v3_snapshot_seed<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        rpc_url: String,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump_state()?
+            .verify_v3_snapshot_seed(py, address, rpc_url, block_number)
+    }
+
+    /// Verify a single V4 pool's pinned snapshot seed against on-chain@snapshot
+    /// block (CBCH6H — V4 twin of `verify_v3_snapshot_seed`). Step-1 of the
+    /// two-step verify routes here.
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (pool_manager_address, pool_id_hex, rpc_url, state_view_address, block_number))]
+    fn verify_v4_snapshot_seed<'py>(
+        &self,
+        py: Python<'py>,
+        pool_manager_address: String,
+        pool_id_hex: String,
+        rpc_url: String,
+        state_view_address: String,
+        block_number: Option<u64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump_state()?.verify_v4_snapshot_seed(
+            py,
+            pool_manager_address,
+            pool_id_hex,
+            rpc_url,
+            state_view_address,
+            block_number,
+        )
+    }
+
+    /// Verify a single V3 pool's pinned post-drain `tick_data` against
+    /// on-chain@**pinned block** (step-2 race fix, twin of
+    /// `verify_v3_snapshot_seed`). Step-2 of the two-step verify routes here.
+    /// The block is the one captured atomically with the drain — the pin
+    /// owns its block (the caller passes no `block_number`).
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (address, rpc_url))]
+    fn verify_v3_post_drain_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        rpc_url: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump_state()?
+            .verify_v3_post_drain_snapshot(py, address, rpc_url)
+    }
+
+    /// Verify a single V4 pool's pinned post-drain `tick_data` against
+    /// on-chain@**pinned block** (step-2 race fix, V4 twin of
+    /// `verify_v3_post_drain_snapshot`).
+    #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (pool_manager_address, pool_id_hex, rpc_url, state_view_address))]
+    fn verify_v4_post_drain_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        pool_manager_address: String,
+        pool_id_hex: String,
+        rpc_url: String,
+        state_view_address: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pump_state()?.verify_v4_post_drain_snapshot(
+            py,
+            pool_manager_address,
+            pool_id_hex,
+            rpc_url,
+            state_view_address,
+        )
+    }
+
     /// Register a V2 pool by contract address.
     ///
     /// Returns the auto-assigned pool ID.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (address, token0, token1, reserve0, reserve1, gamma_numer0, fee_denom0, gamma_numer1, fee_denom1, factory, update_block=0))]
+    #[pyo3(signature = (address, token0, token1, reserve0, reserve1, gamma_numer0, fee_denom0, gamma_numer1, fee_denom1, factory, update_block=0, variant="uniswap-v2", stable_swap=false, fee_denominator=None))]
     fn register_v2_pool(
         &self,
         address: &str,
@@ -285,6 +379,9 @@ impl PyBot {
         fee_denom1: u64,
         factory: &str,
         update_block: u64,
+        variant: &str,
+        stable_swap: bool,
+        fee_denominator: Option<u64>,
     ) -> PyResult<u64> {
         let addr = parse_address(address)?;
         let t0 = parse_address(token0)?;
@@ -292,6 +389,23 @@ impl PyBot {
         let fac = parse_address(factory)?;
         let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
         let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let variant_enum = DexVariant::from_kebab(variant).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("unknown variant: {variant}"))
+        })?;
+
+        // Verify the pool address against the JSON-sourced CREATE2 deployer +
+        // init hash (Fork A, JC6OFG). Skipped if (chain, factory) is not in the
+        // shipped JSON — preserves the manual/ad-hoc registration path.
+        crate::bot::deployments::verify_v2(self.bot.chain_id(), fac, addr, t0, t1)?;
+
+        // Resolve the JSON-sourced CREATE2 deployer + init hash (Fork A,
+        // NSAZ4X). Stored on the V2 identity so the `dex` getter merges the
+        // per-(chain,factory) deployer/init_hash into the protocol preset
+        // (replacing the canonical-mainnet preset values). Non-JSON pools
+        // default to factory-as-deployer + the V2 mainnet fallback init hash.
+        let chain_id = self.bot.chain_id();
+        let deployer = degenbot_uniswap::deployments::resolve_deployer(chain_id, fac);
+        let init_hash_b256 = degenbot_uniswap::deployments::resolve_v2_init_hash(chain_id, fac);
 
         Ok(self
             .bot
@@ -306,7 +420,12 @@ impl PyBot {
                 fee_token0: (gamma_numer0, fee_denom0),
                 fee_token1: (gamma_numer1, fee_denom1),
                 factory: fac,
+                deployer,
+                init_hash: init_hash_b256,
                 update_block,
+                variant: variant_enum,
+                stable_swap,
+                fee_denominator,
             }))
     }
 
@@ -506,7 +625,7 @@ impl PyBot {
     /// (symmetric with ``PyLiquidityPool.tick_data_snapshot``).
     /// `coverage` is ``"tracked"`` (complete DB snapshot) or ``"sparse"``
     /// (RPC-fetched active word only / no snapshot).
-    #[pyo3(signature = (address, token0, token1, fee, tick_spacing, factory, sqrt_price_x96, liquidity, tick, tick_data=None, update_block=0, coverage="sparse"))]
+    #[pyo3(signature = (address, token0, token1, fee, tick_spacing, factory, sqrt_price_x96, liquidity, tick, tick_data=None, update_block=0, coverage="sparse", tick_data_fetcher=None))]
     fn register_v3_pool(
         &self,
         address: &str,
@@ -521,6 +640,7 @@ impl PyBot {
         tick_data: Option<Bound<'_, PyDict>>,
         update_block: u64,
         coverage: &str,
+        tick_data_fetcher: Option<Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         let addr = parse_address(address)?;
         let t0 = parse_address(token0)?;
@@ -568,6 +688,20 @@ impl PyBot {
             }
         };
 
+        // Verify the pool address against the JSON-sourced CREATE2 deployer +
+        // init hash (Fork A, JC6OFG). Skipped if (chain, factory) is not in the
+        // shipped JSON — preserves the manual/ad-hoc registration path.
+        crate::bot::deployments::verify_v3(self.bot.chain_id(), fac, addr, t0, t1, fee)?;
+
+        // Resolve the JSON-sourced CREATE2 deployer + init hash for this
+        // (chain, factory) (Fork A, P62DKO). Stored on the pool identity so the
+        // Python companion reads it off the handle (retired ClassVar / no
+        // per-class `_verified_address`). Non-JSON pools default to
+        // factory-as-deployer + the Uniswap V3 mainnet fallback init hash.
+        let chain_id = self.bot.chain_id();
+        let deployer = degenbot_uniswap::deployments::resolve_deployer(chain_id, fac);
+        let init_hash_b256 = degenbot_uniswap::deployments::resolve_v3_init_hash(chain_id, fac);
+
         Ok(self
             .bot
             .state_arc()
@@ -579,12 +713,17 @@ impl PyBot {
                 fee,
                 tick_spacing,
                 factory: fac,
+                deployer,
+                init_hash: init_hash_b256,
                 sqrt_price_x96: spx,
                 liquidity: liq,
                 tick,
                 tick_data: rust_tick_data,
                 update_block,
                 coverage: cov,
+                fetcher: tick_data_fetcher
+                    .filter(|f| !f.is_none())
+                    .map(|f| crate::bot::pool::make_tick_fetcher(f.clone().unbind())),
             }))
     }
 
@@ -612,7 +751,7 @@ impl PyBot {
     ///     `ValueError`: If `addresses/pool_id` are malformed or already
     ///         registered.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (pool_manager, pool_id_hex, currency0, currency1, fee, tick_spacing, hook_flags, sqrt_price_x96, liquidity, tick, block, tick_data=None, coverage="sparse"))]
+    #[pyo3(signature = (pool_manager, pool_id_hex, currency0, currency1, fee, tick_spacing, hook_flags, sqrt_price_x96, liquidity, tick, block, tick_data=None, coverage="sparse", tick_data_fetcher=None))]
     fn register_v4_pool(
         &self,
         pool_manager: &str,
@@ -628,6 +767,7 @@ impl PyBot {
         block: u64,
         tick_data: Option<Bound<'_, pyo3::types::PyDict>>,
         coverage: &str,
+        tick_data_fetcher: Option<Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         let pm = pool_manager.parse::<Address>().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid pool_manager address: {e}"))
@@ -699,6 +839,9 @@ impl PyBot {
                 tick_data: rust_tick_data,
                 update_block: block,
                 coverage: cov,
+                fetcher: tick_data_fetcher
+                    .filter(|f| !f.is_none())
+                    .map(|f| crate::bot::pool::make_tick_fetcher(f.clone().unbind())),
             })
             .map_err(map_register_v4_err)
     }
@@ -731,7 +874,24 @@ impl PyBot {
         d_variant=0,
         y_variant=0,
         yd_variant=0,
-        base_pool=None
+        base_pool=None,
+        initial_a_coefficient=None,
+        future_a_coefficient=None,
+        initial_a_coefficient_time=None,
+        future_a_coefficient_time=None,
+        create_timestamp=None,
+        fee_gamma=None,
+        mid_fee=None,
+        offpeg_fee_multiplier=None,
+        out_fee=None,
+        gamma=None,
+        lp_token=None,
+        use_lending=None,
+        precision_multipliers=None,
+        tokens_underlying=None,
+        metapool_rate_style=1,
+        metapool_underlying_style=1,
+        data_provider=None
     ))]
     fn register_curve_pool(
         &self,
@@ -749,6 +909,23 @@ impl PyBot {
         y_variant: u8,
         yd_variant: u8,
         base_pool: Option<&str>,
+        initial_a_coefficient: Option<u128>,
+        future_a_coefficient: Option<u128>,
+        initial_a_coefficient_time: Option<u64>,
+        future_a_coefficient_time: Option<u64>,
+        create_timestamp: Option<u64>,
+        fee_gamma: Option<u64>,
+        mid_fee: Option<u64>,
+        offpeg_fee_multiplier: Option<u64>,
+        out_fee: Option<u64>,
+        gamma: Option<u64>,
+        lp_token: Option<&str>,
+        use_lending: Option<&Bound<'_, PyList>>,
+        precision_multipliers: Option<&Bound<'_, PyList>>,
+        tokens_underlying: Option<&Bound<'_, PyList>>,
+        metapool_rate_style: u8,
+        metapool_underlying_style: u8,
+        data_provider: Option<Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         let addr = parse_address(address)?;
         let token_addrs = parse_address_list(tokens)?;
@@ -756,6 +933,22 @@ impl PyBot {
         let bal_vals = extract_u256_list(balances)?;
         let base = match base_pool {
             Some(s) => Some(parse_address(s)?),
+            None => None,
+        };
+        let lp = match lp_token {
+            Some(s) => Some(parse_address(s)?),
+            None => None,
+        };
+        let use_lend: Vec<bool> = match use_lending {
+            Some(l) => l.extract()?,
+            None => Vec::new(),
+        };
+        let prec_mults: Vec<alloy::primitives::U256> = match precision_multipliers {
+            Some(l) => extract_u256_list(l)?,
+            None => Vec::new(),
+        };
+        let tokens_under = match tokens_underlying {
+            Some(l) => Some(parse_address_list(l)?),
             None => None,
         };
         Ok(self
@@ -777,6 +970,24 @@ impl PyBot {
                 y_variant,
                 yd_variant,
                 base_pool: base,
+                initial_a_coefficient,
+                future_a_coefficient,
+                initial_a_coefficient_time,
+                future_a_coefficient_time,
+                create_timestamp,
+                fee_gamma,
+                mid_fee,
+                offpeg_fee_multiplier,
+                out_fee,
+                gamma,
+                lp_token: lp,
+                use_lending: use_lend,
+                precision_multipliers: prec_mults,
+                tokens_underlying: tokens_under,
+                metapool_rate_style,
+                metapool_underlying_style,
+                data_provider: data_provider
+                    .map(|b| crate::bot::pool::make_curve_data_provider(b.unbind())),
             }))
     }
 
@@ -874,7 +1085,8 @@ impl PyBot {
         bpt_idx,
         invariant_version,
         balances,
-        update_block
+        update_block,
+        rate_provider=None
     ))]
     fn register_balancer_stable_pool(
         &self,
@@ -889,6 +1101,7 @@ impl PyBot {
         invariant_version: u8,
         balances: &Bound<'_, PyList>,
         update_block: u64,
+        rate_provider: Option<Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         let addr = parse_address(address)?;
         let vault_addr = parse_address(vault)?;
@@ -896,6 +1109,8 @@ impl PyBot {
         let token_addrs = parse_address_list(tokens)?;
         let scaling_vals = extract_u256_list(scaling_factors)?;
         let bal_vals = extract_u256_list(balances)?;
+        let provider =
+            rate_provider.map(|b| crate::bot::pool::make_balancer_rate_provider(b.unbind()));
         Ok(self.bot.state_arc().write().register_balancer_stable_pool(
             &RegisterBalancerStablePoolParams {
                 address: addr,
@@ -909,8 +1124,64 @@ impl PyBot {
                 invariant_version,
                 balances: bal_vals,
                 update_block,
+                rate_provider: provider,
             },
         ))
+    }
+
+    /// Register an Aerodrome V2 pool by contract address (ADR-005 Aerodrome
+    /// state port).
+    ///
+    /// Stores immutable identity (address, tokens, factory, variant, stable
+    /// flag, unidirectional fee) + the registration reserves + a genesis
+    /// reorg-journal anchor (mirror of V2's discipline). Returns the
+    /// auto-assigned pool ID. Call `get_pool(id)` after this to obtain the
+    /// `PyLiquidityPool` handle.
+    ///
+    /// Raises:
+    ///     `ValueError`: If an address is malformed, the pool is already
+    ///         registered, or `variant` is not a recognized Aerodrome variant.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (address, token0, token1, factory, variant, stable, fee_numer, fee_denom, reserve0, reserve1, update_block=0))]
+    fn register_aerodrome_pool(
+        &self,
+        address: &str,
+        token0: &str,
+        token1: &str,
+        factory: &str,
+        variant: &str,
+        stable: bool,
+        fee_numer: u64,
+        fee_denom: u64,
+        reserve0: &Bound<'_, PyAny>,
+        reserve1: &Bound<'_, PyAny>,
+        update_block: u64,
+    ) -> PyResult<u64> {
+        let addr = parse_address(address)?;
+        let t0 = parse_address(token0)?;
+        let t1 = parse_address(token1)?;
+        let fac = parse_address(factory)?;
+        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
+        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let variant_enum = DexVariant::from_kebab(variant).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("unknown variant: {variant}"))
+        })?;
+        Ok(self
+            .bot
+            .state_arc()
+            .write()
+            .register_aerodrome_pool(&RegisterAerodromeV2PoolParams {
+                address: addr,
+                token0: t0,
+                token1: t1,
+                factory: fac,
+                variant: variant_enum,
+                stable,
+                fee: (fee_numer, fee_denom),
+                reserve0: r0,
+                reserve1: r1,
+                update_block,
+            }))
     }
 
     /// Update a V3 pool's state from a Swap event.

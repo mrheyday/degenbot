@@ -45,7 +45,7 @@ from degenbot.provider.factory import get_provider_from_config
 from degenbot.provider.subscription import Subscription  # noqa: TC001
 from degenbot.provider.sync_adapter import ProviderAdapter  # noqa: TC001
 from degenbot.registry import ManagedPoolRegistry, PoolRegistry, TokenRegistry
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
 from degenbot.version import __version__
@@ -169,7 +169,7 @@ class Bot:
 
         # Async adapter for subscriptions (single chain; created on demand)
         self._async_adapter: AsyncProviderAdapter | None = None
-        self.register_builder(LiquidityPool, self._v2_builder)
+        self.register_builder(UniswapV2Pool, self._v2_builder)
         self.register_builder(UniswapV3Pool, self._v3_builder)
         self.register_builder(UniswapV4Pool, self._v4_builder)
         self.register_builder(CurveStableswapPool, self._curve_builder)
@@ -177,7 +177,7 @@ class Bot:
         self.register_builder(BalancerV2Pool, self._balancer_builder)
         self.register_builder(BalancerV2StablePool, self._balancer_builder)
         # All V2-family DEXes (Uniswap/Sushi/Pancake/Swapbased/Camelot) now
-        # register the canonical ``LiquidityPool`` for their factories
+        # register the canonical ``UniswapV2Pool`` for their factories
         # (ADR-005 slice 7 step 4b) — the single V2 builder handles them.
 
         # Check database migration version
@@ -345,7 +345,7 @@ class Bot:
         instead of isinstance chains to find the right builder.
 
         Args:
-            pool_class: The concrete pool class (e.g. LiquidityPool, AerodromeV2Pool).
+            pool_class: The concrete pool class (e.g. UniswapV2Pool, AerodromeV2Pool).
             builder: The builder instance that handles construction and updates
                 for this pool type.
 
@@ -364,7 +364,9 @@ class Bot:
             The computed value.
 
         """
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return self._erc20_builder.build(address, chain_id=self.chain_id, silent=silent, io=io)
 
     def get_token(self, address: str) -> Erc20Token:
@@ -399,7 +401,9 @@ class Bot:
         """
         address = get_checksum_address(address)
         chain_id = self.chain_id
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
 
         request = BuildPoolRequest(
             silent=silent,
@@ -419,7 +423,7 @@ class Bot:
         # If type resolution fails (e.g. Curve pools lack a factory() method),
         # fall back to the Curve builder which handles its own discovery.
         try:
-            pool_type = _resolve_pool_type_impl(address, chain_id=chain_id, io=io, db=self.db)
+            pool_type = _resolve_pool_type_impl(address, chain_id=chain_id, io=io)
         except DegenbotValueError:
             # Fallback: try Curve builder as last resort
             return self._dispatch_build(
@@ -513,7 +517,9 @@ class Bot:
                 assert isinstance(existing, UniswapV4Pool)
             return existing
 
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
 
         request = BuildManagedPoolRequest(
             pool_id=pool_id,
@@ -549,7 +555,9 @@ class Bot:
             The computed integer value.
 
         """
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return self._erc20_builder.get_token_balance(
             token,
             address,
@@ -570,7 +578,9 @@ class Bot:
             The computed integer value.
 
         """
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return self._erc20_builder.get_token_approval(
             token,
             owner,
@@ -590,7 +600,9 @@ class Bot:
             The computed integer value.
 
         """
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return self._erc20_builder.get_token_total_supply(
             token,
             block_identifier=block_identifier,
@@ -608,7 +620,9 @@ class Bot:
             The computed integer value.
 
         """
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return self._erc20_builder.get_ether_balance(
             self.chain_id,
             address,
@@ -688,7 +702,9 @@ class Bot:
             if block_number is not None and not isinstance(block_number, int)
             else block_number
         )
-        io = PyBotIo(provider=self.provider, db=self.db)
+        io = PyBotIo(
+            provider=self.provider, db=self.db, database_path=str(self.config.database.path)
+        )
         return builder.update(pool, block_number=resolved_block_number, io=io)
 
     def _builder_for_pool(
@@ -713,7 +729,7 @@ class Bot:
         if builder is not None:
             return builder
 
-        # Slow path: subclass match (e.g. AerodromeV2Pool subclasses LiquidityPool).
+        # Slow path: subclass match (e.g. AerodromeV2Pool subclasses UniswapV2Pool).
         # Walk the MRO looking for a registered builder.
         for base in type(pool).__mro__:
             builder = self._builders.get(base)

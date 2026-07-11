@@ -504,6 +504,10 @@ mod tests {
                 fee_token1: (997, 1000),
                 factory: alloy::primitives::Address::ZERO,
                 update_block: 0,
+                variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+                stable_swap: false,
+                fee_denominator: None,
+                ..Default::default()
             });
 
         let mut dispatcher = LogDispatcher::new();
@@ -547,6 +551,10 @@ mod tests {
                 fee_token1: (997, 1000),
                 factory: alloy::primitives::Address::ZERO,
                 update_block: 0,
+                variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+                stable_swap: false,
+                fee_denominator: None,
+                ..Default::default()
             });
 
         let mut dispatcher = LogDispatcher::new();
@@ -635,6 +643,8 @@ mod tests {
             tick_data,
             update_block: 0,
             coverage: PoolTickCoverage::Tracked,
+            fetcher: None,
+            ..Default::default()
         });
 
         // The exact Mint log emitted at block 25390812 (decoded from cast).

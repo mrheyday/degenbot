@@ -1,7 +1,7 @@
 """UniswapV3Pool: concentrated liquidity AMM companion over a PyLiquidityPool handle.
 
 ADR-005 slice 8b — the V3 companion rewritten over the same `PyLiquidityPool`
-handle topology as the V2 `LiquidityPool`. Rust `BotState` is the single
+handle topology as the V2 `UniswapV2Pool`. Rust `BotState` is the single
 source of truth for V3 mutable state (scalars, tick data, reorg journal);
 this companion reads it through `self._py_pool` (the atomic `snapshot_v3()`
 for scalars + `tick_data_snapshot()`/`tick_bitmap_snapshot()` for the tick maps)
@@ -25,16 +25,14 @@ sparse-map concept at all.
 """
 
 import dataclasses
-from collections.abc import Callable
-from typing import Any, ClassVar, TypedDict
+from typing import Any, ClassVar, Self, TypedDict
 from weakref import WeakSet
 
 from eth_typing import ChecksumAddress
 
 from degenbot.arbitrage.types import UniswapV3PoolSwapAmounts
-from degenbot.builders.tick_data_fetcher import FetchedTickData
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyLiquidityPool
+from degenbot.degenbot_rs import PyLiquidityPool, cl_get_tick_word_and_bit_position
 from degenbot.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.pool import (
@@ -43,30 +41,21 @@ from degenbot.exceptions.pool import (
     NoPoolStateAvailable,
 )
 from degenbot.types.abstract import AbstractLiquidityPool, AbstractPoolState
-from degenbot.types.aliases import BlockNumber, ChainId
+from degenbot.types.aliases import BlockNumber
 from degenbot.types.concrete import PublisherMixin, Subscriber
 from degenbot.types.hop_types import BoundedProductHop, HopType, V3TickRangeInfo
 from degenbot.types.pool_protocols import SimulationResult
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
-from degenbot.uniswap.log_decoders import (
-    V3_BURN_TOPIC,
-    V3_MINT_TOPIC,
-    V3_SWAP_TOPIC,
-    decode_v3_burn,
-    decode_v3_mint,
-    decode_v3_swap,
-)
 from degenbot.uniswap.types import UniswapPoolSwapVector
-from degenbot.uniswap.v3_functions import generate_v3_pool_address, get_tick_word_and_bit_position
-from degenbot.uniswap.v3_libraries.functions import v3_virtual_reserves
-from degenbot.uniswap.v3_libraries.tick_bitmap import gen_ticks
-from degenbot.uniswap.v3_libraries.tick_math import (
+from degenbot.uniswap.v3_libraries import (
     MAX_SQRT_RATIO,
     MAX_TICK,
     MIN_SQRT_RATIO,
     MIN_TICK,
     get_sqrt_ratio_at_tick,
 )
+from degenbot.uniswap.v3_libraries.functions import v3_virtual_reserves
+from degenbot.uniswap.v3_libraries.tick_bitmap import gen_ticks
 from degenbot.uniswap.v3_pool_calc import UniswapV3PoolCalc
 from degenbot.uniswap.v3_pool_state import V3PoolState
 from degenbot.uniswap.v3_types import (
@@ -121,17 +110,27 @@ class UniswapV3Pool(
 
     variant: ClassVar[str | None] = None
 
-    LOG_HANDLERS: ClassVar[dict[str, Any]] = {
-        V3_SWAP_TOPIC: decode_v3_swap,
-        V3_MINT_TOPIC: decode_v3_mint,
-        V3_BURN_TOPIC: decode_v3_burn,
-    }
-
     type PoolState = UniswapV3PoolState
 
-    UNISWAP_V3_MAINNET_POOL_INIT_HASH = (
-        "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54"
-    )
+    # Instance attributes set in `_from_py_pool` (the only construction seam —
+    # `__init__` raises). Declared at class scope so the type checker tracks
+    # them without inline annotations on the classmethod body.
+    _py_pool: PyLiquidityPool
+    address: ChecksumAddress
+    factory: ChecksumAddress
+    _fee: int
+    _tick_spacing: int
+    _token0: Erc20Token
+    _token1: Erc20Token
+    init_hash: str
+    deployer_address: ChecksumAddress
+    name: str
+    _initial_state_block: int
+    _sparse_liquidity_map: bool
+    _bitmap_override: dict[int, BitmapAtWord]
+    _tick_data_fetcher: Any
+    _subscribers: WeakSet[Subscriber]
+
     TICK_STRUCT_TYPES = (
         "uint128",
         "int128",
@@ -152,97 +151,118 @@ class UniswapV3Pool(
         "bool",
     )
 
-    def __init__(
-        self,
-        py_pool: PyLiquidityPool,
-        *,
-        address: ChecksumAddress | str,
-        token0: Erc20Token,
-        token1: Erc20Token,
-        factory: str,
-        fee: int,
-        tick_spacing: int,
-        chain_id: ChainId | None = None,
-        deployer_address: str | None = None,
-        init_hash: str | None = None,
-        tick_data_fetcher: Callable[[int, int], FetchedTickData | None] | None = None,
-        state_block: BlockNumber | None = None,
-        sparse_liquidity_map: bool | None = None,
-        tick_bitmap_override: dict[int, Any] | None = None,
-    ) -> None:
-        """Initialize the instance over a ``PyLiquidityPool`` handle.
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        """Direct construction is forbidden.
 
-        Construction is purely in-memory (no I/O, no failure modes).
+        ``UniswapV3Pool`` is a Python companion over a Rust-owned
+        ``PyLiquidityPool`` handle. The handle can only be produced by
+        registering a pool in a ``PyBot`` — there is no way for a caller to
+        hand-build one. Use the registered entry points instead:
+
+        - Production: ``Bot.build_pool(address)``
+        - Tests: ``make_v3_pool(...)``
+
+        Both register the pool in Rust, obtain the ``PyLiquidityPool``
+        handle, and wrap it via :meth:`_from_py_pool` (mirroring Polars'
+        ``_from_pydf`` seam).
+
+        Raises:
+            TypeError: Always. Direct construction is not supported.
+
         """
+        msg = (
+            f"{type(self).__name__} cannot be constructed directly. "
+            "Use Bot.build_pool(address) (production) or make_v3_pool(...) "
+            "(tests) to register the pool in Rust and obtain the "
+            "PyLiquidityPool handle to wrap."
+        )
+        raise TypeError(msg)
+
+    @classmethod
+    def _from_py_pool(cls, py_pool: PyLiquidityPool) -> Self:
+        """Wrap a Rust-owned ``PyLiquidityPool`` handle as a Python companion.
+
+        Internal seam (ADR-005, Polars-style ``_from_pydf`` pattern). The
+        handle is self-describing: every identity field (address, factory,
+        fee, tick_spacing, tokens) is read off it — no identity is passed as
+        constructor args. Rust owns the mutable state (slot0 + tick_data +
+        reorg journal) as ``V3PoolState`` and the immutable registration
+        metadata as ``V3PoolIdentity``; this companion reads both through
+        ``self._py_pool``.
+
+        The sparse-tick fetcher is stored Rust-side on ``V3PoolState``
+        (ADR-006 I/O trait object, task MLJT4V) — not a constructor arg.
+        The companion-side ``_bitmap_override`` cache is deleted (the Rust
+        bitmap representation is faithful: empty-but-checked words survive in
+        ``known_bitmap_words``).
+
+        Returns:
+            A ``cls`` instance wrapping ``py_pool``.
+
+        Raises:
+            DegenbotValueError: If the handle is not a V3-family pool
+                (``py_pool.pool_family`` is not ``"v3"``).
+
+        """
+        self = cls.__new__(cls)
         self._py_pool = py_pool
-        self.address = get_checksum_address(address)
-        self._chain_id = chain_id if chain_id is not None else token0.chain_id
-        self._token0 = token0
-        self._token1 = token1
-        self.factory = get_checksum_address(factory)
-        self._fee = fee
-        self._tick_spacing = tick_spacing
 
-        # The block of the registration snapshot (the genesis journal delta).
-        # Used to gate early-block liquidity updates (matches the pre-companion
-        # ``_initial_state_block`` rule: liquidity events prior to the
-        # registration snapshot bypass the in-range active-liquidity
-        # adjustment so historical replay doesn't trip the invariant).
-        self._initial_state_block = (
-            state_block if state_block is not None else self._py_pool.update_block
-        )
+        # Variant-family guard (uniform precondition every seam uses).
+        if py_pool.pool_family != "v3":
+            msg = (
+                "PyLiquidityPool handle is not a V3-family pool "
+                f"(got pool_family {py_pool.pool_family!r}); "
+                "UniswapV3Pool._from_py_pool requires a handle "
+                "registered via register_v3_pool"
+            )
+            raise DegenbotValueError(message=msg)
 
-        # Derive deployer/init_hash from constructor args or class defaults.
-        self.deployer_address = (
-            get_checksum_address(deployer_address) if deployer_address is not None else self.factory
-        )
-        self.init_hash = (
-            init_hash if init_hash is not None else self.UNISWAP_V3_MAINNET_POOL_INIT_HASH
-        )
+        # Identity — all read off the handle (no shadow kwargs).
+        self.address = get_checksum_address(py_pool.address)
+        self.factory = get_checksum_address(py_pool.factory)
+        self._fee = py_pool.fee
+        self._tick_spacing = py_pool.tick_spacing
+
+        py_token0 = py_pool.get_token0()
+        py_token1 = py_pool.get_token1()
+        if py_token0 is None or py_token1 is None:
+            msg = (
+                "pool tokens must be registered in the same Bot as the pool "
+                "(ADR-006): get_token0/get_token1 returned None"
+            )
+            raise DegenbotValueError(message=msg)
+        self._token0 = Erc20Token._from_py_token(py_token0)  # noqa: SLF001
+        self._token1 = Erc20Token._from_py_token(py_token1)  # noqa: SLF001
+
+        # Deployer / init-hash: read off the Rust handle (Fork A, P62DKO).
+        # The builder resolved the JSON-sourced deployer (effective deployer,
+        # covering PancakeSwap V3's separate-deployer case) + init_hash at
+        # registration; the companion reads them here instead of the retired
+        # `UNISWAP_V3_MAINNET_POOL_INIT_HASH` ClassVar. Non-JSON V3 pools get
+        # the factory as deployer + the mainnet fallback init hash.
+        self.deployer_address = self._py_pool.deployer or self.factory
+        self.init_hash = self._py_pool.init_hash
+
+        # The block of the registration snapshot (genesis journal delta).
+        self._initial_state_block = self._py_pool.update_block
 
         self.name = (
             f"{self._token0}-{self._token1} ({self.__class__.__name__}, "
             f"{100 * self._fee / self.FEE_DENOMINATOR:.2f}%)"
         )
 
-        # Sparse-map detection: a pool is "sparse" when no tick data has been
-        # seeded yet (the fetcher backfills on demand). The companion infers
-        # sparseness from the Rust-side tick map unless the builder explicitly
-        # overrides it.
-        self._sparse_liquidity_map = (
-            sparse_liquidity_map
-            if sparse_liquidity_map is not None
-            else len(self._py_pool.tick_data_snapshot()) == 0
-        )
+        # Sparse-map detection: inferred from the Rust-side tick map.
+        self._sparse_liquidity_map = len(self._py_pool.tick_data_snapshot()) == 0
 
-        # Track tick-data-fetcher-checked words client-side so a "checked but
-        # empty" word (on-chain ``tickBitmap(word) == 0``) appears in the
-        # bitmap the simulator sees as present-but-zero rather than missing —
-        # otherwise the sparse-map fetch loop re-fetches the same word forever
-        # (Rust derives the bitmap from ``tick_data`` KEYS only, so a word with
-        # no initialized ticks vanishes from the derived bitmap). Mirrors the
-        # pre-companion StateManager which stored the bitmap dict explicitly.
-        self._bitmap_override: dict[int, BitmapAtWord] = {}
-        if tick_bitmap_override is not None:
-            for word, bitmap_at_word in tick_bitmap_override.items():
-                if isinstance(bitmap_at_word, BitmapAtWord):
-                    self._bitmap_override[int(word)] = bitmap_at_word
-                elif isinstance(bitmap_at_word, dict):
-                    self._bitmap_override[int(word)] = BitmapAtWord(
-                        bitmap=int(bitmap_at_word.get("bitmap", 0)),
-                        block=int(bitmap_at_word.get("block", 0)),
-                    )
-                else:
-                    self._bitmap_override[int(word)] = BitmapAtWord(
-                        bitmap=int(bitmap_at_word[0]),
-                        block=int(bitmap_at_word[1]) if len(bitmap_at_word) > 1 else 0,
-                    )
+        # The tick fetcher is stored Rust-side (ADR-006 I/O trait object,
+        # task MLJT4V). The companion-side fetcher + bitmap-override caches
+        # are deleted — the Rust fetch+retry loop + faithful bitmap
+        # representation handle sparse misses.
+        self._bitmap_override = {}
+        self._tick_data_fetcher = None
 
-        # Tick data fetcher for sparse liquidity maps (rare simulation
-        # backfill path; the engine owns tick data in the production path).
-        self._tick_data_fetcher = tick_data_fetcher
-
-        self._subscribers: WeakSet[Subscriber] = WeakSet()
+        self._subscribers = WeakSet()
+        return self
 
     def __repr__(self) -> str:  # pragma: no cover
         """Return the canonical string representation.
@@ -262,33 +282,9 @@ class UniswapV3Pool(
         """
         return self.name
 
-    def _verified_address(self) -> ChecksumAddress:
-        """Compute the deterministic V3 pool address via CREATE2.
-
-        Returns:
-            The checksummed address that should match this pool's address.
-
-        """
-        return generate_v3_pool_address(
-            deployer_address=self.deployer_address,
-            token_addresses=(self._token0.address, self._token1.address),
-            fee=self._fee,
-            init_hash=self.init_hash,
-        )
-
-    @property
-    def chain_id(self) -> int | None:
-        """Return chain id.
-
-        Returns:
-            The chain ID, or None if not set.
-
-        """
-        return self._chain_id
-
     @property
     def liquidity(self) -> int:
-        """Return liquidity.
+        """Liquidity.
 
         Returns:
             The current active liquidity (from Rust via the handle).
@@ -298,7 +294,7 @@ class UniswapV3Pool(
 
     @property
     def sqrt_price_x96(self) -> int:
-        """Return sqrt price x96.
+        """Sqrt price x96.
 
         Returns:
             The current sqrt price as a Q64.96 value (from Rust).
@@ -337,7 +333,7 @@ class UniswapV3Pool(
 
     @property
     def tick(self) -> int:
-        """Return tick.
+        """Tick.
 
         Returns:
             The current tick (from Rust via the handle).
@@ -574,7 +570,7 @@ class UniswapV3Pool(
         # yet have, backfill via the fetcher (mirrors the pre-companion path).
         if self._sparse_liquidity_map and self._tick_data_fetcher is not None:
             for tick in (update.tick_lower, update.tick_upper):
-                word, _ = get_tick_word_and_bit_position(tick, self._tick_spacing)
+                word, _ = cl_get_tick_word_and_bit_position(tick, self._tick_spacing)
                 if word not in self.tick_bitmap:
                     self._apply_fetched_tick_word(word, state_block - 1)
 
@@ -680,7 +676,6 @@ class UniswapV3Pool(
                 zero_for_one=zero_for_one,
                 amount_in=token_in_quantity,
                 block=self.update_block,
-                fetcher=self._tick_data_fetcher,
                 sqrt_price_limit_x96=sqrt_price_limit_x96,
             )
             if outcome is None:
@@ -714,7 +709,6 @@ class UniswapV3Pool(
                 zero_for_one=zero_for_one,
                 amount_in=token_in_quantity,
                 block=self.update_block,
-                fetcher=self._tick_data_fetcher,
                 override_sqrt_price_x96=override_state.sqrt_price_x96,
                 override_liquidity=override_state.liquidity,
                 override_tick=override_state.tick,
@@ -790,7 +784,6 @@ class UniswapV3Pool(
                 zero_for_one=zero_for_one,
                 amount_out=token_out_quantity,
                 block=self.update_block,
-                fetcher=self._tick_data_fetcher,
                 sqrt_price_limit_x96=sqrt_price_limit_x96,
             )
             if outcome is None:
@@ -822,7 +815,6 @@ class UniswapV3Pool(
                 zero_for_one=zero_for_one,
                 amount_out=token_out_quantity,
                 block=self.update_block,
-                fetcher=self._tick_data_fetcher,
                 override_sqrt_price_x96=override_state.sqrt_price_x96,
                 override_liquidity=override_state.liquidity,
                 override_tick=override_state.tick,

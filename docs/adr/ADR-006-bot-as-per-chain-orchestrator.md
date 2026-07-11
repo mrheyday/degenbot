@@ -35,6 +35,65 @@ D3+D4 were completed in a follow-up (ergo epic OP7YLN):
   hot-loop recurring `verify_liquidity_maps` was added so post-release / in-loop
   desyncs surface instead of trading silently.
 
+### Addendum (ergo epic BQM2OA / JFGCHJ / 4UBHP6 / MLJT4V — sealed seam + stored trait-object I/O)
+
+The D4 "Bot is the per-chain orchestrator" framing is reinforced by the
+completion of the sealed `_from_py_pool` seam across **every** pool family
+(V2/V3/V4/Balancer-weighted/Balancer-stable/Aerodrome/Curve). Two D4-load-bearing
+consequences now hold:
+
+- **I/O callables live on the Rust core as pyo3-free trait objects**, not as
+  Python callbacks held by the companions. Each per-family read surface the
+  companion previously held is a stored `Arc<dyn Trait>` on the `VxPoolState`,
+  with a Py-adapter in `degenbot-python`: the V3/V4 tick fetcher (`MLJT4V`),
+  the Curve data provider (`JFGCHJ`), the Balancer rate provider (`4UBHP6`).
+  The companion reads through the handle; the trait object is the I/O seam a
+  standalone-Rust consumer (`examples/standalone_consumer.rs`) drives directly
+  with no Python — the strong-form standalone target of D4.
+- **Cross-pool references resolve within the shared `BotState`.** The Curve
+  metapool's base-pool dependency — the one case that broke single-arg
+  construction — resolves through the existing `pool_id_by_address` index on
+  `BotState` (the go-between `curve_base_pool()` constructs a handle over the
+  base pool_id sharing the same `Arc<RwLock<BotState>>`). No Python registry;
+  the D1 shared-core topology is the *enabler* of single-arg construction.
+
+Companion identity is now fully handle-readable (the Polars `_from_pydf` end
+state); direct `__init__` is forbidden on every companion. See ADR-005's
+"sealed `_from_py_pool` seam" footer for the per-family commits + the
+`BasePoolPort` go-between design (BQM2OA).
+
+### Addendum (epic GAYTBA — verify-race + exception-mapping fix)
+
+The two-step verify as originally landed compared engine-*current* tick data
+against on-chain@snapshot_block at step-1. Under the bot's rolling start
+(`EngineRegistry.engine.resume()` runs *before* `build_paths` so paths
+discover against fresh blocks), the live pump applies Mint/Burn journals onto
+engine-current between registration and step-1. Step-1 then read
+(seed + journal) vs on-chain@snapshot (pre-journal) — a **false mismatch on
+every active pool** (`logs/perm-V2-V3-V2.log`: mismatches only at the snapshot
+block, `journal_len=1`, `update_block` postdating the snapshot; never at the
+live/backfill block). Two compounding bugs amplified this:
+
+1. **Per-family exception mapping (AGVGNH).** `Pump::verify_v3/v4_liquidity_maps`
+   mapped `LiquidityVerifyError` to a plain `PyRuntimeError`. `build_paths`'
+   `except RuntimeError` arm silently swallowed genuine mismatches as skipped
+   paths (non-fatal) instead of routing them to the fatal
+   `VerificationMismatchError` arm. Fixed by routing through
+   `map_liquidity_verify_error` (`Mismatch → VerificationMismatchError`,
+   `Rpc → VerificationRpcError`), mirroring the batch path.
+2. **Rolling-start race (CBCH6H).** Step-1 now compares the **pinned snapshot
+   seed** against on-chain@snapshot_block, not engine-current. `V3PoolState`/
+   `V4PoolState` retain `snapshot_seed` (a copy of the registration
+   `tick_data`) for `Tracked` pools, immutable across `apply_*_liquidity_update`.
+   New `PyBot.verify_v3/v4_snapshot_seed` methods take the seed and verify it
+   via the raw-tick-data `verify_v3/v4_liquidity_map` functions; the seed is
+   consumed once (`take_*_snapshot_seed`) so memory is bounded across 18k pools.
+   `EngineRegistry._verify_pool_at_block` routes step-1 (`verify_seed=True`,
+   seed) and step-2 (`verify_seed=False`, engine-current after the drain).
+
+The rolling-start design is preserved (resume still precedes build_paths); the
+fix closes the verify race at its cause rather than reordering startup.
+
 The Rust core `BotCore::register_v2/v3/v4_pool` was kept (the live
 insert at the `BotState` layer, used by the builders via `PyBot.register_v*`);
 D3 deleted only the unreachable pyo3 engine surface.
@@ -324,7 +383,6 @@ this work.
 - **ADR-003** (BotCore as the state layer, peer to UniswapEngine) — the *peer-module*
   split and *engine-then-core* lock order are preserved; the
   engine-holds-its-own-`Arc<Mutex<Bot>>` arrangement is superseded by D1+D2.
-- **`rust/CONTEXT.md`** — {Bot}/{PyBot}/{Polars-Inspired Three-Layer Architecture} terms
   gain forward pointers to this ADR; a new {EventSink} term records the decided concept.
 - **Architecture review `/tmp/architecture-review-20260617-200733.html` candidate #1** —
   the candidate this grilling opened on.

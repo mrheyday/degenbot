@@ -49,14 +49,14 @@ impl PyUniswapArbEngine {
         for pool_ref in &pool_refs {
             match pool_ref.hop_type {
                 HopType::V2 => {
-                    let state = core.get_v2_pool_state(pool_ref.pool_key);
-                    let addr = state.map(|s| format!("{}", s.address));
+                    let identity = core.get_v2_identity(pool_ref.pool_key);
+                    let addr = identity.map(|i| format!("{}", i.address));
                     // V2 fee is `gamma_numer`, orientation-selected (ADR-003).
-                    let gamma_numer = state.map(|s| {
+                    let gamma_numer = identity.map(|i| {
                         if pool_ref.zero_for_one {
-                            s.fee_token0.0
+                            i.fee_token0.0
                         } else {
-                            s.fee_token1.0
+                            i.fee_token1.0
                         }
                     });
                     hops.push(HopInfo {
@@ -69,12 +69,13 @@ impl PyUniswapArbEngine {
                     });
                 }
                 HopType::V3 => {
-                    let pool = core.get_v3_pool(pool_ref.pool_key);
-                    let (addr, fee, ts) = pool.map_or((None, None, None), |p| {
+                    let pool_id = pool_ref.pool_key;
+                    let identity = core.get_v3_identity(pool_id);
+                    let (addr, fee, ts) = identity.map_or((None, None, None), |i| {
                         (
-                            Some(format!("{}", p.address)),
-                            Some(u64::from(p.fee)),
-                            Some(p.tick_spacing),
+                            Some(format!("{}", i.address)),
+                            Some(u64::from(i.fee)),
+                            Some(i.tick_spacing),
                         )
                     });
                     hops.push(HopInfo {
@@ -87,13 +88,13 @@ impl PyUniswapArbEngine {
                     });
                 }
                 HopType::V4 => {
-                    let pool = core.get_v4_pool(pool_ref.pool_key);
-                    let (pm, pid, fee, ts) = pool.map_or((None, None, None, None), |p| {
+                    let identity = core.get_v4_identity(pool_ref.pool_key);
+                    let (pm, pid, fee, ts) = identity.map_or((None, None, None, None), |i| {
                         (
-                            Some(format!("{}", p.pool_manager)),
-                            Some(format!("0x{}", alloy::hex::encode(p.pool_id))),
-                            Some(u64::from(p.pool_key.fee)),
-                            Some(p.pool_key.tick_spacing),
+                            Some(format!("{}", i.pool_manager)),
+                            Some(format!("0x{}", alloy::hex::encode(i.pool_id))),
+                            Some(u64::from(i.pool_key.fee)),
+                            Some(i.pool_key.tick_spacing),
                         )
                     });
                     hops.push(HopInfo {
@@ -103,6 +104,20 @@ impl PyUniswapArbEngine {
                         zero_for_one: pool_ref.zero_for_one,
                         fee,
                         tick_spacing: ts,
+                    });
+                }
+                // Solidly hop-info lands with the build/register plumbing
+                // (task WCT5KR). Until then, a Solidly hop emits a minimal
+                // HopInfo so the result-channel match is exhaustive; the
+                // resolve short-circuit means no Solidly hop reaches a solve.
+                HopType::SolidlyStable => {
+                    hops.push(HopInfo {
+                        hop_type: "Solidly".to_string(),
+                        address: None,
+                        pool_id: None,
+                        zero_for_one: pool_ref.zero_for_one,
+                        fee: None,
+                        tick_spacing: None,
                     });
                 }
             }

@@ -1,5 +1,7 @@
 """Tests for the provider interface and adapter."""
 
+from collections.abc import Iterator
+
 import pytest
 from hexbytes import HexBytes
 
@@ -16,9 +18,13 @@ WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 
 
 @pytest.fixture
-def alloy_provider(fork_mainnet_full: AnvilFork) -> AlloyProvider:
+def alloy_provider(fork_mainnet_full: AnvilFork) -> Iterator[AlloyProvider]:
     """Create an AlloyProvider from the mainnet fork."""
-    return AlloyProvider(fork_mainnet_full.http_url)
+    provider = AlloyProvider(fork_mainnet_full.http_url)
+    try:
+        yield provider
+    finally:
+        provider.close()
 
 
 class TestProviderAdapter:
@@ -33,6 +39,7 @@ class TestProviderAdapter:
         assert adapter.is_connected() is True
         assert "ProviderAdapter" in repr(adapter)
 
+    @pytest.mark.online_rpc
     def test_from_web3_creates_adapter(self, fork_mainnet_full: AnvilFork):
         """Test creating adapter from Web3."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -192,6 +199,7 @@ class TestAlloyProvider:
 class TestWeb3Adapter:
     """Test ProviderAdapter with Web3 from AnvilFork."""
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_delegates_to_eth_namespace(self, fork_mainnet_full: AnvilFork):
         """Test that Web3 adapter properly delegates to eth namespace."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -205,6 +213,7 @@ class TestWeb3Adapter:
         assert isinstance(block_number, int)
         assert block_number > 0
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_block(self, fork_mainnet_full: AnvilFork):
         """Test get_block through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -213,6 +222,7 @@ class TestWeb3Adapter:
         assert block is not None
         assert block.get("number") == 18_000_000
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_block_string_identifier(self, fork_mainnet_full: AnvilFork):
         """Test get_block with string identifier through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -226,6 +236,7 @@ class TestWeb3Adapter:
         assert block_earliest is not None
         assert block_earliest.get("number") == 0
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_call(self, fork_mainnet_full: AnvilFork):
         """Test eth_call through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -241,6 +252,7 @@ class TestWeb3Adapter:
         assert isinstance(result, (bytes, HexBytes))
         assert len(result) == 32  # uint256 return
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_code(self, fork_mainnet_full: AnvilFork):
         """Test get_code through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -249,6 +261,7 @@ class TestWeb3Adapter:
         assert isinstance(code, (bytes, HexBytes))
         assert len(code) > 0
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_logs(self, fork_mainnet_full: AnvilFork):
         """Test get_logs through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -259,6 +272,7 @@ class TestWeb3Adapter:
         )
         assert isinstance(logs, list)
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_balance(self, fork_mainnet_full: AnvilFork):
         """Test get_balance through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -267,6 +281,7 @@ class TestWeb3Adapter:
         assert isinstance(balance, int)
         assert balance >= 0
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_storage_at(self, fork_mainnet_full: AnvilFork):
         """Test get_storage_at through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -275,6 +290,7 @@ class TestWeb3Adapter:
         assert isinstance(storage, (bytes, HexBytes))
         assert len(storage) == 32  # Always 32 bytes
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_get_transaction_count(self, fork_mainnet_full: AnvilFork):
         """Test get_transaction_count through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)
@@ -283,6 +299,7 @@ class TestWeb3Adapter:
         assert isinstance(count, int)
         assert count >= 0
 
+    @pytest.mark.online_rpc
     def test_web3_adapter_is_connected(self, fork_mainnet_full: AnvilFork):
         """Test is_connected through Web3 adapter."""
         adapter = ProviderAdapter.from_web3(fork_mainnet_full.w3)

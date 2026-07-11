@@ -184,12 +184,12 @@ class AnvilFork:
 
     @property
     def fork_url(self) -> str | None:
-        """Return fork url."""
+        """Fork URL."""
         return self._fork_url
 
     @property
     def http_url(self) -> str:
-        """Return http url."""
+        """HTTP URL."""
         return f"http://{self.localhost}:{self.port}"
 
     @property
@@ -209,7 +209,7 @@ class AnvilFork:
 
     @property
     def ws_url(self) -> str:
-        """Return ws url."""
+        """WebSocket URL."""
         return f"ws://{self.localhost}:{self.port}"
 
     @staticmethod
@@ -275,15 +275,37 @@ class AnvilFork:
 
     def close(self, timeout: int = 10) -> None:
         """Perform close."""
-        if getattr(self, "_process", None):
-            self._process.terminate()
-            self._process.wait(timeout)
+        self._close_ipc_socket()
+
+        process = getattr(self, "_process", None)
+        if process is not None:
+            process.terminate()
+            process.wait(timeout)
             self.ipc_filename.unlink(missing_ok=True)
             del self._process
 
         if not self.preserve_capture:
             self.stderr_capture_filename.unlink(missing_ok=True)
             self.stdout_capture_filename.unlink(missing_ok=True)
+
+    def _close_ipc_socket(self) -> None:
+        """Close the web3 IPC socket so it is not left for GC to finalize.
+
+        A ``__del__``-driven ``close()`` may run against a partially-constructed
+        instance (``__init__`` raised before ``self.w3`` was assigned), so the
+        web3 attribute is read defensively. ``_socket`` is private to
+        :class:`web3.providers.ipc.IPCProvider` (absent from ``BaseProvider``),
+        so it too is read via ``getattr`` rather than a cast.
+        """
+        w3 = getattr(self, "w3", None)
+        if w3 is None:
+            return
+        persistent_socket = getattr(w3.provider, "_socket", None)
+        if persistent_socket is not None:
+            sock = persistent_socket.sock
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.close()
 
     def mine(self) -> None:
         """Perform mine.

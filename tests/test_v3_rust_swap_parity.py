@@ -16,7 +16,7 @@ import pytest
 
 from degenbot.degenbot_rs import PyBot
 from degenbot.uniswap.concentrated.types import LiquidityAtTick
-from degenbot.uniswap.v3_libraries.tick_math import MIN_SQRT_RATIO
+from degenbot.uniswap.v3_libraries import MIN_SQRT_RATIO
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v3_pool_factory import make_v3_pool
 
@@ -194,7 +194,6 @@ def test_sparse_fetch_reaches_min_tick_via_empty_words():
         zero_for_one=True,  # zfo (token0 in → token1 out, descending → MIN)
         amount_in=amount_in,
         block=0,
-        fetcher=lambda *_: {},
     )
     assert oracle_outcome is not None, "dense oracle must not miss"
     py_a0, py_a1, py_sp, py_liq, py_tick = (int(x) for x in oracle_outcome)
@@ -231,7 +230,6 @@ def test_sparse_fetch_reaches_min_tick_via_empty_words():
         zero_for_one=True,
         amount_in=amount_in,
         block=0,
-        fetcher=fetcher,
     )
     assert result is not None, "sparse swap returned None"
     rust_a0, rust_a1, rust_sp, rust_liq, rust_tick = (int(x) for x in result)

@@ -37,7 +37,9 @@
 //! Everything else is immutable config set at registration.
 
 use alloy::primitives::{Address, U256};
+use std::sync::Arc;
 
+use crate::bot_core::curve_data_provider::CurveDataProvider;
 use crate::bot_core::state_history::{BlockDelta, ReorgJournal};
 
 // ---------------------------------------------------------------------------
@@ -132,18 +134,76 @@ pub struct RegisterCurvePoolParams {
     // --- Optional metapool wiring ---
     /// Base pool address for metapools (`None` for plain pools).
     pub base_pool: Option<Address>,
+
+    // --- A-ramping (immutable on-chain config; resolves Python-side at
+    //     calc time via per-block timestamp). `None` for non-ramping pools. ---
+    /// Initial amplification coefficient (A at `initial_a_coefficient_time`).
+    pub initial_a_coefficient: Option<u128>,
+    /// Target amplification coefficient (A at `future_a_coefficient_time`).
+    pub future_a_coefficient: Option<u128>,
+    /// Block timestamp at which ramping starts (`u64`).
+    pub initial_a_coefficient_time: Option<u64>,
+    /// Block timestamp at which ramping ends (`u64`).
+    pub future_a_coefficient_time: Option<u64>,
+    /// Pool deployment timestamp (the ramp anchor; `u64`).
+    pub create_timestamp: Option<u64>,
+
+    // --- Crypto-pool fees (immutable on-chain config; `None` / 0 for
+    //     standard stableswap pools that don't use them). ---
+    /// Crypto-pool `fee_gamma` (`u64`).
+    pub fee_gamma: Option<u64>,
+    /// Crypto-pool `mid_fee` (`u64`).
+    pub mid_fee: Option<u64>,
+    /// Crypto-pool `offpeg_fee_multiplier` (`u64`).
+    pub offpeg_fee_multiplier: Option<u64>,
+    /// Crypto-pool `out_fee` (`u64`).
+    pub out_fee: Option<u64>,
+    /// Crypto-pool `gamma` (`u64`).
+    pub gamma: Option<u64>,
+
+    // --- LP token + lending flags + precision multipliers (immutable
+    //     on-chain config). ---
+    /// Dedicated LP token address (`None` ⇔ the pool token itself IS the
+    /// LP, the common Curve V1 plain-pool case).
+    pub lp_token: Option<Address>,
+    /// Per-token `use_lending` flags (true for lending-backed coins).
+    pub use_lending: Vec<bool>,
+    /// Per-token `precision_multipliers` (distinct from `rate_multipliers`:
+    /// `rate_multipliers` is the precision × rate product consumed by `xp`;
+    /// `precision_multipliers` is `10**(2*PRECISION - decimals)`, the
+    /// pre-rate adjustment). One per token.
+    pub precision_multipliers: Vec<U256>,
+
+    // --- Metapool underlying-token addresses (immutable on-chain config). ---
+    /// Underlying ERC20 coin addresses for a metapool (the coins beneath the
+    /// base-pool intermediary coins; `None` for non-metapools). One entry per
+    /// underlying coin. The companion resolves these to `PyErc20Token`
+    /// handles for swap routing — they are NOT the base pool's tokens.
+    pub tokens_underlying: Option<Vec<Address>>,
+
+    // --- Metapool strategy discriminants (immutable; the two
+    //     `PoolStrategies` enums the BOMDRK extension did not carry). ---
+    /// `metapool_rate_style` discriminant (auto()-based `MetapoolRateStyle`).
+    pub metapool_rate_style: u8,
+    /// `metapool_underlying_style` discriminant (`MetapoolUnderlyingStyle`).
+    pub metapool_underlying_style: u8,
+
+    // --- I/O trait object (layer-2 design; the on-chain-state reader). ---
+    /// Off-chain data provider (ADR-005 JFGCHJ). `None` ⇔ no I/O path — a
+    /// pure-Rust fixture test or a pool whose calc doesn't need per-block
+    /// on-chain lookups. When `Some`, the (future, seam task) Python
+    /// companion delegates reads here instead of holding a Python
+    /// `CurveDataProvider`.
+    pub data_provider: Option<Arc<dyn CurveDataProvider>>,
 }
 
-/// Curve `StableSwap` pool state owned by [`crate::bot_core::BotState`].
+/// Immutable Curve registration identity (ADR-005 identity slice).
 ///
-/// Carries the immutable config captured at registration + the mutable
-/// `balances`/`update_block` slot + a per-pool reorg journal. The state-port
-/// sub-slice (ADR-005 slice 11a): the Python `CurveStableswapPool` companion
-/// (11b) will read `balances`/`update_block` from this struct via
-/// `PyLiquidityPool` getters and delegate `external_update` to
-/// `apply_curve_balance_update_by_pool_id`.
-#[derive(Clone, Debug)]
-pub struct CurvePoolState {
+/// Pure registration data — the pool's permanent identity, captured at
+/// `register_curve_pool` and never mutated. Mirrors
+/// `V2PoolIdentity`/`V3PoolIdentity`/`V4PoolIdentity`/`TokenEntry`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CurvePoolIdentity {
     /// Pool contract address.
     pub address: Address,
     /// The pool's ERC-20 tokens (2 or more), in canonical Curve coin order.
@@ -156,33 +216,106 @@ pub struct CurvePoolState {
     pub admin_fee: u64,
     /// Rate multipliers (precision-adjusted), one per token.
     pub rate_multipliers: Vec<U256>,
+    // --- Variant strategy enums (opaque to Rust; carried so the future
+    //     Rust get_dy can dispatch on them) ---
+    /// `swap_style` discriminator (standard / `live_admin` / crypto / ...).
+    /// Stored as a raw u8 to keep Rust free of the Python enum surface.
+    pub swap_style: u8,
+    /// `lending_rate_style` discriminator (`NONE` / ...).
+    pub lending_rate_style: u8,
+    /// `d_variant` discriminator (stableswap D-iteration variant).
+    pub d_variant: u8,
+    /// `y_variant` discriminator (stableswap y-iteration variant).
+    pub y_variant: u8,
+    /// `yd_variant` discriminator (stableswap yd-iteration variant).
+    pub yd_variant: u8,
+    // --- Optional metapool wiring ---
+    /// Base pool address for metapools (`None` for plain pools).
+    pub base_pool: Option<Address>,
+    // --- A-ramping (immutable; see [`RegisterCurvePoolParams`]). ---
+    /// Initial amplification coefficient.
+    pub initial_a_coefficient: Option<u128>,
+    /// Target amplification coefficient.
+    pub future_a_coefficient: Option<u128>,
+    /// Ramping start timestamp.
+    pub initial_a_coefficient_time: Option<u64>,
+    /// Ramping end timestamp.
+    pub future_a_coefficient_time: Option<u64>,
+    /// Pool deployment timestamp.
+    pub create_timestamp: Option<u64>,
+    // --- Crypto-pool fees (immutable). ---
+    /// Crypto-pool `fee_gamma`.
+    pub fee_gamma: Option<u64>,
+    /// Crypto-pool `mid_fee`.
+    pub mid_fee: Option<u64>,
+    /// Crypto-pool `offpeg_fee_multiplier`.
+    pub offpeg_fee_multiplier: Option<u64>,
+    /// Crypto-pool `out_fee`.
+    pub out_fee: Option<u64>,
+    /// Crypto-pool `gamma`.
+    pub gamma: Option<u64>,
+    // --- LP token + lending flags + precision multipliers (immutable). ---
+    /// Dedicated LP token address (`None` ⇔ the pool token IS the LP).
+    pub lp_token: Option<Address>,
+    /// Per-token `use_lending` flags.
+    pub use_lending: Vec<bool>,
+    /// Per-token `precision_multipliers`.
+    pub precision_multipliers: Vec<U256>,
+    // --- Metapool underlying-token addresses (immutable). ---
+    /// Underlying ERC20 coin addresses for a metapool (`None` for plain).
+    pub tokens_underlying: Option<Vec<Address>>,
+    // --- Metapool strategy discriminants (immutable). ---
+    /// `metapool_rate_style` discriminant.
+    pub metapool_rate_style: u8,
+    /// `metapool_underlying_style` discriminant.
+    pub metapool_underlying_style: u8,
+}
 
+/// Curve `StableSwap` pool state owned by [`crate::bot_core::BotState`].
+///
+/// Carries the mutable `balances`/`update_block` slot + a per-pool reorg
+/// journal. Immutable identity lives on [`CurvePoolIdentity`] (look it up via
+/// [`crate::bot_core::BotState::get_curve_identity`]). The state-port
+/// sub-slice (ADR-005 slice 11a): the Python `CurveStableswapPool` companion
+/// (11b) reads `balances`/`update_block` from this struct via `PyLiquidityPool`
+/// getters and delegates `external_update` to
+/// `apply_curve_balance_update_by_pool_id`.
+#[derive(Clone, Debug)]
+pub struct CurvePoolState {
     // --- Mutable state (authoritative) ---
     /// Current balances (one per token).
     pub balances: Vec<U256>,
     /// Block number of the last balance update.
     pub update_block: u64,
 
-    // --- Variant strategy enums (opaque to Rust) ---
-    pub swap_style: u8,
-    pub lending_rate_style: u8,
-    pub d_variant: u8,
-    pub y_variant: u8,
-    pub yd_variant: u8,
-
-    // --- Optional metapool wiring ---
-    pub base_pool: Option<Address>,
-
     /// Reorg journal — balance priors for rollback.
     pub journal: ReorgJournal<CurveBlockDelta>,
+
+    /// Off-chain data provider (ADR-005 JFGCHJ). `None` ⇔ no I/O path.
+    /// Stored on state (not immutable identity) because the provider is an
+    /// I/O shim, not pool identity; the companion reads through the handle
+    /// at calc time.
+    pub data_provider: Option<Arc<dyn CurveDataProvider>>,
+}
+
+impl CurvePoolIdentity {
+    /// Number of tokens (== number of balances).
+    #[must_use]
+    pub fn n_coins(&self) -> usize {
+        self.tokens.len()
+    }
 }
 
 impl CurvePoolState {
-    /// Construct from registration params with a journal of the given depth.
+    /// Construct the (immutable identity, mutable state) pair from
+    /// registration params, with a journal of the given depth.
     /// Pushes a genesis anchor delta (mirror of V2's discipline) so
     /// `restore_before_block` can land on the registration state.
     #[must_use]
-    pub fn from_params(params: RegisterCurvePoolParams, journal_depth: usize) -> Self {
+    pub fn from_params(
+        params: RegisterCurvePoolParams,
+        journal_depth: usize,
+    ) -> (CurvePoolIdentity, CurvePoolState) {
         let mut journal = ReorgJournal::<CurveBlockDelta>::new(journal_depth);
         // Genesis anchor: before == after == registration balances at
         // update_block. The "landed-at" registration point.
@@ -191,29 +324,43 @@ impl CurvePoolState {
             balances_before: params.balances.clone(),
             balances_after: params.balances.clone(),
         });
-        Self {
+        let identity = CurvePoolIdentity {
             address: params.address,
             tokens: params.tokens,
             a_coefficient: params.a_coefficient,
             fee: params.fee,
             admin_fee: params.admin_fee,
             rate_multipliers: params.rate_multipliers,
-            balances: params.balances,
-            update_block: params.update_block,
             swap_style: params.swap_style,
             lending_rate_style: params.lending_rate_style,
             d_variant: params.d_variant,
             y_variant: params.y_variant,
             yd_variant: params.yd_variant,
             base_pool: params.base_pool,
+            initial_a_coefficient: params.initial_a_coefficient,
+            future_a_coefficient: params.future_a_coefficient,
+            initial_a_coefficient_time: params.initial_a_coefficient_time,
+            future_a_coefficient_time: params.future_a_coefficient_time,
+            create_timestamp: params.create_timestamp,
+            fee_gamma: params.fee_gamma,
+            mid_fee: params.mid_fee,
+            offpeg_fee_multiplier: params.offpeg_fee_multiplier,
+            out_fee: params.out_fee,
+            gamma: params.gamma,
+            lp_token: params.lp_token,
+            use_lending: params.use_lending,
+            precision_multipliers: params.precision_multipliers,
+            tokens_underlying: params.tokens_underlying,
+            metapool_rate_style: params.metapool_rate_style,
+            metapool_underlying_style: params.metapool_underlying_style,
+        };
+        let state = CurvePoolState {
+            balances: params.balances,
+            update_block: params.update_block,
             journal,
-        }
-    }
-
-    /// Number of tokens (== number of balances).
-    #[must_use]
-    pub fn n_coins(&self) -> usize {
-        self.tokens.len()
+            data_provider: params.data_provider,
+        };
+        (identity, state)
     }
 }
 
@@ -242,6 +389,23 @@ mod tests {
             y_variant: 0,
             yd_variant: 0,
             base_pool: None,
+            initial_a_coefficient: None,
+            future_a_coefficient: None,
+            initial_a_coefficient_time: None,
+            future_a_coefficient_time: None,
+            create_timestamp: None,
+            fee_gamma: None,
+            mid_fee: None,
+            offpeg_fee_multiplier: None,
+            out_fee: None,
+            gamma: None,
+            lp_token: None,
+            use_lending: vec![false; 3],
+            precision_multipliers: vec![U256::from(1u64); 3],
+            tokens_underlying: None,
+            metapool_rate_style: 1,
+            metapool_underlying_style: 1,
+            data_provider: None,
         }
     }
 
@@ -250,7 +414,10 @@ mod tests {
         let mut core = BotState::new();
         let pool_id = core.register_curve_pool(&three_coin_params(10, &[1_000, 2_000, 3_000]));
         let s = core.get_curve_pool(pool_id).expect("curve pool registered");
-        assert_eq!(s.n_coins(), 3);
+        let id = core
+            .get_curve_identity(pool_id)
+            .expect("curve pool identity registered");
+        assert_eq!(id.n_coins(), 3);
         assert_eq!(
             s.balances,
             vec![U256::from(1_000), U256::from(2_000), U256::from(3_000)]
@@ -294,6 +461,10 @@ mod tests {
             fee_token1: (997, 1000),
             factory: Address::repeat_byte(0xff),
             update_block: 0,
+            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+            stable_swap: false,
+            fee_denominator: None,
+            ..Default::default()
         });
         let affected = core.apply_curve_balance_update_by_pool_id(v2, vec![U256::from(1_500)], 5);
         assert!(
@@ -344,5 +515,96 @@ mod tests {
             res.is_err(),
             "restoring to the registration block must error"
         );
+    }
+
+    #[test]
+    fn a_ramp_crypto_fees_lp_lending_precision_round_trip() {
+        // Every new identity field (A-ramp + crypto fees + lp_token +
+        // use_lending + precision_multipliers) round-trips through
+        // register/get — the BOMDRK acceptance criterion. Covers the
+        // crypto-pool case where every field is populated.
+        let mut core = BotState::new();
+        let lp = Address::repeat_byte(0x99);
+        let params = RegisterCurvePoolParams {
+            address: Address::repeat_byte(0xc2),
+            tokens: vec![Address::repeat_byte(0x01), Address::repeat_byte(0x02)],
+            a_coefficient: 40,
+            fee: 2_000_000,
+            admin_fee: 5_000_000_000,
+            rate_multipliers: vec![U256::from(10u64).pow(U256::from(18u64)); 2],
+            balances: vec![U256::from(1_000), U256::from(2_000)],
+            update_block: 0,
+            swap_style: 2,
+            lending_rate_style: 0,
+            d_variant: 0,
+            y_variant: 0,
+            yd_variant: 0,
+            base_pool: None,
+            initial_a_coefficient: Some(40),
+            future_a_coefficient: Some(80),
+            initial_a_coefficient_time: Some(1_700_000_000),
+            future_a_coefficient_time: Some(1_710_000_000),
+            create_timestamp: Some(1_690_000_000),
+            fee_gamma: Some(5_000_000_000),
+            mid_fee: Some(2_600_000),
+            offpeg_fee_multiplier: Some(2_000_000_000),
+            out_fee: Some(3_000_000),
+            gamma: Some(7_000_000_000),
+            lp_token: Some(lp),
+            use_lending: vec![true, false],
+            precision_multipliers: vec![U256::from(1u64), U256::from(100u64)],
+            tokens_underlying: None,
+            metapool_rate_style: 1,
+            metapool_underlying_style: 1,
+            data_provider: None,
+        };
+        let pool_id = core.register_curve_pool(&params);
+        let id = core
+            .get_curve_identity(pool_id)
+            .expect("curve identity present");
+
+        // A-ramp.
+        assert_eq!(id.initial_a_coefficient, Some(40));
+        assert_eq!(id.future_a_coefficient, Some(80));
+        assert_eq!(id.initial_a_coefficient_time, Some(1_700_000_000));
+        assert_eq!(id.future_a_coefficient_time, Some(1_710_000_000));
+        assert_eq!(id.create_timestamp, Some(1_690_000_000));
+        // Crypto fees.
+        assert_eq!(id.fee_gamma, Some(5_000_000_000));
+        assert_eq!(id.mid_fee, Some(2_600_000));
+        assert_eq!(id.offpeg_fee_multiplier, Some(2_000_000_000));
+        assert_eq!(id.out_fee, Some(3_000_000));
+        assert_eq!(id.gamma, Some(7_000_000_000));
+        // LP token + lending + precision.
+        assert_eq!(id.lp_token, Some(lp));
+        assert_eq!(id.use_lending, vec![true, false]);
+        assert_eq!(
+            id.precision_multipliers,
+            vec![U256::from(1u64), U256::from(100u64)]
+        );
+    }
+
+    #[test]
+    fn plain_pool_defaults_none_for_optional_identity() {
+        // A non-ramping standard pool passes `None` for the new optional
+        // fields; the identity round-trips them as `None` (the default
+        // fallback shape other slices rely on).
+        let mut core = BotState::new();
+        let pool_id = core.register_curve_pool(&three_coin_params(10, &[1_000, 2_000, 3_000]));
+        let id = core
+            .get_curve_identity(pool_id)
+            .expect("curve identity present");
+        assert_eq!(id.initial_a_coefficient, None);
+        assert_eq!(id.future_a_coefficient, None);
+        assert_eq!(id.create_timestamp, None);
+        assert_eq!(id.fee_gamma, None);
+        assert_eq!(id.mid_fee, None);
+        assert_eq!(id.gamma, None);
+        assert_eq!(id.lp_token, None);
+        assert!(id.use_lending.iter().all(|&b| !b));
+        assert!(id
+            .precision_multipliers
+            .iter()
+            .all(|x| *x == U256::from(1u64)));
     }
 }

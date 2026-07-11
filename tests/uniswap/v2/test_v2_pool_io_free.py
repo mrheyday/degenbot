@@ -1,4 +1,4 @@
-"""Tests for Phase 3: I/O-free LiquidityPool construction via Bot."""
+"""Tests for Phase 3: I/O-free UniswapV2Pool construction via Bot."""
 
 import pathlib
 from fractions import Fraction
@@ -16,13 +16,14 @@ from degenbot.erc20.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.pool import InvalidSwapInputAmount, LiquidityPoolError
 from degenbot.provider.call_helpers import encode_function_calldata
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.trackers import UniswapV2PoolTracker
 from degenbot.uniswap.v2_functions import (
     constant_product_calc_exact_in,
     constant_product_calc_exact_out,
 )
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate, UniswapV2PoolState
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v2_pool_factory import make_v2_pool
 
@@ -32,7 +33,7 @@ _PY_BOT = PyBot()
 def _make_test_config(tmp_path: pathlib.Path) -> DegenbotConfig:
     return DegenbotConfig(
         database=DatabaseSettings(path=tmp_path / "test.db"),
-        rpc={1: "https://eth.llamarpc.com/"},
+        rpc={1: ETHEREUM_ARCHIVE_NODE_HTTP_URI},
         default_chain_id=1,
     )
 
@@ -64,7 +65,7 @@ UNISWAP_V2_FACTORY = "0x5C69bEe701ef814E44274f655e7632cB715C14B6"
 
 
 class TestV2PoolIOFreeConstructor:
-    """LiquidityPool can be constructed with pre-fetched data only."""
+    """UniswapV2Pool can be constructed with pre-fetched data only."""
 
     def test_io_free_constructor_basic(self) -> None:
         """An I/O-free V2 pool can be constructed with tokens, factory, fees, and reserves."""
@@ -85,9 +86,8 @@ class TestV2PoolIOFreeConstructor:
         )
 
         assert pool.address == WETH_USDC_V2_POOL
-        assert pool.chain_id == 1
-        assert pool.token0 is weth
-        assert pool.token1 is usdc
+        assert pool.token0.address == weth.address
+        assert pool.token1.address == usdc.address
         assert pool.factory == get_checksum_address(UNISWAP_V2_FACTORY)
         assert pool.fee_token0 == Fraction(3, 1000)
         assert pool.fee_token1 == Fraction(3, 1000)
@@ -194,10 +194,10 @@ class TestBotBuildV2Pool:
 
         # Pre-register tokens so build_erc20token doesn't need RPC
         weth = make_erc20(
-            _PY_BOT, weth_addr, chain_id=1, name="Wrapped Ether", symbol="WETH", decimals=18
+            bot._py_bot, weth_addr, chain_id=1, name="Wrapped Ether", symbol="WETH", decimals=18
         )
         usdc = make_erc20(
-            _PY_BOT, usdc_addr, chain_id=1, name="USD Coin", symbol="USDC", decimals=6
+            bot._py_bot, usdc_addr, chain_id=1, name="USD Coin", symbol="USDC", decimals=6
         )
         bot.tokens.add(token_address=weth_addr, chain_id=1, token=weth)
         bot.tokens.add(token_address=usdc_addr, chain_id=1, token=usdc)
@@ -258,7 +258,7 @@ class TestBotBuildV2Pool:
             WETH_USDC_V2_POOL,
         )
 
-        assert isinstance(pool, LiquidityPool)
+        assert isinstance(pool, UniswapV2Pool)
         assert pool.address == get_checksum_address(WETH_USDC_V2_POOL)
         assert pool.token0.address == get_checksum_address(weth_addr)
         assert pool.token1.address == get_checksum_address(usdc_addr)
@@ -330,8 +330,12 @@ class TestV2PoolTrackerWithBot:
         bot = Bot(config, provider=provider)
 
         # Pre-register tokens so build_erc20token doesn't need RPC
-        weth = _make_weth()
-        usdc = _make_usdc()
+        weth = make_erc20(
+            bot._py_bot, weth_addr, chain_id=1, name="Wrapped Ether", symbol="WETH", decimals=18
+        )
+        usdc = make_erc20(
+            bot._py_bot, usdc_addr, chain_id=1, name="USD Coin", symbol="USDC", decimals=6
+        )
         bot.tokens.add(token_address=weth_addr, chain_id=1, token=weth)
         bot.tokens.add(token_address=usdc_addr, chain_id=1, token=usdc)
 
@@ -372,7 +376,7 @@ class TestV2PoolTrackerWithBot:
 
         # Call get_pool — should call bot.build_pool internally
         pool = manager.get_pool(WETH_USDC_V2_POOL)
-        assert isinstance(pool, LiquidityPool)
+        assert isinstance(pool, UniswapV2Pool)
         assert pool.address == get_checksum_address(WETH_USDC_V2_POOL)
         assert pool.token0.address == get_checksum_address(weth_addr)
         assert pool.token1.address == get_checksum_address(usdc_addr)
@@ -390,7 +394,7 @@ class _DelegateSpy:
     """Wraps a ``PyLiquidityPool`` to record ``calculate_tokens_out/in`` calls.
 
     ADR-005 slice 5 delegation-test for the V2 constant-product calc path:
-    ``LiquidityPool.calculate_tokens_out_from_tokens_in`` (no override) routes
+    ``UniswapV2Pool.calculate_tokens_out_from_tokens_in`` (no override) routes
     through ``PyLiquidityPool.calculate_tokens_out``. Pass-through for all other
     handle methods via ``__getattr__``.
     """
@@ -425,7 +429,7 @@ class TestV2CalcDelegation:
     """
 
     @staticmethod
-    def _make_pool() -> LiquidityPool:
+    def _make_pool() -> UniswapV2Pool:
         weth = _make_weth()
         usdc = _make_usdc()
         return make_v2_pool(

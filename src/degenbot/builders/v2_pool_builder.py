@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import eth_abi.abi
@@ -14,7 +13,7 @@ from degenbot.degenbot_rs import dex_identity
 from degenbot.logging import logger
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.registry.pool_type import pool_type_registry
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate
 
 if TYPE_CHECKING:
@@ -124,16 +123,12 @@ class V2PoolBuilder(V2BuilderBase):
         # cover. The branch keys on ``dex.variant`` being a Camelot preset;
         # when stable, switch to the ``camelot-v2-stable`` preset.
         camelot: CamelotStateFetch | None = None
-        fee_token0 = common.fee_token0
-        fee_token1 = common.fee_token1
         gamma_numer0 = common.fee_token0.denominator - common.fee_token0.numerator
         fee_denom0 = common.fee_token0.denominator
         gamma_numer1 = common.fee_token1.denominator - common.fee_token1.numerator
         fee_denom1 = common.fee_token1.denominator
         if dex is not None and dex.variant.startswith("camelot-v2"):
             camelot = self._fetch_camelot_state(common.pool_address, io=io, state_block=state_block)
-            fee_token0 = Fraction(camelot.fee_token0, camelot.fee_denominator)
-            fee_token1 = Fraction(camelot.fee_token1, camelot.fee_denominator)
             gamma_numer0 = camelot.fee_denominator - camelot.fee_token0
             fee_denom0 = camelot.fee_denominator
             gamma_numer1 = camelot.fee_denominator - camelot.fee_token1
@@ -149,6 +144,15 @@ class V2PoolBuilder(V2BuilderBase):
         # ``gamma_numer`` is the retained POST-FEE fraction (Rust convention per
         # the ``IntHopState`` docs: ``gamma_numer=997`` for 0.3%); the source
         # ``fee_tokenN`` Fraction is the FEE — convert by subtraction.
+        # Descriptor params (ADR-005 slice 7 / FMO2GE): the DEX variant +
+        # Camelot stable strategy flow into Rust as a ``V2PoolDescriptor`` on
+        # the ``PyLiquidityPool`` handle. The companion reads them off the
+        # handle once OGTTCS lands; for now the class-level attrs remain the
+        # read path.
+        variant = dex.variant if dex is not None else "uniswap-v2"
+        stable_swap = camelot.stable_swap if camelot is not None else False
+        fee_denominator = camelot.fee_denominator if camelot is not None else None
+
         pool_id = self._py_bot.register_v2_pool(
             address=common.pool_address,
             token0=common.token0_address,
@@ -161,30 +165,14 @@ class V2PoolBuilder(V2BuilderBase):
             fee_denom1=fee_denom1,
             factory=common.factory,
             update_block=common.state_block,
+            variant=variant,
+            stable_swap=stable_swap,
+            fee_denominator=fee_denominator,
         )
         py_pool = self._py_bot.get_pool(pool_id)
         assert py_pool is not None, "register_v2_pool returned a pool_id with no handle"
 
-        pool = pool_class(
-            py_pool,
-            address=common.pool_address,
-            token0=token0,
-            token1=token1,
-            dex=dex,
-            chain_id=common.chain_id,
-            factory=common.factory,
-            fee_token0=fee_token0,
-            fee_token1=fee_token1,
-            deployer_address=common.deployer,
-            init_hash=common.init_hash,
-        )
-
-        # Camelot stable-strategy wiring (folded in slice 7 step 4a): the
-        # ``stable_swap`` flag + ``fee_denominator`` drive the solidly-stable
-        # calc + hop branch on the base ``LiquidityPool``.
-        if camelot is not None:
-            pool.stable_swap = camelot.stable_swap
-            pool.fee_denominator = camelot.fee_denominator
+        pool = pool_class._from_py_pool(py_pool)  # noqa: SLF001
 
         # Register pool
         self._register_pool(pool, chain_id=chain_id)
@@ -278,11 +266,10 @@ class V2PoolBuilder(V2BuilderBase):
             TypeError: If the operation fails.
 
         """
-        if not isinstance(pool, LiquidityPool):
+        if not isinstance(pool, UniswapV2Pool):
             msg = f"V2PoolBuilder cannot update {type(pool).__name__}"
             raise TypeError(msg)
 
-        assert pool.chain_id is not None
         assert io is not None, "io must be provided for update()"
         block_number_ = block_number if block_number is not None else io.get_block_number()
         block_number_ = int(block_number_) if not isinstance(block_number_, int) else block_number_

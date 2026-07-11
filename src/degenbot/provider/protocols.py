@@ -9,9 +9,11 @@ details.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eth_typing import BlockIdentifier
     from hexbytes import HexBytes
     from web3.types import BlockData, LogReceipt, TxParams
@@ -28,12 +30,12 @@ class ProviderBackend(Protocol):
 
     @property
     def chain_id(self) -> int:
-        """Return chain id."""
+        """Chain id."""
         ...
 
     @property
     def block_number(self) -> int:
-        """Return block number."""
+        """Block number."""
         ...
 
     def get_block_number(self) -> int:
@@ -189,6 +191,19 @@ class AsyncProviderBackend(Protocol):
 
     async def get_transaction_count(self, address: str, block: int | None = None) -> int:
         """Return the transaction count for the given address."""
+        ...
+
+    async def get_transaction_receipt(self, tx_hash: str) -> Mapping[str, Any] | None:
+        """Return the receipt for ``tx_hash``, or ``None`` if unmined."""
+        ...
+
+    async def make_request(self, method: str, params: list) -> Any:  # noqa: ANN401
+        """Raw JSON-RPC passthrough (PAGQCK dispatch-path routing)."""
+        ...
+
+    @property
+    def rpc_url(self) -> str:
+        """The underlying RPC endpoint URL."""
         ...
 
     def is_connected(self) -> bool:

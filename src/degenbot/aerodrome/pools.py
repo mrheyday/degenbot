@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import dataclasses
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from fractions import Fraction
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 from weakref import WeakSet
 
 from eth_abi import decode as abi_decode
@@ -21,6 +21,7 @@ from degenbot.aerodrome.v2_pool_calc import AerodromeV2PoolCalc
 from degenbot.aerodrome.v2_pool_state import AerodromeV2PoolState as AerodromeV2PoolStateMixin
 from degenbot.arbitrage.types import UniswapV2PoolSwapAmounts
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.pool import (
     ExternalUpdateError,
@@ -31,46 +32,15 @@ from degenbot.types.abstract import AbstractLiquidityPool, AbstractPoolState
 from degenbot.types.concrete import PublisherMixin, Subscriber
 from degenbot.types.hop_types import ConstantProductHop, HopType, SolidlyStableHop
 from degenbot.types.pool_protocols import SimulationResult
-from degenbot.types.state_cache import StateCache
-from degenbot.uniswap.log_decoders import V2_SYNC_TOPIC, get_block_number, get_log_data_bytes
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 
 if TYPE_CHECKING:
-    from fractions import Fraction
-
     from eth_typing import ChecksumAddress
 
-    from degenbot.erc20 import Erc20Token
+    from degenbot.degenbot_rs import PyLiquidityPool
     from degenbot.provider.sync_adapter import ProviderAdapter
-    from degenbot.types.aliases import BlockNumber, ChainId
+    from degenbot.types.aliases import BlockNumber
     from degenbot.uniswap.types import UniswapPoolSwapVector
-
-
-def _decode_aerodrome_v2_sync(log: dict) -> Any:  # noqa: ANN401
-    """Decode a V2 Sync event for Aerodrome pools.
-
-    Same format as Uniswap V2 Sync, but creates an AerodromeV2PoolExternalUpdate.
-
-    Returns:
-        The computed value.
-
-    """
-    reserve0, reserve1 = abi_decode(
-        ["uint112", "uint112"],
-        get_log_data_bytes(log),
-    )
-    block_number = get_block_number(log)
-
-    update = AerodromeV2PoolExternalUpdate(
-        block_number=block_number,
-        reserves_token0=reserve0,
-        reserves_token1=reserve1,
-    )
-
-    def apply(pool: AerodromeV2Pool) -> None:  # type: ignore[name-defined]
-        pool.external_update(update)
-
-    return apply
 
 
 class AerodromeV2Pool(
@@ -83,61 +53,101 @@ class AerodromeV2Pool(
 
     variant: ClassVar[str | None] = "aerodrome"
 
-    LOG_HANDLERS: ClassVar[dict[str, Any]] = {
-        V2_SYNC_TOPIC: _decode_aerodrome_v2_sync,
-    }
-
     type PoolState = AerodromeV2PoolState
 
     FEE_DENOMINATOR = 10_000
 
-    def __init__(
-        self,
-        address: ChecksumAddress | str,
-        *,
-        token0: Erc20Token,
-        token1: Erc20Token,
-        factory: str,
-        fee: Fraction,
-        stable: bool,
-        reserves_token0: int,
-        reserves_token1: int,
-        chain_id: ChainId | None = None,
-        deployer_address: str | None = None,
-        state_block: BlockNumber | None = None,
-        state_cache_depth: int = 8,
-    ) -> None:
-        """Initialize the instance."""
-        self.address = get_checksum_address(address)
+    # Instance attributes set in `_from_py_pool` (the only construction seam).
+    _py_pool: PyLiquidityPool
+    address: ChecksumAddress
+    factory: ChecksumAddress
+    deployer_address: ChecksumAddress
+    _initial_state_block: int
+    _stable: bool
+    _fee: Fraction
+    _token0: Erc20Token
+    _token1: Erc20Token
+    name: str
+    _subscribers: WeakSet[Subscriber]
 
-        self._chain_id = chain_id if chain_id is not None else token0.chain_id
-        state_block = state_block if state_block is not None else 0
-        self._initial_state_block = state_block
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        """Direct construction is forbidden.
 
-        self.factory = get_checksum_address(factory)
-        self.deployer_address = (
-            get_checksum_address(deployer_address) if deployer_address is not None else self.factory
+        ``AerodromeV2Pool`` is a Python companion over a Rust-owned
+        ``PyLiquidityPool`` handle. Use the registered entry points instead:
+
+        - Production: ``Bot.build_pool(address)``
+        - Tests: ``make_aerodrome_v2_pool(...)``
+
+        Both register the pool in Rust, obtain the ``PyLiquidityPool``
+        handle, and wrap it via :meth:`_from_py_pool`.
+
+        Raises:
+            TypeError: Always. Direct construction is not supported.
+
+        """
+        msg = (
+            f"{type(self).__name__} cannot be constructed directly. "
+            "Use Bot.build_pool(address) (production) or "
+            "make_aerodrome_v2_pool(...) (tests) to register the pool in "
+            "Rust and obtain the PyLiquidityPool handle to wrap."
         )
-        self._stable = stable
-        self._fee = fee
-        self._token0 = token0
-        self._token1 = token1
+        raise TypeError(msg)
 
-        # Wire calculation strategy at construction — no runtime if self._stable dispatch
-        self._wire_stable_calculations(stable=stable)
+    @classmethod
+    def _from_py_pool(cls, py_pool: PyLiquidityPool) -> Self:
+        """Wrap a Rust-owned ``PyLiquidityPool`` handle as a Python companion.
 
-        self.name = f"{self._token0}-{self._token1} ({self.__class__.__name__}, {100 * self._fee.numerator / self._fee.denominator:.2f}%)"  # noqa:E501
+        Internal seam (ADR-005, Polars-style ``_from_pydf`` pattern). Every
+        identity field (address, tokens, factory, fee, stable, variant) is
+        read off the handle; reserves live in Rust (``AerodromeV2PoolState``)
+        and are read via ``snapshot_aerodrome()`` — the Python ``StateCache``
+        is gone.
 
-        initial_state = self.PoolState.__value__(
-            address=self.address,
-            reserves_token0=reserves_token0,
-            reserves_token1=reserves_token1,
-            block=state_block,
-        )
+        Returns:
+            A ``cls`` instance wrapping ``py_pool``.
 
-        self._state_cache = StateCache(max_depth=state_cache_depth)
-        self._state_cache.append(initial_state, block=state_block)
-        self._subscribers: WeakSet[Subscriber] = WeakSet()
+        Raises:
+            DegenbotValueError: If the handle is not an Aerodrome V2 pool.
+
+        """
+        self = cls.__new__(cls)
+        self._py_pool = py_pool
+
+        if py_pool.pool_family != "aerodrome-v2":
+            msg = (
+                "PyLiquidityPool handle is not an Aerodrome V2 pool "
+                f"(got pool_family {py_pool.pool_family!r})"
+            )
+            raise DegenbotValueError(message=msg)
+
+        self.address = get_checksum_address(py_pool.address)
+        self.factory = get_checksum_address(py_pool.factory)
+        self.deployer_address = self.factory
+
+        py_token0 = py_pool.get_token0()
+        py_token1 = py_pool.get_token1()
+        if py_token0 is None or py_token1 is None:
+            msg = (
+                "pool tokens must be registered in the same Bot as the pool "
+                "(ADR-006): get_token0/get_token1 returned None"
+            )
+            raise DegenbotValueError(message=msg)
+        self._token0 = Erc20Token._from_py_token(py_token0)  # noqa: SLF001
+        self._token1 = Erc20Token._from_py_token(py_token1)  # noqa: SLF001
+
+        self._stable = py_pool.aerodrome_stable
+        fee_numer, fee_denom = py_pool.aerodrome_fee
+        self._fee = Fraction(fee_numer, fee_denom)
+
+        # Wire calculation strategy at construction.
+        self._wire_stable_calculations(stable=self._stable)
+
+        self.name = f"{self._token0}-{self._token1} ({self.__class__.__name__}, {100 * self._fee.numerator / self._fee.denominator:.2f}%)"  # noqa: E501
+
+        self._initial_state_block = py_pool.update_block
+        self._subscribers = WeakSet()
+        return self
 
     def __repr__(self) -> str:  # pragma: no cover
         """Return the canonical string representation.
@@ -149,24 +159,34 @@ class AerodromeV2Pool(
         return f"{self.__class__.__name__}(address={self.address}, token0={self._token0}, token1={self._token1}, stable={self._stable})"  # noqa:E501
 
     @property
-    def chain_id(self) -> int | None:
-        """Return chain id."""
-        return self._chain_id
-
-    @property
     def reserves_token0(self) -> int:
-        """Return reserves token0."""
+        """Reserves token0."""
         return self.state.reserves_token0
 
     @property
     def reserves_token1(self) -> int:
-        """Return reserves token1."""
+        """Reserves token1."""
         return self.state.reserves_token1
 
     @property
     def state(self) -> PoolState:
-        """State."""
-        return self._state_cache.current
+        """State.
+
+        Raises:
+            DegenbotValueError: If the Rust snapshot is absent.
+
+        """
+        snap = self._py_pool.snapshot_aerodrome()
+        if snap is None:
+            msg = f"No Aerodrome V2 pool state available for {self.address}"
+            raise DegenbotValueError(message=msg)
+        reserve0, reserve1, block = snap
+        return self.PoolState.__value__(
+            address=self.address,
+            reserves_token0=reserve0,
+            reserves_token1=reserve1,
+            block=block,
+        )
 
     @property
     def update_block(self) -> BlockNumber:
@@ -205,18 +225,14 @@ class AerodromeV2Pool(
                 message=f"Rejected update for block {update.block_number} in the past, current update block is {self.update_block}",  # noqa:E501
             )
 
-        working_state = dataclasses.replace(
-            self.state,
-            reserves_token0=update.reserves_token0,
-            reserves_token1=update.reserves_token1,
-            block=update.block_number,
+        self._py_pool.apply_aerodrome_sync(
+            update.reserves_token0,
+            update.reserves_token1,
+            update.block_number,
         )
-
-        with self._state_cache.lock():
-            self._state_cache.append(working_state, block=update.block_number)
-            self._notify_subscribers(
-                message=AerodromeV2PoolStateUpdated(self.state),
-            )
+        self._notify_subscribers(
+            message=AerodromeV2PoolStateUpdated(self.state),
+        )
 
     def get_pool_identity_values(
         self,
@@ -316,8 +332,7 @@ class AerodromeV2Pool(
 
         """
         try:
-            with self._state_cache.lock():
-                self._state_cache.discard_before_block(block)
+            self._py_pool.discard_aerodrome_before_block(block)
         except ValueError as e:
             raise NoPoolStateAvailable(block=block) from e
 
@@ -337,8 +352,7 @@ class AerodromeV2Pool(
 
         """
         try:
-            with self._state_cache.lock():
-                self._state_cache.restore_before_block(block)
+            self._py_pool.restore_aerodrome_before_block(block)
         except ValueError as e:
             raise NoPoolStateAvailable(block=block) from e
         self._notify_subscribers(message=AerodromeV2PoolStateUpdated(self.state))

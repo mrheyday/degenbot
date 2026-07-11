@@ -5,24 +5,21 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
-import eth_abi.abi
-from sqlalchemy import select
-
+from degenbot.abi_adapter import decode as abi_decode
 from degenbot.builders.tick_data_fetcher import (
     FetchedTickData,
     TickDataTypes,
     make_tick_data_fetcher,
 )
-from degenbot.builders.v3_builder_base import V3BuilderBase
+from degenbot.builders.v3_builder_base import V3BuilderBase, V3DbValues
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.database.models.pools import LiquidityPoolTable, UniswapV3PoolTableBase
+from degenbot.degenbot_rs import cl_get_tick_word_and_bit_position
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.exceptions.pool import LiquidityPoolError
 from degenbot.logging import logger
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.registry.pool_type import pool_type_registry
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
-from degenbot.uniswap.v3_functions import get_tick_word_and_bit_position
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.uniswap.v3_types import (
     UniswapV3PoolExternalUpdate,
@@ -116,23 +113,54 @@ class V3PoolBuilder(V3BuilderBase):
             request.state_block if request.state_block is not None else io.get_block_number()
         )
 
-        # Try DB first
+        # Try DB first — route the construction-time read through the Rust
+        # `PyBotIo` seam (QVMWQC). `fetch_pool_row` returns the scalar + FK-id
+        # columns; the relationships (`exchange`, `token0/1`) + the V3 subclass
+        # row (`tick_spacing`/fees) hydrate via per-FK fetches, mirroring the
+        # prior SQLAlchemy lazy-load. Falls back to skipping when no `io` /
+        # `database_path` is configured (mirrors `contextlib.suppress`).
         db_values = None
         pool_id_db: int | None = None
-        with contextlib.suppress(Exception), self._db() as session:
-            pool_from_db = session.scalar(
-                select(LiquidityPoolTable).where(
-                    LiquidityPoolTable.address == pool_address,
-                    LiquidityPoolTable.chain == chain_id,
-                ),
-            )
-            if pool_from_db is not None:
-                if not isinstance(pool_from_db, UniswapV3PoolTableBase):
-                    msg = f"Expected UniswapV3PoolTableBase, got {type(pool_from_db).__name__}"
-                    raise DegenbotValueError(message=msg)
-
-                db_values = V3BuilderBase.extract_db_values(pool_from_db)
-                pool_id_db = pool_from_db.id
+        pool_kind_db: str | None = None
+        fetch_pool_row = getattr(io, "fetch_pool_row", None) if io is not None else None
+        if fetch_pool_row is not None:
+            # All PyBotIo DB-query methods are present together (gated on
+            # `fetch_pool_row`); bind them via `getattr(..., None)` so the
+            # static type checker doesn't flag the `PoolIO`-protocol access
+            # (`PyBotIo` defines them; `PoolIO` does not).
+            fetch_pool_kind = getattr(io, "fetch_pool_kind", None)
+            fetch_exchange = getattr(io, "fetch_exchange", None)
+            fetch_token_by_id = getattr(io, "fetch_token_by_id", None)
+            if (
+                fetch_pool_kind is not None
+                and fetch_exchange is not None
+                and fetch_token_by_id is not None
+            ):
+                with contextlib.suppress(Exception):
+                    pool_row = fetch_pool_row(chain_id=chain_id, address=pool_address)
+                    if pool_row is not None:
+                        kind_row = fetch_pool_kind(kind=pool_row.kind, pool_id=pool_row.id)
+                        exchange_row = fetch_exchange(exchange_id=pool_row.exchange_id)
+                        token0_row = fetch_token_by_id(token_id=pool_row.token0_id)
+                        token1_row = fetch_token_by_id(token_id=pool_row.token1_id)
+                        if (
+                            kind_row is not None
+                            and exchange_row is not None
+                            and token0_row is not None
+                            and token1_row is not None
+                        ):
+                            db_values = V3DbValues(
+                                factory=get_checksum_address(exchange_row.factory),
+                                token0_address=get_checksum_address(token0_row.address),
+                                token1_address=get_checksum_address(token1_row.address),
+                                fee=kind_row.fee_token0,
+                                tick_spacing=kind_row.tick_spacing,
+                                deployer_address=exchange_row.deployer
+                                if exchange_row.deployer is not None
+                                else None,
+                            )
+                        pool_id_db = pool_row.id
+                        pool_kind_db = pool_row.kind
 
         # Get immutable values
         if db_values is not None:
@@ -141,7 +169,6 @@ class V3PoolBuilder(V3BuilderBase):
             token1_address = db_values.token1_address
             fee = db_values.fee
             tick_spacing_for_pool = db_values.tick_spacing
-            db_deployer = db_values.deployer_address
         else:
             # ADR-005 slice 14f: when io is a PyBotIo (Bot's build path),
             # delegate the 5-call immutable RPC choreography to Rust. SyncPoolIO
@@ -239,7 +266,7 @@ class V3PoolBuilder(V3BuilderBase):
             slot0_data = V3BuilderBase.decode_slot0(slot0_result)
             sqrt_price_x96 = slot0_data.sqrt_price_x96
             tick = slot0_data.tick
-            (liquidity,) = eth_abi.abi.decode(types=["uint128"], data=liquidity_result)
+            (liquidity,) = abi_decode(types=["uint128"], data=liquidity_result)
 
         # Fetch initial tick bitmap and tick data
         db_snapshot_loaded = False
@@ -254,22 +281,39 @@ class V3PoolBuilder(V3BuilderBase):
         elif request.tick_bitmap is not None or request.tick_data is not None:
             raise DegenbotValueError(message="Provide both tick_bitmap and tick_data, or neither.")
         else:
-            # Try DB snapshot tables first
+            # Try DB snapshot tables first — route the tick-snapshot read
+            # through the Rust `PyBotIo` seam (QVMWQC). The per-FK fetch
+            # methods mirror the prior `pool.initialization_maps` /
+            # `pool.liquidity_positions` lazy-loads; `liquidity_update_block`
+            # comes from the subclass row.
             if pool_id_db is not None:
-                with contextlib.suppress(Exception), self._db() as session:
-                    pool_with_data = session.scalar(
-                        select(LiquidityPoolTable).where(LiquidityPoolTable.id == pool_id_db),
-                    )
-                    if pool_with_data is not None and isinstance(
-                        pool_with_data,
-                        UniswapV3PoolTableBase,
-                    ):
+                # Same `getattr(..., None)` binding as the immutable-data
+                # read above (PyBotIo DB-query methods share presence).
+                fetch_init_maps = getattr(io, "fetch_initialization_maps", None)
+                fetch_liq_positions = getattr(io, "fetch_liquidity_positions", None)
+                fetch_pool_kind = getattr(io, "fetch_pool_kind", None)
+                if (
+                    fetch_init_maps is not None
+                    and fetch_liq_positions is not None
+                    and fetch_pool_kind is not None
+                ):
+                    with contextlib.suppress(Exception):
+                        init_maps = fetch_init_maps(pool_id_db)
+                        liq_positions = fetch_liq_positions(pool_id_db)
+                        update_block = None
+                        kind_row = fetch_pool_kind(kind=pool_kind_db, pool_id=pool_id_db)
+                        if kind_row is not None:
+                            update_block = kind_row.liquidity_update_block
                         working_tick_bitmap, working_tick_data, db_snapshot_loaded = (
-                            V3BuilderBase.load_tick_snapshot(pool_with_data)
+                            V3BuilderBase.load_tick_snapshot_from_seam_rows(
+                                init_maps=init_maps,
+                                liq_positions=liq_positions,
+                                liquidity_update_block=update_block,
+                            )
                         )
 
             if not db_snapshot_loaded:
-                word, _ = get_tick_word_and_bit_position(
+                word, _ = cl_get_tick_word_and_bit_position(
                     tick=int(tick),
                     tick_spacing=tick_spacing_for_pool,
                 )
@@ -280,7 +324,7 @@ class V3PoolBuilder(V3BuilderBase):
                 if fetch_tick_bitmap is not None:
                     bitmap_at_word = fetch_tick_bitmap(pool_address, word, block=state_block)
                 else:
-                    (bitmap_at_word,) = eth_abi.abi.decode(
+                    (bitmap_at_word,) = abi_decode(
                         types=["uint256"],
                         data=io.call(
                             to=pool_address,
@@ -309,7 +353,7 @@ class V3PoolBuilder(V3BuilderBase):
                                 data=encode_function_calldata("ticks(int24)", [active_tick]),
                                 block=state_block,
                             )
-                            liquidity_gross, liquidity_net, *_ = eth_abi.abi.decode(
+                            liquidity_gross, liquidity_net, *_ = abi_decode(
                                 types=[
                                     "uint128",
                                     "int128",
@@ -333,19 +377,8 @@ class V3PoolBuilder(V3BuilderBase):
                     block=state_block,
                 )
 
-        # Determine deployer and init_hash from DB (if available) or pool type registry
-        deployer = factory
-        init_hash = UniswapV3Pool.UNISWAP_V3_MAINNET_POOL_INIT_HASH
-        db_deployer = locals().get("db_deployer")  # Set if pool was found in DB
-        if db_deployer is not None:
-            deployer = get_checksum_address(db_deployer)
-        else:
-            registry_deployment = pool_type_registry.get_deployment(chain_id, factory)
-            if registry_deployment is not None:
-                if registry_deployment.pool_init_hash is not None:
-                    init_hash = registry_deployment.pool_init_hash
-                if registry_deployment.deployer is not None:
-                    deployer = get_checksum_address(registry_deployment.deployer)
+        # Deployer / init-hash are resolved off the Rust handle by _from_py_pool
+        # (Fork A, P62DKO) — the builder no longer computes them.
 
         # Only pass tick data if we have a complete DB snapshot.
         # Map factory addresses to pool classes for V3 variants
@@ -394,6 +427,7 @@ class V3PoolBuilder(V3BuilderBase):
             tick_data=rust_rows or None,
             update_block=state_block_int,
             coverage="tracked" if db_snapshot_loaded else "sparse",
+            tick_data_fetcher=self._make_tick_data_fetcher(pool_address, chain_id, io=io),
         )
         py_pool_handle = self._py_bot.get_pool(pool_id)
         assert py_pool_handle is not None, "register_v3_pool returned a pool_id with no handle"
@@ -410,22 +444,21 @@ class V3PoolBuilder(V3BuilderBase):
         # The companion's ``_bitmap_override`` is populated by the constructor
         # from ``tick_bitmap_override`` below; it does not depend on a Rust
         # ``update_tick_data`` call.
-        pool = pool_class(
-            py_pool_handle,
-            address=pool_address,
-            token0=token0,
-            token1=token1,
-            factory=factory,
-            fee=fee,
-            tick_spacing=tick_spacing_for_pool,
-            chain_id=chain_id,
-            deployer_address=deployer,
-            init_hash=init_hash,
-            tick_data_fetcher=self._make_tick_data_fetcher(pool_address, chain_id, io=io),
-            state_block=int(state_block) if state_block is not None else 0,
-            sparse_liquidity_map=not (db_snapshot_loaded and bool(working_tick_data)),
-            tick_bitmap_override=working_tick_bitmap or None,
-        )
+        # ADR-005 sealed seam: the companion reads ALL identity off the handle
+        # via `_from_py_pool` (no identity kwargs). The tick fetcher was stored
+        # Rust-side at registration above (task MLJT4V).
+        pool = pool_class._from_py_pool(py_pool_handle)  # noqa: SLF001
+        # Sparse-liquidity-map flag: the companion infers from tick_data_snapshot,
+        # but the builder knows the true coverage from the DB snapshot. Override
+        # if the builder has more info.
+        pool._sparse_liquidity_map = not (db_snapshot_loaded and bool(working_tick_data))  # noqa: SLF001
+        # Deployer / init-hash: read off the Rust handle (Fork A, P62DKO).
+        # The builder resolved the JSON-sourced deployer (effective deployer,
+        # covering PancakeSwap V3's separate deployer) + init_hash at
+        # registration; the companion already carries the verified values, so
+        # no DB/registry override is needed here.
+        # pool.deployer_address / pool.init_hash are set by _from_py_pool from
+        # the handle.
 
         # Register pool
         self._pools.add(
@@ -471,7 +504,6 @@ class V3PoolBuilder(V3BuilderBase):
             raise TypeError(msg)
 
         assert io is not None
-        assert pool.chain_id is not None
         raw_block = block_number if block_number is not None else io.get_block_number()
         block_number_ = int(raw_block) if not isinstance(raw_block, int) else raw_block
 
@@ -495,7 +527,7 @@ class V3PoolBuilder(V3BuilderBase):
 
             (liquidity,) = cast(
                 "tuple[int]",
-                eth_abi.abi.decode(
+                abi_decode(
                     types=["uint256"],
                     data=io.call(
                         to=pool.address,

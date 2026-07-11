@@ -1,6 +1,6 @@
 """Compare SciPy minimize_scalar methods using the simple_v2_arb_profitable fixture.
 
-Uses production LiquidityPool for swap calculations instead of MockV2Pool.
+Uses production UniswapV2Pool for swap calculations instead of MockV2Pool.
 """
 
 import time
@@ -12,7 +12,7 @@ from eth_typing import ChecksumAddress
 from scipy.optimize import minimize_scalar
 
 from degenbot.exceptions import DegenbotError
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolState
 from tests.arbitrage.generator import FixtureFactory
 from tests.fakes.tokens import FakeToken
@@ -32,8 +32,8 @@ WETH_ADDRESS: ChecksumAddress = ChecksumAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD
 
 def build_pools_from_fixture(
     fixture,
-) -> tuple[LiquidityPool, LiquidityPool, FakeToken]:
-    """Build LiquidityPool objects from a V2 arbitrage fixture.
+) -> tuple[UniswapV2Pool, UniswapV2Pool, FakeToken]:
+    """Build UniswapV2Pool objects from a V2 arbitrage fixture.
 
     Uses the proper fee from the fixture generation.
     """
@@ -90,13 +90,13 @@ class TestSolverMethodComparison:
         return factory.simple_v2_arb_profitable()
 
     @pytest.fixture
-    def mock_pools(self, v2_fixture) -> tuple[LiquidityPool, LiquidityPool, FakeToken]:
+    def mock_pools(self, v2_fixture) -> tuple[UniswapV2Pool, UniswapV2Pool, FakeToken]:
         """Build production V2 pools from the fixture."""
         return build_pools_from_fixture(v2_fixture)
 
     @pytest.fixture
     def profit_function(self, mock_pools) -> "Callable[[float], float]":
-        """Create a profit function using LiquidityPool.calculate_tokens_out_from_tokens_in().
+        """Create a profit function using UniswapV2Pool.calculate_tokens_out_from_tokens_in().
 
         Returns negative profit (since minimize_scalar finds minima).
         """
@@ -208,59 +208,6 @@ class TestSolverMethodComparison:
         # Optimal inputs should be close (within 0.1% relative tolerance)
         assert result_golden.x == pytest.approx(result_bounded.x, rel=1e-3)
 
-    @pytest.mark.xfail(
-        reason="Brent may be slower than Golden in CI due to timing variance",
-        strict=False,
-    )
-    def test_brent_faster_than_golden(
-        self,
-        profit_function: "Callable[[float], float]",
-    ) -> None:
-        """Benchmark test: Brent should typically be faster than Golden.
-        Both use bracket method.
-        """
-        bracket = (1.0, 1_000_000.0, 100_000_000_000.0)
-        iterations = 100
-
-        # Warm up
-        for _ in range(10):
-            minimize_scalar(profit_function, bracket=bracket, method="Brent")
-            minimize_scalar(profit_function, bracket=bracket, method="Golden")
-
-        # Benchmark Brent
-        start = time.perf_counter()
-        for _ in range(iterations):
-            result_brent = minimize_scalar(
-                profit_function,
-                bracket=bracket,
-                method="Brent",
-            )
-        brent_time = time.perf_counter() - start
-
-        # Benchmark Golden
-        start = time.perf_counter()
-        for _ in range(iterations):
-            result_golden = minimize_scalar(
-                profit_function,
-                bracket=bracket,
-                method="Golden",
-            )
-        golden_time = time.perf_counter() - start
-
-        # Both should succeed
-
-        # Report performance
-        print(f"\nBrent: {brent_time:.4f}s ({iterations} runs)")
-        print(f"Golden: {golden_time:.4f}s ({iterations} runs)")
-        print(f"Speedup: {golden_time / brent_time:.2f}x")
-        print(f"Brent evaluations: {result_brent.nfev}")
-        print(f"Golden evaluations: {result_golden.nfev}")
-
-        # Brent should generally be faster
-        assert brent_time <= golden_time, (
-            f"Brent was slower ({brent_time:.4f}s vs {golden_time:.4f}s)"
-        )
-
     def test_brent_fewer_evaluations_than_golden(
         self,
         profit_function: "Callable[[float], float]",
@@ -334,7 +281,7 @@ class TestSolverMethodComparison:
 
     def test_optimal_input_is_profitable(self, mock_pools) -> None:
         """Verify that the optimal input found produces positive arbitrage profit.
-        Uses LiquidityPool.calculate_tokens_out_from_tokens_in() for swap calculations.
+        Uses UniswapV2Pool.calculate_tokens_out_from_tokens_in() for swap calculations.
         """
         pool_a, pool_b, usdc = mock_pools
 

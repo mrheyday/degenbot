@@ -24,7 +24,7 @@ from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 
 if TYPE_CHECKING:
     from degenbot.degenbot_rs import PyLiquidityPool
-    from degenbot.types.aliases import BlockNumber, ChainId
+    from degenbot.types.aliases import BlockNumber
 
 
 def _tick_data_to_rust_rows(
@@ -77,7 +77,6 @@ def make_v3_pool(
     sqrt_price_x96: int,
     tick: int,
     liquidity: int,
-    chain_id: ChainId | None = None,
     deployer_address: str | None = None,
     init_hash: str | None = None,
     state_block: BlockNumber | None = None,
@@ -108,7 +107,6 @@ def make_v3_pool(
     companion is built non-sparse.
     """
     address_checksum = get_checksum_address(address)
-    resolved_chain_id = chain_id if chain_id is not None else token0.chain_id
 
     bot = py_bot if py_bot is not None else PyBot()
     # ADR-006 rolling-start race closure: seed tick_data INLINE in
@@ -131,6 +129,7 @@ def make_v3_pool(
         tick_data=rust_rows or None,
         update_block=state_block_int,
         coverage=coverage,
+        tick_data_fetcher=tick_data_fetcher,
     )
     handle: PyLiquidityPool | None = bot.get_pool(pool_id)
     assert handle is not None, "register_v3_pool returned a pool_id with no handle"
@@ -148,22 +147,18 @@ def make_v3_pool(
         )
 
     sparse = tick_data is None or len(tick_data) == 0
-    pool = pool_class(
-        handle,
-        address=address_checksum,
-        token0=token0,
-        token1=token1,
-        factory=factory,
-        fee=fee,
-        tick_spacing=tick_spacing,
-        chain_id=resolved_chain_id,
-        deployer_address=deployer_address,
-        init_hash=init_hash,
-        tick_data_fetcher=tick_data_fetcher,
-        state_block=state_block_int,
-        sparse_liquidity_map=sparse,
-        tick_bitmap_override=tick_bitmap,
-    )
+    # ADR-006 (OGTTCS D1): the pool's tokens must live in the SAME Bot as
+    # the pool — ``_from_py_pool`` recovers them via ``py_pool.get_token0``/
+    # ``get_token1``, which look up ``token0_address``/``token1_address`` in
+    # the pool's own ``BotState``. The token companions passed in may have been
+    # built against a different ``PyBot``; re-register their metadata here.
+    for tok in (token0, token1):
+        if bot.get_token(tok.address) is None:
+            bot.register_token(
+                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
+            )
+    pool = pool_class._from_py_pool(handle)  # noqa: SLF001
+    pool._sparse_liquidity_map = sparse  # noqa: SLF001
     return pool
 
 

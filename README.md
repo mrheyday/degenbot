@@ -66,6 +66,7 @@ The `Bot` class is the central session object for all degenbot operations. It ma
 <!-- invisible-code-block: python
 import degenbot
 from degenbot.config import DegenbotConfig
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI as RPC_URL
 -->
 
 ```python
@@ -73,7 +74,7 @@ from degenbot.config import DegenbotConfig
 bot = degenbot.Bot(
     config=DegenbotConfig(
         default_chain_id=1,
-        rpc={1: "http://node:8545"},
+        rpc={1: RPC_URL},
         database={"path": "~/.config/degenbot/degenbot.db"},
     )
 )
@@ -132,6 +133,10 @@ Degenbot pools follow an **I/O-free architecture** where on-chain data is fetche
 
 `Bot` is the central session object that owns all runtime state:
 
+<!-- invisible-code-block: python
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI as RPC_URL
+-->
+
 ```python
 import degenbot
 from degenbot.config import DegenbotConfig
@@ -140,7 +145,7 @@ from degenbot.config import DegenbotConfig
 bot = degenbot.Bot(
     config=DegenbotConfig(
         default_chain_id=1,
-        rpc={1: "http://node:8545"},
+        rpc={1: RPC_URL},
         database={"path": ":memory:"},
     )
 )
@@ -191,7 +196,7 @@ Pools receive state updates via `external_update()` — a pure-logic method that
 from degenbot.degenbot_rs import PyBot
 _PY_BOT = PyBot()
 from tests.helpers.erc20_factory import make_erc20
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate
 from degenbot.erc20.erc20 import Erc20Token
 from tests.helpers.v2_pool_factory import make_v2_pool
@@ -285,7 +290,7 @@ from degenbot.config import DegenbotConfig
 bot = degenbot.Bot(
     config=DegenbotConfig(
         default_chain_id=1,
-        rpc={1: "http://node:8545"},
+        rpc={1: RPC_URL},
         database={"path": ":memory:"},
     )
 )
@@ -337,7 +342,7 @@ V2 pools use the constant-product invariant (x·y=k) with directional fees:
 from degenbot.degenbot_rs import PyBot
 _PY_BOT = PyBot()
 from tests.helpers.erc20_factory import make_erc20
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate
 from degenbot.erc20.erc20 import Erc20Token
 from tests.helpers.v2_pool_factory import make_v2_pool
@@ -454,7 +459,6 @@ lp = make_v3_pool(
     sqrt_price_x96=34048891009198980752047510166697902,
     tick=259432,
     liquidity=544425151051415575,
-    chain_id=1,
     state_block=24947230,
     tick_bitmap=_tick_bitmap,
     tick_data=_tick_data,
@@ -515,7 +519,6 @@ lp = make_v4_pool(
     fee=500,
     tick_spacing=10,
     state_view_address='0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71',
-    chain_id=8453,
     sqrt_price_x96=4220772448119892035402666,
     tick=-196812,
     liquidity=60429069420043934,
@@ -697,7 +700,6 @@ tripool = make_curve_pool(
     fee=4000000,
     admin_fee=5000000000,
     balances=[29792690991444656395059310, 27440491064, 27440490397],
-    chain_id=1,
     state_block=18900000,
     precision_multipliers=[1000000000000000000, 1000000000000, 1000000000000],
 )
@@ -743,7 +745,6 @@ from degenbot.balancer.libraries.constants import PowVersion
 #     fee=Fraction(1, 1000),  # 0.1% swap fee
 #     weights=[800000000000000000, 200000000000000000],  # 80/20
 #     pow_version=pow_version,
-#     chain_id=1,
 # )
 #
 # # Calculate swaps - pure math, no I/O
@@ -801,7 +802,6 @@ from degenbot.exceptions.pool import StaleRateResult
 #     amp=50000,
 #     scaling_factors=[1100000000000000000, 1000000000000000000],
 #     invariant_version=INVARIANT_V2,
-#     chain_id=1,
 # )
 #
 # # Exact 0-wei matching — no rate provider needed
@@ -824,7 +824,6 @@ from degenbot.exceptions.pool import StaleRateResult
 #     bpt_idx=1,  # BPT is at index 1
 #     rate_provider=my_rate_provider,  # Optional: inject for exact matching
 #     invariant_version=INVARIANT_V1,
-#     chain_id=1,
 # )
 #
 # # Without rate provider: StaleRateResult raised for ComposableStablePools
@@ -844,109 +843,28 @@ from degenbot.exceptions.pool import StaleRateResult
 
 ### Uniswap Arbitrage
 
-Calculate optimal arbitrage amounts for a cyclic sequence of pools using `ArbitragePath`, the replacement for the deprecated `UniswapLpCycle`: the replacement for the deprecated `UniswapLpCycle`:
-
-<!-- invisible-code-block: python
-from degenbot.degenbot_rs import PyBot
-_PY_BOT = PyBot()
-from tests.helpers.erc20_factory import make_erc20
-import json
-from pathlib import Path
-from degenbot.uniswap.liquidity_pool import LiquidityPool
-from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
-from degenbot.erc20.erc20 import Erc20Token
-from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
-from tests.helpers.v2_pool_factory import make_v2_pool
-from fractions import Fraction
-
-_wbtc = make_erc20(_PY_BOT,
-    address='0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
-    name='Wrapped BTC',
-    symbol='WBTC',
-    decimals=8,
-    chain_id=1,
-)
-_weth = make_erc20(_PY_BOT,
-    address='0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-    name='Wrapped Ether',
-    symbol='WETH',
-    decimals=18,
-    chain_id=1,
-)
-v2_pool = make_v2_pool(
-    '0xBb2b8038a1640196FbE3e38816F3e67Cba72D940',
-    token0=_wbtc,
-    token1=_weth,
-    factory='0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f',
-    fee_token0=Fraction(3, 1000),
-    fee_token1=Fraction(3, 1000),
-    reserves_token0=10732489743,
-    reserves_token1=2056834999904002274711,
-    chain_id=1,
-)
-_data_file = Path('tests/fixtures/chain_data/1/block_24947230.json')
-with _data_file.open() as _f:
-    _data = json.load(_f)
-_pk = 'v3_0xcbcdf9626bc03e24f779434178a73a0b4bad62ed'
-_tbm_raw = _data.get(f'{_pk}_tick_bitmap', {})
-_td_raw = _data.get(f'{_pk}_tick_data', {})
-_tick_bitmap = {int(k): BitmapAtWord(bitmap=int(v['bitmap']), block=v['block']) for k, v in _tbm_raw.items()}
-_tick_data = {int(k): LiquidityAtTick(liquidity_gross=int(v['liquidity_gross']), liquidity_net=int(v['liquidity_net']), block=v['block']) for k, v in _td_raw.items()}
-from tests.helpers.v3_pool_factory import make_v3_pool
-v3_pool = make_v3_pool(
-    '0xCBCdF9626bC03E24f779434178A73a0B4bad62eD',
-    token0=_wbtc,
-    token1=_weth,
-    factory='0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    fee=3000,
-    tick_spacing=60,
-    sqrt_price_x96=34048891009198980752047510166697902,
-    tick=259432,
-    liquidity=544425151051415575,
-    chain_id=1,
-    state_block=24947230,
-    tick_bitmap=_tick_bitmap,
-    tick_data=_tick_data,
-)
--->
+Optimal arbitrage amounts for a cyclic pool sequence are computed by the Rust `UniswapArbEngine` (EVM-exact U512 solve), driven through `EngineRegistry` — the production solve surface that replaced both the deprecated `UniswapLpCycle` / `UniswapCurveCycle` and the since-retired Python `ArbitragePath` wrapper (ACDWOC):
 
 ```python
-from degenbot.arbitrage.path.arbitrage_path import ArbitragePath
-from degenbot.arbitrage.solvers.solver import ArbSolver
-from degenbot.exceptions.arbitrage import OptimizationError
+from degenbot.arbitrage.engine_registry import EngineRegistry
+from degenbot.arbitrage.solvers import BrentSolver, SolveResult, SolverMethod
 
-# Create an arbitrage path with I/O-free pools
-arb_path = ArbitragePath(
-    pools=[v2_pool, v3_pool],
-    input_token=v2_pool.token1,  # WETH
-    solver=ArbSolver(),
-)
-
-# Calculate optimal input amount (I/O-free calculation)
-# When no profitable solution exists, OptimizationError is raised
-try:
-    result = arb_path.calculate()
-    result.optimal_input  # Access the optimal input amount
-    result.profit  # Access the estimated profit
-except OptimizationError:
-    pass  # No profitable arbitrage at current state
-```
-
-```python
-# Example output at a specific block where the path was profitable
-# SolveResult(
-#     optimal_input=69600394635598,
-#     profit=-623178922742,
-#     iterations=15,
-#     method=SolverMethod.PIECEWISE_MOBIUS,
-#     solve_time_ns=120000,
-# )
+# EngineRegistry is the one canonical entry point: it runs the pre-pump
+# startup ritual (subscribe -> backfill from snapshot -> verify config) and
+# registers cyclic paths against a Bot's shared BotState. The Rust engine
+# owns the EVM-exact U512 solve and re-solves affected paths on each block.
 #
-# arb_path.last_result.optimal_input
-# 69600394635598
+#     registry = EngineRegistry(bot=bot)
+#     path_id = registry.register_path(pools=[v2_pool, v3_pool], input_token=weth)
+#     results = registry.engine.latest_results().get(path_id)
+#
+# `BrentSolver` stays as the Python reference oracle, cross-validated against
+# the engine in tests/arbitrage/test_engine_vs_brent_parity.py:
+
+assert SolverMethod.BRENT.value  # the oracle optimizer used in cross-validation
 ```
 
-> **Note:** `UniswapLpCycle` and `UniswapCurveCycle` are deprecated. They have been moved to `degenbot.arbitrage._legacy/` and emit `DeprecationWarning` on import. Use `ArbitragePath` for all new code. See the [migration guide](docs/migration-guides/legacy-cycles-to-arbitrage-path.md) for transitioning.
+> **Note:** The legacy `UniswapLpCycle` / `UniswapCurveCycle` and the Python `ArbitragePath` wrapper have all been retired — the Rust `UniswapArbEngine` (driven via `EngineRegistry`) is the production solve surface. Pool swap-amount construction is now local to each pool via `build_swap_amount()` on raw engine outputs (`optimal_input` / `hop_outputs` / `consumed_inputs`).
 
 #### Swap Encoding & On-Chain Execution
 
@@ -1054,7 +972,7 @@ bot = degenbot.Bot(
     config=DegenbotConfig(
         default_chain_id=1,
         rpc={
-            1: "http://node:8545",
+            1: RPC_URL,
         },
         database={"path": "~/.config/degenbot/degenbot.db"},
     )
@@ -1396,16 +1314,17 @@ The extension includes synchronous and async Ethereum RPC providers:
 
 <!-- invisible-code-block: python
 from degenbot.degenbot_rs import AlloyProvider, Contract
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI as RPC_URL
 -->
 
 ```python
 # Create provider with connection pooling
-provider = AlloyProvider("http://node:8545")
+provider = AlloyProvider(RPC_URL)
 
 # Contract interaction
 contract = Contract(
     "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-    provider_url="http://node:8545",
+    provider_url=RPC_URL,
 )
 
 # Query blockchain
@@ -1516,22 +1435,6 @@ Verified Solidity source code for all supported protocols is in [`contract_refer
 | Aave V3 | `contract_reference/aave/` | Pool (10 revisions), AToken (5 revisions), VariableDebtToken, GhoVariableDebtToken (6 revisions), GhoDiscountRateStrategy, AaveOracle, stkAAVE, RewardsController |
 
 These are the ground truth for matching on-chain behavior in Python. See [`contract_reference/README.md`](contract_reference/README.md) for the full index.
-
-### Domain Context Files
-
-Each module has a `CONTEXT.md` defining domain terminology:
-
-- [Pool Types & Trackers](src/degenbot/types/CONTEXT.md) — Pool, Pool State, Reserves, Tick, Fee representations
-- [Uniswap](src/degenbot/uniswap/CONTEXT.md) — V2/V3/V4 pools, Pool Tracker, Managed Pool, Pool ID
-- [Curve StableSwap](src/degenbot/curve/CONTEXT.md) — Metapools, lending pools, CurveDataProvider seam, DyCalculationInputs, DyCalculator, A coefficient
-- [Balancer V2](src/degenbot/balancer/CONTEXT.md) — Weighted pools, FixedPoint math, PowVersion detection, scaling helpers, MetaStablePool, ComposableStablePool with BPT index, StableMath V1/V2 invariant versions, CacheAwareRateProvider, BalancerRateProvider protocol
-- [Aave](src/degenbot/aave/CONTEXT.md) — Market, Asset, Reserve, Enrichment, Liquidation
-- [Arbitrage](src/degenbot/arbitrage/CONTEXT.md) — Arbitrage Cycle, Solver, Hop State
-- [Registries](src/degenbot/registry/CONTEXT.md) — Pool, Token, Managed Pool registries
-- [Connection](src/degenbot/connection/CONTEXT.md) — Provider management, RPC routing
-- [Chainlink](src/degenbot/chainlink/CONTEXT.md) — price feeds, aggregators, round data
-- [Builders](src/degenbot/builders/CONTEXT.md) — pool builders, PoolIO seam, BuilderContext, `@staticmethod` `update()` on PoolBuilder/AsyncPoolBuilder protocols (type-enforced I/O separation)
-- [Context Map](CONTEXT-MAP.md) — Cross-module relationships, ambiguity rulings, and module index (including contract reference index)
 
 ## Contributing
 

@@ -22,6 +22,7 @@ use pyo3::wrap_pyfunction;
 /// Returns a [`PyErr`] if any individual `add_class`/`add_function`/`add` call
 /// fails (e.g. a name collision). Errors are propagated unchanged — the
 /// `#[pymodule]` caller in `lib.rs` converts them into the module-init failure.
+#[allow(clippy::too_many_lines)]
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Tick math functions (feature = "cl-math")
     #[cfg(feature = "cl-math")]
@@ -35,6 +36,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    #[cfg(feature = "cl-math")]
+    register_tick_math_constants(m)?;
+
     // Address utilities (feature = "uniswap")
     #[cfg(feature = "uniswap")]
     m.add_function(wrap_pyfunction!(
@@ -42,9 +46,74 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // Solady LibZip (FastLZ) compress/decompress — lives in `degenbot-core`
+    // (always a dependency), so no feature gate.
+    m.add_function(wrap_pyfunction!(crate::solady::libzip::flz_compress, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::solady::libzip::flz_decompress, m)?)?;
+
+    // Pathfinding graph + DFS (feature = "pathfinding")
+    #[cfg(feature = "pathfinding")]
+    m.add_function(wrap_pyfunction!(crate::pathfinding::find_paths_rust, m)?)?;
+    // The build_path_graph seam choreographs a degenbot-db read + a
+    // degenbot-pathfinding graph build, so it needs BOTH features.
+    #[cfg(all(feature = "pathfinding", feature = "db"))]
+    m.add_function(wrap_pyfunction!(crate::pathfinding::build_path_graph, m)?)?;
+    #[cfg(feature = "pathfinding")]
+    m.add_class::<crate::pathfinding::PathIterator>()?;
+
     // CL math library submodule (feature = "cl-math")
     #[cfg(feature = "cl-math")]
     crate::cl_math::cl_lib::add_cl_lib_module(m)?;
+
+    // Balancer V2 math library functions (feature = "balancer-math")
+    #[cfg(feature = "balancer-math")]
+    crate::balancer_math::lib::add_balancer_math_module(m)?;
+
+    // Curve StableSwap math library functions (feature = "curve-math")
+    #[cfg(feature = "curve-math")]
+    crate::curve_math::lib::add_curve_math_module(m)?;
+
+    // Solidly / Aerodrome / Camelot stable-math library functions
+    // (feature = "solidly-math")
+    #[cfg(feature = "solidly-math")]
+    crate::solidly_math::lib::add_solidly_math_module(m)?;
+
+    // SQLite file operations (feature = "db")
+    #[cfg(feature = "db")]
+    crate::db::add_db_module(m)?;
+
+    // `CancelHandle` — the cooperative cancel flag for the updater loops
+    // (`run_pool_update`, `run_aave_update`). Gated on either updater feature
+    // (whichever needs it); registered once, top-level. Lives in `cancel.rs`.
+    #[cfg(any(feature = "pool", feature = "aave-updater"))]
+    crate::cancel::register_cancel(m)?;
+
+    // Pool-updater chunk-loop seam (feature = "pool") — `run_pool_update`.
+    // Gates `db` + `rpc` (the chunk loop reads the DB + RPCs log fetches).
+    // Task QZHNZQ; epic 2SFL6I. `CancelHandle` is registered above (shared).
+    #[cfg(feature = "pool")]
+    crate::pool::add_pool_module(m)?;
+
+    // Aave-updater chunk-loop seam (feature = "aave-updater") —
+    // `run_aave_update`. Gates `db` + `rpc` (mirrors the pool seam). Epic
+    // AZGJUN, task 5XNTC5. `CancelHandle` is registered above (shared).
+    #[cfg(feature = "aave-updater")]
+    crate::aave_updater::add_aave_updater_module(m)?;
+
+    // Typed database-schema-stale exception (`DbError::AlembicStale` →
+    // `DatabaseSchemaStale`, a `ValueError` subclass). Exposed on the module
+    // so the CLI / Python shells can `from degenbot_rs import
+    // DatabaseSchemaStale` and catch it precisely to print a friendly hint
+    // instead of a traceback. (feature = "db"; defined in `db::mod`.)
+    #[cfg(feature = "db")]
+    m.add(
+        "DatabaseSchemaStale",
+        m.py().get_type::<crate::db::DatabaseSchemaStale>(),
+    )?;
+
+    // Command-stream encoding seam (feature = "executor")
+    #[cfg(feature = "executor")]
+    crate::executor::add_executor_module(m)?;
 
     // ABI decoder/encoder functions (feature = "abi")
     #[cfg(feature = "abi")]
@@ -112,10 +181,17 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::bot::token::PyErc20Token>()?;
     #[cfg(feature = "bot")]
     m.add_class::<crate::bot::py_bot_io::PyBotIo>()?;
+    #[cfg(all(feature = "bot", feature = "db"))]
+    m.add_class::<crate::bot::py_bot_io::PyErc20TokenRow>()?;
 
     // DEX identity presets (ADR-005 slice 6) (feature = "bot")
     #[cfg(feature = "bot")]
     crate::bot::dex_identity::add_dex_identity(m)?;
+
+    // Deployment-identity lookup over the embedded deployments.json
+    // (Fork A, 7FA5EZ) (feature = "bot")
+    #[cfg(feature = "bot")]
+    crate::bot::deployments::add_deployments(m)?;
 
     // Async modules (feature = "async")
     #[cfg(feature = "async")]
@@ -127,5 +203,43 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "rpc")]
     m.add_class::<crate::rpc::subscription::PyAlloySubscription>()?;
 
+    // Price-reader seam (feature = "price")
+    #[cfg(feature = "price")]
+    crate::price::add_price_module(m)?;
+
+    // Submission seam (feature = "submission")
+    #[cfg(feature = "submission")]
+    crate::submission::add_submission_module(m)?;
+
+    // Pub/sub seam: register a Python callback as a `PoolStateSubscriber`
+    // against the Rust `LogDispatcher` fan-out (ZBD4MS) (feature = "bot")
+    #[cfg(feature = "bot")]
+    crate::bot::subscriber::add_subscriber_module(m)?;
+
+    Ok(())
+}
+
+/// Register the four `TickMath` boundary constants on the Python module.
+///
+/// ADR-005 single-source-of-truth: the canonical home is the
+/// `degenbot-cl-math` core; the `PyO3` seam surfaces them so Python
+/// companions and a standalone Rust consumer share one source. The
+/// `v3_libraries/__init__` package re-exports these names; the now-retired
+/// pure-Python `tick_math.py` constant definitions are gone (C8 task CM2YQ4).
+#[cfg(feature = "cl-math")]
+fn register_tick_math_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    use crate::cl_lib::tick_math::{MAX_SQRT_RATIO, MAX_TICK, MIN_SQRT_RATIO, MIN_TICK};
+    let py = m.py();
+    m.add("MIN_TICK", MIN_TICK)?;
+    m.add("MAX_TICK", MAX_TICK)?;
+    // U160 widens to U256 for the alloy → Python-int conversion helper.
+    m.add(
+        "MIN_SQRT_RATIO",
+        crate::conversion::alloy::u256_to_py(py, &alloy::primitives::U256::from(MIN_SQRT_RATIO))?,
+    )?;
+    m.add(
+        "MAX_SQRT_RATIO",
+        crate::conversion::alloy::u256_to_py(py, &alloy::primitives::U256::from(MAX_SQRT_RATIO))?,
+    )?;
     Ok(())
 }

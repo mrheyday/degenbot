@@ -5,7 +5,6 @@ from .abi_adapter import (
     AbiBackend,
     AbiDecodeError,
     AbiEncodeError,
-    AbiUnsupportedOperation,
     get_default_adapter,
     get_default_backend,
 )
@@ -29,9 +28,6 @@ from .version import __version__
 
 from . import (
     camelot as camelot,
-)
-from . import (
-    swapbased as swapbased,
 )
 from .aerodrome import (
     AerodromeV2Pool,
@@ -72,12 +68,24 @@ from .registry import (
     TokenRegistry,
     pool_type_registry,
 )
+
+# Populate the pool-type registry from the shipped deployments JSON
+# (single source of DEX deployment data — ADR-005). This replaces the
+# per-module `_register_*_deployments()` inline tuples that previously
+# lived in each DEX `__init__.py`. Runs once after all DEX classes are
+# imported. A user overlay may be declared in ``[deployments]`` in
+# ``~/.config/degenbot/config.toml``.
+from .registry.deployment_loader import (
+    load_deployments as _load_deployments,
+)
+from .registry.deployment_loader import (
+    register_from_deployments as _register_from_deployments,
+)
 from .sushiswap import (
-    SushiswapV3Pool,
     SushiswapV3PoolTracker,
 )
 from .uniswap import (
-    LiquidityPool,
+    UniswapV2Pool,
     UniswapV2PoolExternalUpdate,
     UniswapV2PoolSimulationResult,
     UniswapV2PoolState,
@@ -94,12 +102,13 @@ from .uniswap import (
     UniswapV4PoolState,
 )
 
+_register_from_deployments(_load_deployments(), pool_type_registry)
+
 __all__ = (
     "AbiAdapter",
     "AbiBackend",
     "AbiDecodeError",
     "AbiEncodeError",
-    "AbiUnsupportedOperation",
     "AerodromeV2Pool",
     "AerodromeV2PoolState",
     "AerodromeV2PoolTracker",
@@ -120,7 +129,6 @@ __all__ = (
     "Erc20Token",
     "EtherPlaceholder",
     "FlatComposer",
-    "LiquidityPool",
     "ManagedPoolRegistry",
     "NoApprovals",
     "PancakeswapV3Pool",
@@ -128,9 +136,9 @@ __all__ = (
     "PayloadComposer",
     "PoolRegistry",
     "PoolTypeRegistry",
-    "SushiswapV3Pool",
     "SushiswapV3PoolTracker",
     "TokenRegistry",
+    "UniswapV2Pool",
     "UniswapV2PoolExternalUpdate",
     "UniswapV2PoolSimulationResult",
     "UniswapV2PoolState",

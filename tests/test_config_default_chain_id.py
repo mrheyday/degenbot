@@ -11,12 +11,13 @@ from pathlib import Path
 from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.provider import get_provider_from_config
 from degenbot.provider.factory import get_provider_from_config as factory_get
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 
 
 def _config(chain_id: int | None) -> DegenbotConfig:
     return DegenbotConfig(
         database=DatabaseSettings(path=Path(":memory:")),
-        rpc={1: "https://eth.llamarpc.com/"} if chain_id is not None else {},
+        rpc={1: ETHEREUM_ARCHIVE_NODE_HTTP_URI} if chain_id is not None else {},
         default_chain_id=chain_id,
     )
 
@@ -37,3 +38,29 @@ class TestDefaultChainIdField:
         # ``degenbot.provider.factory.get_provider_from_config`` are the same
         # function — lib callers reach it without importing cli.
         assert get_provider_from_config is factory_get
+
+
+class TestDatabasePathExpansion:
+    """A ``~``-prefixed database path in config.toml must be expanded.
+
+    The config file is hand-edited (or created via ``degenbot config``) on a
+    user's machine, where the canonical location ``~/.config/degenbot/...`` is
+    the natural thing to write. If the path is left as a literal ``~`` string,
+    ``DatabaseSettings.path`` resolves to ``<cwd>/~/.config/...`` rather than the
+    home directory — so SQLite emits ``unable to open database file`` (the path
+    is treated relative to the process cwd and the bogus ``~`` segment doesn't
+    exist). RPC file-path endpoints already get ``expanduser().absolute()`` in
+    ``validate_paths``; the database path must do the same.
+    """
+
+    def test_tilde_database_path_is_expanded(self) -> None:
+        config = DegenbotConfig(
+            database=DatabaseSettings(path=Path("~/.config/degenbot/degenbot.db")),
+            rpc={},
+        )
+        # The ``~`` must be expanded to the user's home directory, not left as
+        # a literal segment resolved against the process cwd.
+        assert not config.database.path.as_posix().startswith("~")
+        assert config.database.path == Path("~/.config/degenbot/degenbot.db").expanduser()
+        assert str(config.database.path.absolute()).startswith(str(Path.home()))
+        assert "~" not in config.database.path.absolute().parts

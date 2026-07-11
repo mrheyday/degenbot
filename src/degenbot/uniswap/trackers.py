@@ -7,16 +7,16 @@ from threading import Lock
 from typing import TYPE_CHECKING
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.degenbot_rs import resolve_deployer, resolve_v2_init_hash, resolve_v3_init_hash
 from degenbot.exceptions.pool import (
     LiquidityPoolError,
     PoolCreationFailed,
     PoolNotAssociated,
 )
-from degenbot.logging import logger
 from degenbot.registry.pool_type import pool_type_registry
 from degenbot.types.abstract import AbstractPoolTracker
-from degenbot.uniswap.liquidity_pool import LiquidityPool
 from degenbot.uniswap.v2_functions import generate_v2_pool_address
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v3_functions import generate_v3_pool_address
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from degenbot.uniswap.v3_snapshot import UniswapV3LiquiditySnapshot
 
 
-class AbstractUniswapV2PoolTracker[Pool: LiquidityPool](AbstractPoolTracker[Pool]):
+class AbstractUniswapV2PoolTracker[Pool: UniswapV2Pool](AbstractPoolTracker[Pool]):
     """AbstractUniswapV2PoolTracker class."""
 
     def __init__(
@@ -53,14 +53,10 @@ class AbstractUniswapV2PoolTracker[Pool: LiquidityPool](AbstractPoolTracker[Pool
             deployer_address = deployment.deployer
             pool_init_hash = deployment.pool_init_hash
         else:
-            if pool_init_hash is None:  # pragma: no branch
-                logger.info("Pool init hash is unknown. Using Uniswap V3 mainnet default.")
-                pool_init_hash = LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH
-            deployer_address = (
-                get_checksum_address(deployer_address)
-                if deployer_address is not None
-                else factory_address
-            )
+            # Non-JSON V2: the Rust resolver gives the factory deployer + the
+            # Uniswap V2 mainnet fallback init hash (Fork A, NSAZ4X).
+            deployer_address = resolve_deployer(chain_id, factory_address)
+            pool_init_hash = resolve_v2_init_hash(chain_id, factory_address)
 
         self._lock = Lock()
         self._chain_id = chain_id
@@ -130,7 +126,7 @@ class AbstractUniswapV2PoolTracker[Pool: LiquidityPool](AbstractPoolTracker[Pool
             return new_pool
 
 
-class UniswapV2PoolTracker(AbstractUniswapV2PoolTracker[LiquidityPool], pool_factory=LiquidityPool):
+class UniswapV2PoolTracker(AbstractUniswapV2PoolTracker[UniswapV2Pool], pool_factory=UniswapV2Pool):
     """A class that generates and tracks concrete instances of a Uniswap V2.
 
     liquidity pool helper or one of its child classes.
@@ -147,7 +143,7 @@ class UniswapV2PoolTracker(AbstractUniswapV2PoolTracker[LiquidityPool], pool_fac
 
     @property
     def pool_init_hash(self) -> str:
-        """Return pool init hash.
+        """Pool init hash.
 
         Returns:
             The pool init hash string.
@@ -160,7 +156,7 @@ class UniswapV2PoolTracker(AbstractUniswapV2PoolTracker[LiquidityPool], pool_fac
         token_addresses: tuple[str, str],
         *,
         silent: bool = False,
-    ) -> LiquidityPool:
+    ) -> UniswapV2Pool:
         """Get a pool by its token addresses.
 
         Returns:
@@ -214,14 +210,11 @@ class AbstractUniswapV3PoolTracker[Pool: UniswapV3Pool](AbstractPoolTracker[Pool
             deployer_address = deployment.deployer
             pool_init_hash = deployment.pool_init_hash
         else:
-            if pool_init_hash is None:  # pragma: no branch
-                logger.info("Pool init hash is unknown. Using Uniswap V3 mainnet default.")
-                pool_init_hash = UniswapV3Pool.UNISWAP_V3_MAINNET_POOL_INIT_HASH
-            deployer_address = (
-                get_checksum_address(deployer_address)
-                if deployer_address is not None
-                else factory_address
-            )
+            # Non-JSON V3: the Rust resolver gives the factory deployer + the
+            # Uniswap V3 mainnet fallback init hash (Fork A, P62DKO — the
+            # retired ClassVar's semantics, now in Rust).
+            deployer_address = resolve_deployer(chain_id, factory_address)
+            pool_init_hash = resolve_v3_init_hash(chain_id, factory_address)
 
         self._lock = Lock()
         self._chain_id = chain_id
@@ -305,7 +298,7 @@ class AbstractUniswapV3PoolTracker[Pool: UniswapV3Pool](AbstractPoolTracker[Pool
 
     @property
     def snapshot(self) -> UniswapV3LiquiditySnapshot | None:
-        """Return the snapshot, if loaded."""
+        """The snapshot, if loaded."""
         return self._snapshot
 
     def backfill_snapshot(self, current_block: int) -> None:  # noqa: ARG002

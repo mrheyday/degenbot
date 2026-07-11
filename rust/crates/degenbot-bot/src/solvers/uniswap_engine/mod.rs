@@ -179,6 +179,10 @@ pub enum HopType {
     V3,
     /// V4 concentrated-liquidity hop (same math as V3, different settlement)
     V4,
+    /// Solidly/Aerodrome/Camelot stable or volatile hop. Owns its own solve
+    /// branch (Möbius precheck + golden-section over the
+    /// `degenbot-solidly-math` leaf) — not concentrated-liquidity.
+    SolidlyStable,
 }
 
 impl HopType {
@@ -229,6 +233,48 @@ pub struct MixedPath {
     pub pools: Vec<MixedPoolRef>,
 }
 
+/// Resolved state for a Solidly/Aerodrome/Camelot hop, ready for the
+/// Solidly solve branch. Carries everything the `degenbot-solidly-math`
+/// leaf needs in the leaf's own contract shape: **un-oriented**
+/// `reserves_0`/`reserves_1` + a `token_in` direction flag (matching
+/// [`degenbot_solidly_math::calc_exact_in_stable_solidly`] etc. 1:1).
+///
+/// `variant` + `stable` together dispatch the math:
+/// - `(AerodromeV2Stable, true)` → `calc_exact_in_stable_solidly`
+/// - `(CamelotV2Stable, true)` → `calc_exact_in_stable_camelot`
+/// - `(_, false)` → `calc_exact_in_volatile`
+///
+/// Decimals are carried as the **scale** (`10^decimals`, e.g. `1_000_000`
+/// for a 6-decimal token) — what `calc_k` divides by. The `fee` pair is the
+/// **fee fraction** (`amount_in_after_fee = amount_in - amount_in *
+/// fee_numer / fee_denom`); the resolve arm converts each family's stored
+/// fee shape into this convention (Aerodrome stores it directly as the fee
+/// fraction; Camelot stores the retained-fraction gamma and the arm inverts
+/// it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SolidlyHopState {
+    /// Reserve of token0 (un-oriented).
+    pub reserves_0: U256,
+    /// Reserve of token1 (un-oriented).
+    pub reserves_1: U256,
+    /// Decimals scale of token0 (`10^decimals`, e.g. `1_000_000`).
+    pub decimals_0: U256,
+    /// Decimals scale of token1 (`10^decimals`, e.g. `1_000_000`).
+    pub decimals_1: U256,
+    /// Direction flag: `0` swaps token0→token1, `1` swaps token1→token0.
+    /// Mirrors `token_in` in [`degenbot_solidly_math::calc_exact_in_stable_solidly`].
+    pub token_in: u8,
+    /// Fee numerator — the fee fraction is `fee_numer / fee_denom`.
+    pub fee_numer: U256,
+    /// Fee denominator.
+    pub fee_denom: U256,
+    /// `true` for the stable (x³y + xy³) invariant, `false` for volatile
+    /// (constant-product).
+    pub stable: bool,
+    /// DEX+variant discriminator — selects the solidly vs camelot math leaf.
+    pub variant: degenbot_uniswap::dex_identity::DexVariant,
+}
+
 /// Resolved state for a single hop in a mixed path.
 ///
 /// Each variant bundles only the data its hop type needs — no parallel
@@ -253,6 +299,10 @@ pub enum ResolvedHop {
     V4 {
         int_seq: crate::solvers::mobius_v3_int::IntV3TickRangeSequence,
     },
+    /// Solidly/Aerodrome/Camelot stable or volatile hop. Owns its own solve
+    /// branch — NOT concentrated-liquidity, so `as_int_sequence()` returns
+    /// `None`. See [`SolidlyHopState`].
+    SolidlyStable { state: SolidlyHopState },
 }
 
 impl ResolvedHop {
@@ -264,6 +314,7 @@ impl ResolvedHop {
             Self::V2 { .. } => HopType::V2,
             Self::V3 { .. } => HopType::V3,
             Self::V4 { .. } => HopType::V4,
+            Self::SolidlyStable { .. } => HopType::SolidlyStable,
         }
     }
 
@@ -283,7 +334,16 @@ impl ResolvedHop {
     ) -> Option<&crate::solvers::mobius_v3_int::IntV3TickRangeSequence> {
         match self {
             Self::V3 { int_seq, .. } | Self::V4 { int_seq, .. } => Some(int_seq),
-            Self::V2 { .. } => None,
+            Self::V2 { .. } | Self::SolidlyStable { .. } => None,
+        }
+    }
+
+    /// The [`SolidlyHopState`], if this is a Solidly/Aerodrome/Camelot hop.
+    #[must_use]
+    pub const fn as_solidly_state(&self) -> Option<&SolidlyHopState> {
+        match self {
+            Self::SolidlyStable { state, .. } => Some(state),
+            _ => None,
         }
     }
 }
@@ -444,7 +504,7 @@ pub struct UniswapEngine {
     /// (e.g. during cold-start / `solve_all_paths`), since Python has not yet
     /// received anything. Advancing it without a live channel would poison
     /// `fresh`/`expired` computation for the next real send — see
-    /// `solve_all_paths` (solve-only) and the `ResultBatch` CONTEXT.md note.
+    /// `solve_all_paths` (solve-only)
     /// [`deregister_path`] removes entries as paths are de-registered.
     delivered: HashMap<u64, SolvePathResult>,
     /// Path IDs that have been de-registered since the last batch.
@@ -562,6 +622,10 @@ impl UniswapEngine {
             fee_token1: (gamma_numer, fee_denom),
             factory: Address::ZERO,
             update_block: 0,
+            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+            stable_swap: false,
+            fee_denominator: None,
+            ..Default::default()
         };
         self.core.write().register_v2_pool(&params)
     }

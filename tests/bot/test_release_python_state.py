@@ -25,6 +25,7 @@ from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.degenbot_rs import UniswapArbEngine
 from degenbot.provider import ProviderAdapter
 from degenbot.uniswap.trackers import UniswapV2PoolTracker
+from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 
 # V3 Mint topic — keccak256("Mint(address,address,int24,int24,uint128,uint256,uint256)").
 _V3_MINT_TOPIC = "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde"
@@ -54,7 +55,7 @@ def _mint_data(amount: int) -> str:
 def _make_test_config(tmp_path: pathlib.Path, chain_id: int = 1) -> DegenbotConfig:
     return DegenbotConfig(
         database=DatabaseSettings(path=tmp_path / "test.db"),
-        rpc={1: "https://eth.llamarpc.com/"},
+        rpc={1: ETHEREUM_ARCHIVE_NODE_HTTP_URI},
         default_chain_id=chain_id,
     )
 
@@ -162,7 +163,7 @@ class TestReleasePythonState:
         bot = Bot(config, provider=_fake_provider(1))
         py_bot = bot._py_bot
 
-        address = get_checksum_address("0x11b815efB8f58119D17b5fc9880b1e1a29B7dC33")
+        address = get_checksum_address("0x88e6A0c2dDD26FEEb64F039a2c41296Fcb3F5640")
         py_bot.register_v3_pool(
             address=address,
             token0="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -210,7 +211,7 @@ class TestReleasePythonState:
         py_bot = bot._py_bot
         engine = UniswapArbEngine(py_bot=py_bot)
 
-        address = get_checksum_address("0x11b815efB8f58119D17b5fc9880b1e1a29B7dC33")
+        address = get_checksum_address("0x88e6A0c2dDD26FEEb64F039a2c41296Fcb3F5640")
         py_bot.register_v3_pool(
             address=address,
             token0="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",

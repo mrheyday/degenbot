@@ -1,35 +1,41 @@
-"""Parameterized pool creation event updaters.
-
-Replaces 14 near-identical updater functions with 3 parameterized functions:
-- ``update_v2_pools``: V2-style events
-  (token0/token1 from topics, pool_address from data)
-- ``update_v3_pools``: V3-style events
-  (token0/token1/fee from topics, tick_spacing/pool_address from data)
-- ``update_v4_pools``: V4-style events
-  (pool_hash/currency0/currency1 from topics, fee/tick_spacing/hooks from data)
-
-Each accepts a configuration dataclass that captures the DEX-specific variations
-(database table, event hash, fee values, optional RPC calls).
-"""
+"""Parameterized pool creation event updaters."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
 import tqdm
-from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 from web3.types import LogReceipt
 
 from degenbot import abi_decode
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.database.models.base import ExchangeTable
-from degenbot.database.models.erc20 import Erc20TokenTable
 from degenbot.database.models.pools import PoolManagerTable
+from degenbot.degenbot_rs import (
+    LiquidityUpdateEvent,
+    V2PoolRowInput,
+    V3PoolRowInput,
+    V4PoolRowInput,
+    db_apply_v3_liquidity_updates,
+    db_apply_v4_liquidity_updates,
+    db_fetch_pool_row,
+    db_upsert_v2_pools,
+    db_upsert_v3_pools,
+    db_upsert_v4_pools,
+)
 from degenbot.provider import ProviderAdapter
 from degenbot.provider.call_helpers import encode_function_calldata, raw_call
+
+# V3 liquidity event topic0 hashes (Mint/Burn). Used by the V3 decode shell
+# (`apply_v3_liquidity_updates`) to recognize the Burn signature + negate the
+# delta. Kept here (not in `cli/pool.py`) so the chunk loop's removal in
+# task JJ232N leaves these decode shells with their topic constants.
+UNISWAP_V3_MINT_EVENT_HASH = HexBytes(
+    "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde",
+)
+UNISWAP_V3_BURN_EVENT_HASH = HexBytes(
+    "0x0c396cd989a39f4459b5fa1aed6a9a8dcdbc45908acfd67e028cd568da98982c",
+)
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,6 @@ class V2PoolUpdateConfig:
     """
 
     name: str
-    database_type: type
     event_hash: bytes
     fee_token0: int
     fee_token1: int
@@ -71,7 +76,6 @@ class V3PoolUpdateConfig:
     """
 
     name: str
-    database_type: type
     event_hash: bytes
     fee_denominator: int
     # If set, call this RPC method to get fee instead of using topics[3]
@@ -91,29 +95,8 @@ class V4PoolUpdateConfig:
     """
 
     name: str
-    database_type: type
     event_hash: bytes
     fee_denominator: int
-
-
-def _get_or_create_token(
-    session: Session,
-    chain_id: int,
-    address: ChecksumAddress,
-) -> Erc20TokenTable:
-    if (
-        token := session.scalar(
-            select(Erc20TokenTable).where(
-                Erc20TokenTable.chain == chain_id,
-                Erc20TokenTable.address == address,
-            ),
-        )
-    ) is None:
-        token = Erc20TokenTable(chain=chain_id, address=address)
-        session.add(token)
-        session.flush()
-
-    return token
 
 
 def update_v2_pools(
@@ -121,8 +104,8 @@ def update_v2_pools(
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
-    session: Session,
     *,
+    database_path: str,
     config: V2PoolUpdateConfig,
     get_events_fn: Callable[..., list[LogReceipt]],
 ) -> None:
@@ -138,6 +121,7 @@ def update_v2_pools(
     if not new_pool_events:
         return
 
+    rows: list[V2PoolRowInput] = []
     for new_pool_event in tqdm.tqdm(
         new_pool_events,
         desc="Adding new pools",
@@ -153,13 +137,11 @@ def update_v2_pools(
         if config.has_stable_flag:
             (stable,) = abi_decode(["bool"], new_pool_event["topics"][3])
 
-        token0_in_db = _get_or_create_token(session, exchange.chain_id, token0)
-        token1_in_db = _get_or_create_token(session, exchange.chain_id, token1)
-
         pool_address, _ = abi_decode(
             types=["address", "uint256"],
             data=new_pool_event["data"],
         )
+        pool_address = get_checksum_address(pool_address)
 
         # Determine fee: either from RPC call or constant
         if config.rpc_fee_call is not None:
@@ -179,21 +161,25 @@ def update_v2_pools(
             fee_token0 = config.fee_token0
             fee_token1 = config.fee_token1
 
-        record_kwargs: dict[str, Any] = {
-            "exchange_id": exchange.id,
-            "address": get_checksum_address(pool_address),
-            "chain": provider.chain_id,
-            "token0_id": token0_in_db.id,
-            "token1_id": token1_in_db.id,
-            "fee_token0": fee_token0,
-            "fee_token1": fee_token1,
-            "fee_denominator": config.fee_denominator,
-        }
+        rows.append(
+            V2PoolRowInput(
+                address=pool_address,
+                token0_address=token0,
+                token1_address=token1,
+                fee_token0=fee_token0,
+                fee_token1=fee_token1,
+                stable=stable if config.has_stable_flag else None,
+            ),
+        )
 
-        if config.has_stable_flag:
-            record_kwargs["stable"] = stable
-
-        session.add(config.database_type(**record_kwargs))
+    db_upsert_v2_pools(
+        database_path=database_path,
+        chain_id=exchange.chain_id,
+        kind=exchange.name,
+        exchange_id=exchange.id,
+        fee_denominator=config.fee_denominator,
+        rows=rows,
+    )
 
 
 def update_v3_pools(
@@ -201,8 +187,8 @@ def update_v3_pools(
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
-    session: Session,
     *,
+    database_path: str,
     config: V3PoolUpdateConfig,
     get_events_fn: Callable[..., list[LogReceipt]],
 ) -> None:
@@ -218,6 +204,7 @@ def update_v3_pools(
     if not new_pool_events:
         return
 
+    rows: list[V3PoolRowInput] = []
     for new_pool_event in tqdm.tqdm(
         new_pool_events,
         desc="Adding new pools",
@@ -231,13 +218,11 @@ def update_v3_pools(
 
         (fee,) = abi_decode(["uint24"], new_pool_event["topics"][3])
 
-        token0_in_db = _get_or_create_token(session, exchange.chain_id, token0)
-        token1_in_db = _get_or_create_token(session, exchange.chain_id, token1)
-
         tick_spacing, pool_address = abi_decode(
             types=["int24", "address"],
             data=new_pool_event["data"],
         )
+        pool_address = get_checksum_address(pool_address)
 
         # Aerodrome V3: override fee from RPC
         if config.rpc_fee_call is not None:
@@ -251,19 +236,24 @@ def update_v3_pools(
                 return_types=config.rpc_fee_return_types,
             )
 
-        session.add(
-            config.database_type(
-                exchange_id=exchange.id,
-                address=get_checksum_address(pool_address),
-                chain=exchange.chain_id,
-                token0_id=token0_in_db.id,
-                token1_id=token1_in_db.id,
-                fee_token0=fee,
-                fee_token1=fee,
-                fee_denominator=config.fee_denominator,
+        rows.append(
+            V3PoolRowInput(
+                address=pool_address,
+                token0_address=token0,
+                token1_address=token1,
+                fee=fee,
                 tick_spacing=tick_spacing,
             ),
         )
+
+    db_upsert_v3_pools(
+        database_path=database_path,
+        chain_id=exchange.chain_id,
+        kind=exchange.name,
+        exchange_id=exchange.id,
+        fee_denominator=config.fee_denominator,
+        rows=rows,
+    )
 
 
 def update_v4_pools(
@@ -271,17 +261,12 @@ def update_v4_pools(
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
-    session: Session,
     *,
+    database_path: str,
     config: V4PoolUpdateConfig,
     get_events_fn: Callable[..., list[LogReceipt]],
 ) -> None:
     """Process V4-style pool creation events for a DEX."""
-    manager_in_db = session.scalar(
-        select(PoolManagerTable).where(PoolManagerTable.address == exchange.factory),
-    )
-    assert manager_in_db is not None
-
     new_pool_events = get_events_fn(
         provider=provider,
         start_block=start_block,
@@ -293,6 +278,7 @@ def update_v4_pools(
     if not new_pool_events:
         return
 
+    rows: list[V4PoolRowInput] = []
     for new_pool_event in tqdm.tqdm(
         new_pool_events,
         desc="Adding new pools",
@@ -307,25 +293,126 @@ def update_v4_pools(
         currency0 = get_checksum_address(currency0)
         currency1 = get_checksum_address(currency1)
 
-        currency0_in_db = _get_or_create_token(session, exchange.chain_id, currency0)
-        currency1_in_db = _get_or_create_token(session, exchange.chain_id, currency1)
-
         fee, tick_spacing, hooks = abi_decode(
             ["uint24", "int24", "address"],
             new_pool_event["data"],
         )
         hooks = get_checksum_address(hooks)
 
-        session.add(
-            config.database_type(
-                manager_id=manager_in_db.id,
+        rows.append(
+            V4PoolRowInput(
                 pool_hash=pool_hash,
                 hooks=hooks,
-                currency0_id=currency0_in_db.id,
-                currency1_id=currency1_in_db.id,
-                fee_currency0=fee,
-                fee_currency1=fee,
-                fee_denominator=config.fee_denominator,
+                currency0_address=currency0,
+                currency1_address=currency1,
+                fee=fee,
                 tick_spacing=tick_spacing,
             ),
         )
+
+    db_upsert_v4_pools(
+        database_path=database_path,
+        chain_id=exchange.chain_id,
+        pool_manager_address=get_checksum_address(exchange.factory),
+        fee_denominator=config.fee_denominator,
+        rows=rows,
+    )
+
+
+def apply_v3_liquidity_updates(
+    provider: ProviderAdapter,
+    pool_address: str,
+    liquidity_events: list[LogReceipt],
+    exchanges_in_scope: set[ExchangeTable],
+    *,
+    database_path: str,
+) -> None:
+    """Apply the V3 liquidity updates to the provided pool."""
+    in_scope_exchange_ids = {exchange.id for exchange in exchanges_in_scope}
+    pool_row = db_fetch_pool_row(
+        database_path=database_path,
+        chain_id=provider.chain_id,
+        address=pool_address,
+    )
+    if pool_row is None or pool_row.exchange_id not in in_scope_exchange_ids:
+        return
+
+    decoded_events: list[LiquidityUpdateEvent] = []
+    for liquidity_event in liquidity_events:
+        (tick_lower,) = abi_decode(["int24"], liquidity_event["topics"][2])
+        (tick_upper,) = abi_decode(["int24"], liquidity_event["topics"][3])
+
+        if liquidity_event["topics"][0] == UNISWAP_V3_BURN_EVENT_HASH:
+            amount, _, _ = abi_decode(
+                ["uint128", "uint256", "uint256"],
+                liquidity_event["data"],
+            )
+            amount = -amount
+        else:
+            _, amount, _, _ = abi_decode(
+                ["address", "uint128", "uint256", "uint256"],
+                liquidity_event["data"],
+            )
+
+        if amount == 0:
+            continue
+
+        decoded_events.append(
+            LiquidityUpdateEvent(
+                liquidity_event["blockNumber"],
+                liquidity_event["logIndex"],
+                tick_lower,
+                tick_upper,
+                amount,
+            )
+        )
+
+    db_apply_v3_liquidity_updates(
+        database_path=database_path,
+        chain_id=provider.chain_id,
+        pool_address=pool_address,
+        events=decoded_events,
+    )
+
+
+def apply_v4_liquidity_updates(
+    pool_id: HexBytes,
+    liquidity_events: list[LogReceipt],
+    pool_manager: PoolManagerTable,
+    *,
+    database_path: str,
+) -> None:
+    """Apply the V4 liquidity updates to the provided pool.
+
+    V4 emits a single signed ``ModifyLiquidity`` event (no Burn/Mint split), so the decode unpacks
+    ``(tick_lower, tick_upper, liquidity_delta, _)`` straight from ``data``.
+
+    Assumes the liquidity updates are ordered by block number + log index,
+    ascending (the Rust apply enforces the ordering invariant).
+    """
+    decoded_events: list[LiquidityUpdateEvent] = []
+    for liquidity_event in liquidity_events:
+        tick_lower, tick_upper, liquidity_delta, _ = abi_decode(
+            types=["int24", "int24", "int256", "bytes32"],
+            data=liquidity_event["data"],
+        )
+
+        if liquidity_delta == 0:
+            continue
+
+        decoded_events.append(
+            LiquidityUpdateEvent(
+                liquidity_event["blockNumber"],
+                liquidity_event["logIndex"],
+                tick_lower,
+                tick_upper,
+                liquidity_delta,
+            )
+        )
+
+    db_apply_v4_liquidity_updates(
+        database_path=database_path,
+        pool_hash_hex=pool_id.to_0x_hex(),
+        pool_manager_chain=pool_manager.chain,
+        events=decoded_events,
+    )

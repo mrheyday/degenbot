@@ -309,6 +309,10 @@ mod tests {
             fee_token1: (997, 1000),
             factory: Address::from([0xf0u8; 20]),
             update_block,
+            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+            stable_swap: false,
+            fee_denominator: None,
+            ..Default::default()
         });
         let counting = Arc::new(CountingSubscriber {
             notifies: Mutex::new(0),
@@ -430,6 +434,8 @@ mod tests {
             tick_data: HashMap::new(),
             update_block,
             coverage: PoolTickCoverage::Sparse,
+            fetcher: None,
+            ..Default::default()
         });
         let counting = Arc::new(CountingSubscriber {
             notifies: Mutex::new(0),
@@ -636,6 +642,7 @@ mod tests {
                 tick_data: HashMap::new(),
                 update_block,
                 coverage: PoolTickCoverage::Sparse,
+                fetcher: None,
             })
             .expect("V4 pool registers");
         let counting = Arc::new(CountingSubscriber {

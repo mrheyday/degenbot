@@ -32,11 +32,27 @@ from degenbot.builders.v4_pool_builder import V4PoolBuilder
 from degenbot.database.session_manager import DatabaseSessionManager
 from degenbot.degenbot_rs import PyBot
 from degenbot.registry import PoolRegistry, TokenRegistry
-from degenbot.uniswap.liquidity_pool import LiquidityPool
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
+from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v2_pool_factory import make_v2_pool
 
 # --- Helpers ---
+
+
+_TOKEN_BOT = PyBot()
+
+
+def _mock_token(address: str, *, symbol: str, decimals: int = 18) -> object:
+    """Build a real Erc20Token for update tests (needs real metadata for ADR-006)."""
+    return make_erc20(
+        _TOKEN_BOT,
+        address,
+        chain_id=1,
+        name=symbol,
+        symbol=symbol,
+        decimals=decimals,
+    )
 
 
 def _selector(signature: str) -> str:
@@ -222,8 +238,10 @@ class TestV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -231,7 +249,7 @@ class TestV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         builder = V2PoolBuilder(_fake_builder_context())
@@ -249,8 +267,10 @@ class TestV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -258,7 +278,7 @@ class TestV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         builder = V2PoolBuilder(_fake_builder_context())
@@ -274,8 +294,10 @@ class TestV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -283,7 +305,7 @@ class TestV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         # Class-level call — no builder instance needed
@@ -306,8 +328,10 @@ class TestAsyncV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -315,7 +339,7 @@ class TestAsyncV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         ctx = _fake_async_builder_context()
@@ -335,8 +359,10 @@ class TestAsyncV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -344,7 +370,7 @@ class TestAsyncV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         ctx = _fake_async_builder_context()
@@ -362,8 +388,10 @@ class TestAsyncV2BuilderUpdateBehavior:
         pool = make_v2_pool(
             address="0x0000000000000000000000000000000000000001",
             chain_id=1,
-            token0=MagicMock(address="0x0000000000000000000000000000000000000002", chain_id=1),
-            token1=MagicMock(address="0x0000000000000000000000000000000000000003", chain_id=1),
+            token0=_mock_token("0x0000000000000000000000000000000000000002", symbol="TK0"),
+            token1=_mock_token(
+                "0x0000000000000000000000000000000000000003", symbol="TK1", decimals=6
+            ),
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
             fee_token0=Fraction(3, 1000),
             fee_token1=Fraction(3, 1000),
@@ -371,7 +399,7 @@ class TestAsyncV2BuilderUpdateBehavior:
             reserves_token1=2000,
             state_block=1,
             deployer_address="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-            init_hash=LiquidityPool.UNISWAP_V2_MAINNET_POOL_INIT_HASH,
+            init_hash="0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
         )
 
         # Class-level call — no builder instance needed
@@ -401,7 +429,7 @@ class TestBuilderUpdateRejectsWrongPoolType:
         provider = FakeSyncProvider({})
         io = SyncPoolIO(provider)
 
-        pool = MagicMock(spec=LiquidityPool)
+        pool = MagicMock(spec=UniswapV2Pool)
 
         builder = V3PoolBuilder(_fake_builder_context())
         with pytest.raises(TypeError, match="V3PoolBuilder cannot update"):

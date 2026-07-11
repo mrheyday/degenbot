@@ -16,6 +16,8 @@ from .conftest import (
     ETHEREUM_FULL_NODE_HTTP_URI,
 )
 
+pytestmark = pytest.mark.online_rpc
+
 if TYPE_CHECKING:
     from web3.providers.ipc import IPCProvider
 
@@ -221,7 +223,7 @@ def test_reset_to_new_transaction_hash():
         fork_url=ETHEREUM_ARCHIVE_NODE_HTTP_URI,
     )
     fork.reset(
-        transaction_hash="0x12167fa2a4cd676a6e740edb09427469ecb8718d84ef4d0d5819fe8b527964d6"
+        transaction_hash="0x12167fa2a4cd676a6e740edb09427469ecb8718d84ef4d0d5819fe8b527964d6",
     )
     assert fork.w3.eth.block_number == 20987963
 

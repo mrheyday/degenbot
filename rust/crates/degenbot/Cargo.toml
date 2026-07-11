@@ -1,10 +1,12 @@
 [package]
 name = "degenbot"
 description = "Umbrella Rust crate: re-exports the pyo3-free degenbot core surface (Bot state, DexIdentity presets, calc math) for standalone Rust consumers."
-version = "0.0.0"
-edition = "2021"
-publish = false
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [lints.rust]
 warnings = "deny"
@@ -30,9 +32,19 @@ degenbot-core = { path = "../degenbot-core" }
 degenbot-cl-math = { path = "../degenbot-cl-math" }
 degenbot-abi = { path = "../degenbot-abi" }
 degenbot-uniswap = { path = "../degenbot-uniswap" }
+degenbot-pathfinding = { path = "../degenbot-pathfinding" }
 degenbot-rpc = { path = "../degenbot-rpc" }
 degenbot-decoders = { path = "../degenbot-decoders" }
+degenbot-curve-math = { path = "../degenbot-curve-math" }
+degenbot-balancer-math = { path = "../degenbot-balancer-math" }
+degenbot-solidly-math = { path = "../degenbot-solidly-math" }
+degenbot-evm-math = { path = "../degenbot-evm-math" }
+degenbot-price = { path = "../degenbot-price" }
+degenbot-executor = { path = "../degenbot-executor" }
+degenbot-submission = { path = "../degenbot-submission" }
+degenbot-simulation = { path = "../degenbot-simulation" }
 degenbot-bot = { path = "../degenbot-bot" }
+degenbot-db = { path = "../degenbot-db" }
 
 [dev-dependencies]
 alloy = { version = "^2.0" }
