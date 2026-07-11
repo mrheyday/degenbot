@@ -1,0 +1,10 @@
+[toolchain]
+# Degenbot's Rust workspace tracks upstream, whose CI builds on stable
+# (dtolnay/rust-toolchain@stable). Pinned explicitly to 1.97 here so the build
+# is reproducible on operator boxes and overrides the parent repo's 1.91 pin
+# (../../../rust-toolchain.toml) when building degenbot in place: the synced
+# upstream tree pulls transitive deps (e.g. libsqlite3-sys) that use the
+# `cfg_select!` macro stabilised after 1.91, so 1.91 cannot build them.
+channel = "1.97"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"
