@@ -113,6 +113,19 @@ impl AbiValue {
             DynSolValue::Function(_) => Err(AbiDecodeError::UnsupportedType(
                 "function type not supported".to_string(),
             )),
+            // Catch-all for alloy `DynSolValue` variants that exist only under a feature this crate
+            // does not enable itself but that Cargo's feature unification may switch on for a
+            // downstream workspace — notably `CustomStruct`, alloy's EIP-712 named-struct form,
+            // present only with `alloy-dyn-abi/eip712`. Because that feature is off in this crate's
+            // own build, the explicit variants above are already exhaustive there, so this arm is
+            // unreachable and the `#[allow]` keeps the strict-clippy (`--deny warnings`) standalone
+            // build clean; in a unified build (e.g. an EIP-712-signing consumer) the arm becomes
+            // reachable and keeps the match exhaustive. Such values never arise from contract-return
+            // ABI decoding (which yields `Tuple`), so treating them as unsupported is correct.
+            #[allow(unreachable_patterns)]
+            _ => Err(AbiDecodeError::UnsupportedType(
+                "unsupported alloy DynSolValue variant (e.g. eip712 custom struct)".to_string(),
+            )),
         }
     }
 
