@@ -23,7 +23,7 @@
 //!
 //! See individual module documentation for usage examples.
 
-/// PyO3 seam for the `degenbot-aave-updater` chunk loop (`run_aave_update`).
+/// PyO3 seam for the `degenbot-aave` chunk loop (`run_aave_update`).
 #[cfg(feature = "aave-updater")]
 pub mod aave_updater;
 #[cfg(feature = "abi")]
@@ -46,6 +46,8 @@ pub mod curve_math;
 pub mod db;
 #[cfg(feature = "executor")]
 pub mod executor;
+#[cfg(feature = "fork")]
+pub mod fork;
 #[cfg(feature = "pathfinding")]
 pub mod pathfinding;
 #[cfg(feature = "pool")]
@@ -55,6 +57,8 @@ pub mod prelude;
 pub mod price;
 #[cfg(feature = "rpc")]
 pub mod rpc;
+#[cfg(feature = "simulation")]
+pub mod simulation;
 pub mod solady;
 #[cfg(feature = "solidly-math")]
 pub mod solidly_math;
@@ -97,13 +101,13 @@ pub use degenbot_abi::{abi_decoder, abi_encoder, abi_types, signature_parser};
 pub use degenbot_rpc::{contract, provider, subscription};
 
 // The bot state (`BotState`, reorg journal, verifier, pump,
-// V2/V3/V4 state) + Möbius solvers + the unified `UniswapEngine` live in the
+// V2/V3/V4 state) + Möbius solvers + the unified `ArbitrageEngine` live in the
 // `degenbot-bot` workspace member — one crate by ADR-003 (the state/solver seam
 // is genuine domain coupling, not over-abstracted). Re-exported as
 // `crate::bot_core` / `crate::solvers` so every existing call site in the
 // binding layer keeps resolving. The `#[pyclass]`/`#[pyfunction]` wrappers
 // (`PyBot`, `PyLiquidityPool`, `PyErc20Token`, `PyDexIdentity`,
-// `PyUniswapArbEngine`, the `Verification*Error`/`*RejectedError` exception
+// `PyArbitrageEngine`, the `Verification*Error`/`*RejectedError` exception
 // types) live in the `bot` / `bot::pool` / `bot::token` /
 // `bot::dex_identity` modules and the `bot::engine` subdir (they need `conversion::alloy` / `conversion::cache`).
 #[cfg(feature = "bot")]
@@ -112,7 +116,7 @@ pub use degenbot_bot::{bot_core, solvers};
 // The pure Uniswap V2/V3/V4 event-log decoders live in the `degenbot-decoders`
 // workspace member (Plan 104) — an alloy-only leaf (no pyo3/tokio/degenbot-core).
 // No `pub use` re-export: the binding layer reaches the lone type it needs
-// (`degenbot_decoders::v4_swap_decoder::PoolId`) via the direct path dependency
+// (`degenbot_decoders::v4_swap_decoder::V4PoolId`) via the direct path dependency
 // in `bot::engine`. The state-coupled dispatch layer (`LogDecoder`,
 // `DecodedPoolEvent`, `LogDispatcher`) stays in `degenbot-bot`'s
 // `bot_core::log_dispatcher`.
@@ -167,7 +171,7 @@ fn init_python_before_test_threads() {
 use pyo3::prelude::*;
 
 #[pymodule]
-fn degenbot_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _ffi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logging bridge from Rust to Python. Stays in the module init
     // (not `c_api::register`) because it is module-lifecycle setup rather than
     // symbol registration.

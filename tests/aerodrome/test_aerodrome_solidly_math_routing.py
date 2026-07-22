@@ -2,26 +2,27 @@
 
 Ergo 6TLIJ5/QF2PPN: the Solidly-stable swap-calc paths route the core math
 through the ``degenbot-solidly-math`` Rust leaf
-(``degenbot_rs.solidly_calc_exact_in_stable_solidly`` /
+(``degenbot._ffi.solidly_calc_exact_in_stable_solidly`` /
 ``solidly_calc_exact_in_volatile``) instead of the Python
 ``calculations/solidly_stable.py`` + ``calculations/camelot.py`` ports. The
-companion-level swap-strategy methods (in ``aerodrome/v2_pool_calc.py``) +
-the ``SolidlyStableHop``-bound closure (in ``aerodrome/pools.py``) wrap the
-Rust seam; the Python oracle's ``calc_d`` / ``calc_k`` / ``calc_f`` /
-``get_y_solidly`` / ``f_camelot`` / ``k_camelot`` / ``get_y_camelot`` math is
-retained as the §4.3 parity-oracle corpus for the ``test_calculations.py``
-unit-math identity tests (per the rubric's
-"stays-until-the-routing-lands" criterion — they remain the parity oracle
-for any future Solidly-derived DEX variant with a new k/y pair, and the
-on-chain-match work in ``test_aerodrome_v2_onchain_parity.py``).
+companion-level swap-strategy methods (in ``aerodrome/v2_pool_calc.py``)
+wrap the Rust seam; the SolidlyStableHop-bound closure (in
+``aerodrome/pools.py``) wraps the same Rust leaf in-line
+(ergo S5SJXF / NFYOWI retired the redundant
+``aerodrome.functions.calc_exact_in_stable`` Fraction-splitting wrapper —
+its delegation is now asserted directly against
+``aerodrome.math.calc_exact_in_stable_solidly``, with no intermediate
+Python callable). The Python oracle's ``calc_d`` / ``calc_k`` /
+``calc_f`` / ``get_y_solidly`` / ``f_camelot`` / ``k_camelot`` /
+``get_y_camelot`` math is retained as the §4.3 parity-oracle corpus for the
+``test_calculations.py`` unit-math identity tests, and the on-chain-match
+work in ``test_aerodrome_v2_onchain_parity.py``.
 
 The leaf is byte-for-byte cross-checked vs the Python oracle by the frozen
 ``rust/crates/degenbot-solidly-math/tests/oracle_crosscheck.rs`` snapshot at
 the unit level; per §4.5 this module is the orchestration-level gate that
 spies on the Rust seam to prove the routed path hits it with the right
-arguments ('the parity tests already cover the math'). No §4.3
-value-equivalence recompute was added — exactly one live implementation per
-swap-math concern remains.
+arguments ('the parity tests already cover the math').
 """
 
 from __future__ import annotations
@@ -30,11 +31,8 @@ from fractions import Fraction
 
 import pytest
 
-import degenbot.aerodrome.functions as functions_mod
 import degenbot.aerodrome.v2_pool_calc as calc_mod
-from degenbot.aerodrome.functions import calc_exact_in_stable
-from degenbot.aerodrome.pools import AerodromeV2Pool
-from degenbot.degenbot_rs import PyBot
+from degenbot.bot import PyBot
 from tests.helpers.aerodrome_pool_factory import make_aerodrome_v2_pool
 from tests.helpers.erc20_factory import make_erc20
 
@@ -112,62 +110,21 @@ def volatile_pool():
 
 
 @pytest.fixture
-def functions_stable_spy(monkeypatch) -> _Spy:
-    spy = _Spy(functions_mod.solidly_calc_exact_in_stable_solidly)
-    monkeypatch.setattr(
-        functions_mod, "solidly_calc_exact_in_stable_solidly", spy
-    )
-    return spy
-
-
-@pytest.fixture
 def calc_strategy_spies(monkeypatch) -> dict[str, _Spy]:
     spies = {
         "stable": _Spy(calc_mod._rs_calc_exact_in_stable_solidly),
         "volatile": _Spy(calc_mod._rs_calc_exact_in_volatile),
+        "stable_out": _Spy(calc_mod._rs_calc_exact_out_stable_solidly),
     }
-    monkeypatch.setattr(
-        calc_mod, "_rs_calc_exact_in_stable_solidly", spies["stable"]
-    )
+    monkeypatch.setattr(calc_mod, "_rs_calc_exact_in_stable_solidly", spies["stable"])
     monkeypatch.setattr(calc_mod, "_rs_calc_exact_in_volatile", spies["volatile"])
+    monkeypatch.setattr(calc_mod, "_rs_calc_exact_out_stable_solidly", spies["stable_out"])
     return spies
 
 
-class TestFunctionsRouting:
-    def test_calc_exact_in_stable_routes_through_rust(self, functions_stable_spy) -> None:
-        # Pure-wrapper path: aerodrome.functions.calc_exact_in_stable splits
-        # the Python Fraction(997, 1000) into numer=997 + denom=1000 at the
-        # seam because the pure-Rust math leaf takes two U256s (no
-        # num-rational dep in the alloy-only core).
-        fee = Fraction(997, 1000)
-        result = calc_exact_in_stable(
-            amount_in=1_000_000,
-            token_in=0,
-            reserves0=1_000_000_000_000_000_000,
-            reserves1=1_000_000_000_000_000_000,
-            decimals0=10**18,
-            decimals1=10**18,
-            fee=fee,
-        )
-
-        # §4.5 delegation-detection: the Rust seam was hit exactly once with
-        # the 8 expected positional args (the Solidity Vyper `token_in` is a
-        # uint8 sentinel; fee splits into numer/denom at the binding).
-        assert len(functions_stable_spy.calls) == 1
-        args, _kwargs = functions_stable_spy.calls[0]
-        assert len(args) == 8
-        assert args[0] == 1_000_000  # amount_in
-        assert args[1] == 0  # token_in
-        assert args[6] == 997  # fee_numer (retained post-fee num)
-        assert args[7] == 1000  # fee_denom
-        assert result > 0
-
-
 class TestPoolCalcRouting:
-    def test_stable_swap_routes_through_rust(
-        self, stable_pool, calc_strategy_spies
-    ) -> None:
-        t0, t1 = stable_pool._token0, stable_pool._token1
+    def test_stable_swap_routes_through_rust(self, stable_pool, calc_strategy_spies) -> None:
+        t0 = stable_pool._token0
         amount_in = 100_000_000  # 100 USDC
         stable_pool.calculate_tokens_out_from_tokens_in(t0, amount_in)
 
@@ -177,10 +134,8 @@ class TestPoolCalcRouting:
         assert len(calc_strategy_spies["stable"].calls) == 1
         assert len(calc_strategy_spies["volatile"].calls) == 0
 
-    def test_volatile_swap_routes_through_rust(
-        self, volatile_pool, calc_strategy_spies
-    ) -> None:
-        t0, t1 = volatile_pool._token0, volatile_pool._token1
+    def test_volatile_swap_routes_through_rust(self, volatile_pool, calc_strategy_spies) -> None:
+        t0 = volatile_pool._token0
         amount_in = 100_000_000_000_000_000  # 0.1 WETH
         volatile_pool.calculate_tokens_out_from_tokens_in(t0, amount_in)
 
@@ -189,3 +144,49 @@ class TestPoolCalcRouting:
         # `calc_exact_in_volatile`); the stable seam was NOT touched.
         assert len(calc_strategy_spies["volatile"].calls) == 1
         assert len(calc_strategy_spies["stable"].calls) == 0
+
+
+class TestStableExactOut:
+    """Aerodrome stable exact-out roundtrip — the inverse of the stable exact-in.
+
+    The stable exact-out (`calc_exact_out_stable_solidly`) was previously a
+    `NotImplementedError` stub (ergo S5SJXF / LTLR2K — a gap-fill, not a port:
+    the Python leaf never existed). The §4.2 oracle is the property-based
+    roundtrip over the Solidly/Aerodrome stable invariant: `exact_out` is the
+    MINIMUM input producing at least the requested output, so
+
+        exact_out(exact_in(amount_in) ) ≤ amount_in
+        exact_in(exact_out(out)        ) ≥ out
+        exact_in(exact_out(out) - 1     ) < out   (the minimum is tight)
+    """
+
+    def test_routes_through_rust(self, stable_pool, calc_strategy_spies) -> None:
+        t1 = stable_pool._token1  # the OUT token (exact-out direction)
+        stable_pool.calculate_tokens_in_from_tokens_out(1_000_000, t1)
+
+        # §4.5 delegation-detection: the stable exact-out strategy routed
+        # through the Rust `calc_exact_out_stable_solidly` seam.
+        assert len(calc_strategy_spies["stable_out"].calls) == 1
+        assert len(calc_strategy_spies["stable"].calls) == 0
+        assert len(calc_strategy_spies["volatile"].calls) == 0
+
+    def test_roundtrip_is_the_minimum_input(self, stable_pool) -> None:
+        t0 = stable_pool._token0
+        t1 = stable_pool._token1
+        amount_in = 1_000_000  # 1 USDC
+        out = stable_pool.calculate_tokens_out_from_tokens_in(t0, amount_in)
+        recovered = stable_pool.calculate_tokens_in_from_tokens_out(out, t1)
+
+        # (a) The inverse returns the MINIMUM input producing ≥ out, so it is
+        #     ≤ the seed amount_in (which over-paid or exactly paid for the
+        #     floored output).
+        assert 0 < recovered <= amount_in
+
+        # (b) Correctness: the recovered input produces at least the target
+        #     output when fed back through exact-in.
+        assert stable_pool.calculate_tokens_out_from_tokens_in(t0, recovered) >= out
+
+        # (c) Tightness: one wei less than `recovered` no longer reaches `out`
+        #     (so `recovered` is the true minimum — the getAmountIn answer).
+        if recovered > 1:
+            assert stable_pool.calculate_tokens_out_from_tokens_in(t0, recovered - 1) < out

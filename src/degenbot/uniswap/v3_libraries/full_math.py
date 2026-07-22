@@ -11,9 +11,13 @@ import functools
 from collections.abc import Callable
 from typing import Any
 
-from degenbot.degenbot_rs import cl_muldiv as _rs_muldiv
-from degenbot.degenbot_rs import cl_muldiv_rounding_up as _rs_muldiv_rounding_up
 from degenbot.exceptions.pool import EVMRevertError
+from degenbot.uniswap.math import (
+    muldiv as _rs_muldiv,
+)
+from degenbot.uniswap.math import (
+    muldiv_rounding_up as _rs_muldiv_rounding_up,
+)
 
 # Translation table: Rust core messages → V3 Solidity revert messages
 _V3_MESSAGE_MAP = {

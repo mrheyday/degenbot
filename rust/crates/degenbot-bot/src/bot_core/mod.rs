@@ -7,70 +7,64 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use alloy::primitives::{Address, B256, I256, U256};
+use alloy::primitives::{aliases::U112, Address, I256, U256};
 
-use crate::bot_core::state_history::{
-    JournalError, ReorgJournal, ScalarPriors, TickBefore, V2BlockDelta, V3BlockDelta,
-    V3RestoreResult,
+use crate::bot_core::snapshot_verify::SnapshotLoadError;
+use ::degenbot_pools::state_history::{
+    JournalError, ReorgPoolState, ScalarPriors, TickBefore, V2BlockDelta, V3BlockDelta,
 };
-use crate::solvers::mobius_int::IntHopState;
-use degenbot_uniswap::dex_identity::DexVariant;
 use degenbot_uniswap::v2_encoding::{encode_v2_swap, EncodedCall};
 
-pub mod aerodrome_v2_state;
 pub mod balancer_stable_state;
 pub mod balancer_weighted_state;
 pub mod block_clock;
 pub mod block_pump;
-pub mod curve_data_provider;
+pub mod construction_io;
 pub mod curve_state;
 pub mod drain_sink;
 pub mod engine;
 pub mod liquidity_verifier;
 pub mod log_dispatcher;
-pub mod rate_provider;
 pub mod reorg_coordinator;
 pub mod snapshot_verify;
 pub mod solve_coordinator;
-pub mod state_history;
-pub mod tick_bitmap;
-pub mod tick_fetch;
-pub mod tick_map;
+pub mod tick_assembly;
 pub mod v3_state;
-pub mod v4_state;
 
 // Re-export the merged V3/V4/Curve state types (ADR-003: BotState owns
 // pool state; Curve is the ADR-003 "third family").
-pub use aerodrome_v2_state::{
+pub use ::degenbot_pools::aerodrome_v2_state::{
     AerodromeV2PoolIdentity, AerodromeV2PoolState, RegisterAerodromeV2PoolParams,
 };
+pub use ::degenbot_pools::curve_data_provider::{CurveDataProvider, CurveDataProviderError};
+pub use ::degenbot_pools::rate_provider::{
+    BalancerRateProvider, RateProviderError, StaticRateProvider,
+};
+pub use ::degenbot_pools::spec_bounds::{SpecValue, SpecViolation, UINT112_MAX};
+pub use ::degenbot_pools::state_history::BalancesBlockDelta;
 pub use balancer_stable_state::{
-    BalancerStableBlockDelta, BalancerStablePoolIdentity, BalancerStablePoolState,
-    RegisterBalancerStablePoolParams,
+    BalancerStablePoolIdentity, BalancerStablePoolState, RegisterBalancerStablePoolParams,
 };
 pub use balancer_weighted_state::{
-    BalancerWeightedBlockDelta, BalancerWeightedPoolIdentity, BalancerWeightedPoolState,
-    RegisterBalancerWeightedPoolParams,
+    BalancerWeightedPoolIdentity, BalancerWeightedPoolState, RegisterBalancerWeightedPoolParams,
 };
-pub use curve_data_provider::{CurveDataProvider, CurveDataProviderError};
-pub use curve_state::{
-    CurveBlockDelta, CurvePoolIdentity, CurvePoolState, RegisterCurvePoolParams,
-};
-pub use rate_provider::{BalancerRateProvider, RateProviderError, StaticRateProvider};
+pub use curve_state::{CurvePoolIdentity, CurvePoolState, RegisterCurvePoolParams};
 pub use v3_state::{
-    v3_simulate_swap, BufferedV3LiquidityUpdate, PoolTickCoverage, RegisterV3PoolParams,
-    SimulateSwapError, V3PoolIdentity, V3PoolState, V3SwapOutcome, V3SwapUpdate,
+    v3_simulate_swap, BufferedV3LiquidityUpdate, PoolTickCoverage, RegisterV3PoolError,
+    RegisterV3PoolParams, SimulateSwapError, V3PoolIdentity, V3PoolState, V3SwapOutcome,
+    V3SwapUpdate,
 };
-pub use v4_state::RegisterV4PoolError;
-pub use v4_state::{
-    v4_simulate_swap, BufferedV4LiquidityUpdate, RegisterV4PoolParams, V4PoolIdentity, V4PoolKey,
-    V4PoolState, V4StateSync, V4SwapUpdate, AMOUNT_MODIFYING_HOOK_MASK, V4_DYNAMIC_FEE_FLAG,
+
+pub use ::degenbot_pools::v4_state::{
+    v4_simulate_swap, BufferedV4LiquidityUpdate, RegisterV4PoolError, RegisterV4PoolParams,
+    V4PoolIdentity, V4PoolKey, V4PoolState, V4StateSync, V4SwapUpdate, AMOUNT_MODIFYING_HOOK_MASK,
+    V4_DYNAMIC_FEE_FLAG,
 };
 
 // Re-export the ADR-004 typed TickMap boundary trait (V3 + V4 impls both live
 // in `tick_map.rs`). State structs stay flat; only verifier/apply views are
 // typed-narrowed.
-pub use tick_map::{TickMap, TickMapMut};
+pub use ::degenbot_pools::tick_map::{TickMap, TickMapMut};
 
 // Re-export the ADR-008 per-block state machine core (pure; the pump drives
 // it — see `bot_core/block_clock.rs`).
@@ -80,224 +74,21 @@ pub use block_clock::{BlockClock, BlockState, HeaderDecision, LogDecision};
 // Pool state types
 // ---------------------------------------------------------------------------
 
-/// A single pool's state. Pool-type-specific fields are in the enum variants.
-#[derive(Clone, Debug)]
-pub enum PoolEntry {
-    V2(V2PoolIdentity, V2PoolState),
-    V3(V3PoolIdentity, V3PoolState),
-    V4(V4PoolIdentity, V4PoolState),
-    Curve(CurvePoolIdentity, CurvePoolState),
-    BalancerWeighted(BalancerWeightedPoolIdentity, BalancerWeightedPoolState),
-    BalancerStable(BalancerStablePoolIdentity, BalancerStablePoolState),
-    AerodromeV2(AerodromeV2PoolIdentity, AerodromeV2PoolState),
-}
-
-/// Read-only surface shared by [`V3PoolState`] and [`V4PoolState`] — the
-/// fields the per-handle `PyLiquidityPool` reader API presents uniformly
-/// across the V3/V4 concentrated-liquidity families (J63J3N).
-///
-/// Both variants store the same mutable scalars (`sqrt_price_x96`/
-/// `liquidity`/`tick`/`update_block`) and an identical `tick_data:
-/// HashMap<i32, TickInfo>`; V4 additionally nests `fee`/`tick_spacing`
-/// inside `pool_key`, which the impl projects out. The trait lets
-/// [`BotState::get_v3_or_v4_pool`] return one borrowed view covering both
-/// families without cloning — the reader twin of the RAJ3PP apply dispatchers.
-///
-/// V2 is intentionally excluded (different state shape — reserves, not
-/// scalars); a V2 `pool_id` yields `None` from the accessor, matching the
-/// prior V3-only contract.
-/// Mutable-reader trait for V3/V4 concentrated-liquidity pools.
-///
-/// Projects only mutable runtime scalars (`sqrt_price_x96`/`liquidity`/`tick`/
-/// `update_block`/`tick_data`) — the values a swap calc consumes. Immutable
-/// config (`fee`/`tick_spacing`) lives on `V3PoolIdentity`/`V4PoolIdentity`;
-/// read it via [`BotState::get_v3_identity`]/[`BotState::get_v4_identity`].
-/// The dyn-dispatch surface is a `&VxPoolState` borrowed from the registry.
-pub trait V3FamilyPool {
-    fn sqrt_price_x96(&self) -> U256;
-    fn liquidity(&self) -> u128;
-    fn tick(&self) -> i32;
-    fn update_block(&self) -> u64;
-    fn tick_data(&self) -> &HashMap<i32, TickInfo>;
-}
-
-impl V3FamilyPool for V3PoolState {
-    fn sqrt_price_x96(&self) -> U256 {
-        self.sqrt_price_x96
-    }
-    fn liquidity(&self) -> u128 {
-        self.liquidity
-    }
-    fn tick(&self) -> i32 {
-        self.tick
-    }
-    fn update_block(&self) -> u64 {
-        self.update_block
-    }
-    fn tick_data(&self) -> &HashMap<i32, TickInfo> {
-        &self.tick_data
-    }
-}
-
-impl V3FamilyPool for V4PoolState {
-    fn sqrt_price_x96(&self) -> U256 {
-        self.sqrt_price_x96
-    }
-    fn liquidity(&self) -> u128 {
-        self.liquidity
-    }
-    fn tick(&self) -> i32 {
-        self.tick
-    }
-    fn update_block(&self) -> u64 {
-        self.update_block
-    }
-    fn tick_data(&self) -> &HashMap<i32, TickInfo> {
-        &self.tick_data
-    }
-}
-
-/// Immutable V2 registration identity (ADR-005 identity slice).
-///
-/// Pure registration data — the pool's permanent identity, set once at
-/// `register_v2_pool` and never mutated. Mirrors [`TokenEntry`] (one immutable
-/// identity struct per registry entry, no mutable half). Distinct from
-/// [`V2PoolState`], which carries only mutable runtime data (reserves +
-/// journal + update block).
-///
-/// This completes the half-done ADR-005 split: the former `V2PoolDescriptor`
-/// (`variant/stable_swap/fee_denominator`) is folded in here, alongside the
-/// level-2 identity (address/tokens/fees/factory) that previously sat on the
-/// mutable `V2PoolState`. The `PyLiquidityPool` handle reads all of this
-/// through [`BotState::get_v2_identity`] — the Polars `_from_pydf` end state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct V2PoolIdentity {
-    /// Pool contract address.
-    pub address: Address,
-    /// Token0 contract address.
-    pub token0: Address,
-    /// Token1 contract address.
-    pub token1: Address,
-    /// Fee parameters for token0→token1 swaps: (`gamma_numer`, `fee_denom`).
-    pub fee_token0: (u64, u64),
-    /// Fee parameters for token1→token0 swaps: (`gamma_numer`, `fee_denom`).
-    pub fee_token1: (u64, u64),
-    /// Pool factory address.
-    pub factory: Address,
-    /// The CREATE2 deployer this pool's address was verified against (Fork A,
-    /// NSAZ4X). The JSON row's `deployer` (or `factory` for null), or the
-    /// factory itself for non-JSON pools. The `dex` getter merges this per-
-    /// (chain,factory) deployer into the protocol preset (replacing the
-    /// canonical-mainnet preset deployer).
-    pub deployer: Address,
-    /// The CREATE2 init code hash (Fork A, NSAZ4X). The JSON row's `init_hash`,
-    /// or the V2 mainnet fallback const for non-JSON pools.
-    pub init_hash: B256,
-    /// The DEX+variant discriminator. Resolves the canonical
-    /// [`degenbot_uniswap::dex_identity::DexIdentity`] preset
-    /// (factory/deployer/init-hash/default fees/ABI shape) for encoding and
-    /// `_verified_address` derivation.
-    pub variant: DexVariant,
-    /// Camelot solidly-stable strategy flag (false for all non-Camelot V2).
-    pub stable_swap: bool,
-    /// Camelot's integer fee scaling (used by the solidly-stable math). `None`
-    /// for non-Camelot V2 (the volatile calc ignores it).
-    pub fee_denominator: Option<u64>,
-}
-
-/// Mutable runtime state for a Uniswap V2-style constant-product pool.
-///
-/// Pure mutable data — the values that change as reserves are pumped and
-/// rolled back. Immutable identity lives on [`V2PoolIdentity`]; look it up via
-/// [`BotState::get_v2_identity`]. The two are paired in [`PoolEntry::V2`].
-#[derive(Clone, Debug)]
-pub struct V2PoolState {
-    /// Current reserve of token0.
-    pub reserve0: U256,
-    /// Current reserve of token1.
-    pub reserve1: U256,
-    /// Block number of the last update.
-    pub update_block: u64,
-
-    /// Reorg journal — "before" values for rollback.
-    /// V2 is the degenerate case: delta = full state (two reserves).
-    pub journal: ReorgJournal<V2BlockDelta>,
-}
-
-/// Parameters for registering a V2 pool.
-#[derive(Clone, Debug, Default)]
-pub struct RegisterV2PoolParams {
-    pub address: Address,
-    pub token0: Address,
-    pub token1: Address,
-    pub reserve0: U256,
-    pub reserve1: U256,
-    pub fee_token0: (u64, u64),
-    pub fee_token1: (u64, u64),
-    pub factory: Address,
-    /// The CREATE2 deployer the Rust builder verified this pool's address
-    /// against (Fork A, NSAZ4X). Equals the JSON row's `deployer`, or
-    /// `factory` when the row had `null` (the `None -> factory` convention).
-    /// For non-JSON pools, the factory itself. Stored on the identity so the
-    /// `dex` getter merges the per-(chain,factory) deployer (no getter-time
-    /// `chain_id` lookup).
-    pub deployer: Address,
-    /// The CREATE2 init code hash the builder verified against (Fork A,
-    /// NSAZ4X). The JSON row's `init_hash`; the V2 mainnet fallback const
-    /// for non-JSON pools.
-    pub init_hash: B256,
-    /// Block number of the registration state — seeds the genesis reorg
-    /// journal delta (ADR-005 slice 4). The landed-at journal must anchor the
-    /// registration state at a real block so `restore_before_block` can land
-    /// on it; pre-slice-4 the journal was empty until the first Sync.
-    pub update_block: u64,
-    /// DEX+variant discriminator (registration metadata — see
-    /// [`V2PoolIdentity`]).
-    pub variant: DexVariant,
-    /// Camelot solidly-stable strategy flag.
-    pub stable_swap: bool,
-    /// Camelot integer fee scaling (the solidly-stable math's denominator).
-    pub fee_denominator: Option<u64>,
-}
-
 // ---------------------------------------------------------------------------
-// V3 pool state — defined in [`v3_state`] (merged engine + journal types).
+// Pool registry sum type + V2 identity/state + token entry + swap-sim dispatch.
+// **Relocated** to `degenbot-pools`; re-exported here at the historical
+// `bot_core::*` paths so consumers resolve unchanged.
+// Transient re-export — repointed at `degenbot_pools::*` natively by USPN7M/P2CKRL.
 // ---------------------------------------------------------------------------
 
-/// Liquidity data at an initialized tick.
-///
-/// Mirrors the Python `LiquidityAtTick` from `concentrated/types.py`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TickInfo {
-    /// The total liquidity that references this tick.
-    pub liquidity_gross: alloy::primitives::U128,
-    /// The liquidity delta for ticks entered from left to right.
-    /// Positive for lower ticks, negative for upper ticks.
-    pub liquidity_net: alloy::primitives::I256,
-    /// The block at which this tick was last mutated (Mint/Burn event block,
-    /// or the pool's registration block for genesis-seeded ticks). Mirrors the
-    /// Python ``LiquidityAtTick.block`` field; preserved through the FFI
-    /// round-trip (``update_tick_data`` writes it, ``tick_data_snapshot``
-    /// reads it). The simulation math does NOT read this — it's diagnostic
-    /// metadata + the snapshot round-trip's per-tick block contract.
-    pub block: u64,
-}
-
-// `RegisterV3PoolParams` lives in [`v3_state`] (re-exported above).
-
-// ---------------------------------------------------------------------------
-// Token state
-// ---------------------------------------------------------------------------
-
-/// ERC20 token metadata.
-#[derive(Clone, Debug)]
-pub struct TokenEntry {
-    pub address: Address,
-    pub name: String,
-    pub symbol: String,
-    pub decimals: u8,
-    pub chain_id: u64,
-}
+pub use ::degenbot_pools::registry::{
+    ConcentratedLiquidityPool, ConcentratedLiquidityPoolMut, PoolEntry, TokenEntry,
+};
+pub use ::degenbot_pools::simulate_swap::simulate_swap;
+pub use ::degenbot_pools::v2_state::{
+    RegisterV2PoolError, RegisterV2PoolParams, V2PoolIdentity, V2PoolState,
+};
+pub use ::degenbot_pools::TickInfo;
 
 // ---------------------------------------------------------------------------
 // BotState
@@ -327,20 +118,26 @@ pub struct BotState {
     /// Dual-buffer for V3 liquidity (Mint/Burn) events awaiting pool
     /// registration (ADR-003: the accurate-state buffer lives on `BotState`, not
     /// the dissolved `V3BlockEngine`).
-    v3_buffer: crate::solvers::liquidity_event_buffer::LiquidityEventBuffer<
+    v3_buffer: ::degenbot_pools::liquidity_event_buffer::LiquidityEventBuffer<
         Address,
         BufferedV3LiquidityUpdate,
     >,
     /// Dual-buffer for V4 `ModifyLiquidity` events awaiting pool registration.
     /// Keyed by `(pool_manager, pool_id)`.
-    v4_buffer: crate::solvers::liquidity_event_buffer::LiquidityEventBuffer<
-        (Address, degenbot_decoders::v4_swap_decoder::PoolId),
+    v4_buffer: ::degenbot_pools::liquidity_event_buffer::LiquidityEventBuffer<
+        (Address, degenbot_decoders::v4_swap_decoder::V4PoolId),
         BufferedV4LiquidityUpdate,
     >,
     /// V4 pool registry: `(pool_manager, pool_id)` → `pool_id` (single entry
     /// per pool — ADR-003 Option I: orientation derived at solve from
     /// `zero_for_one`, not stored as separate forward/reverse entries).
-    v4_pool_ids: HashMap<(Address, degenbot_decoders::v4_swap_decoder::PoolId), u64>,
+    v4_pool_ids: HashMap<(Address, degenbot_decoders::v4_swap_decoder::V4PoolId), u64>,
+    /// The snapshot seed block `S = min(fetch_newest_update_block(V3), V4)`.
+    /// Set by `Bot::load_snapshot_from_db` (or `load_snapshot_from_py`) when a
+    /// snapshot is loaded; consumed by the auto-backfill (B1/J3FMDO) that
+    /// closes the `S+1..W-1` gap before resume. `None` when no snapshot was
+    /// loaded (cold-start path — the pump anchors on `first_observed_block`).
+    snapshot_seed_block: Option<u64>,
 }
 
 impl BotState {
@@ -348,6 +145,13 @@ impl BotState {
     #[must_use]
     pub fn new() -> Self {
         Self::with_journal_depth(32)
+    }
+
+    /// Borrow a registered pool entry by ID. Used by the structural `Pool`
+    /// handle prototype (V2 slice) to present a family-agnostic interface.
+    #[must_use]
+    pub fn pool_entry(&self, pool_id: u64) -> Option<&PoolEntry> {
+        self.pools.get(&pool_id)
     }
 
     /// Create a new, empty `BotState` with a custom reorg journal depth.
@@ -359,9 +163,10 @@ impl BotState {
             tokens: HashMap::new(),
             next_pool_id: 1,
             journal_depth,
-            v3_buffer: crate::solvers::liquidity_event_buffer::LiquidityEventBuffer::new(),
-            v4_buffer: crate::solvers::liquidity_event_buffer::LiquidityEventBuffer::new(),
+            v3_buffer: ::degenbot_pools::liquidity_event_buffer::LiquidityEventBuffer::new(),
+            v4_buffer: ::degenbot_pools::liquidity_event_buffer::LiquidityEventBuffer::new(),
             v4_pool_ids: HashMap::new(),
+            snapshot_seed_block: None,
         }
     }
 
@@ -369,102 +174,93 @@ impl BotState {
     ///
     /// Returns the auto-assigned pool ID.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the pool address is already registered.
-    pub fn register_v2_pool(&mut self, params: &RegisterV2PoolParams) -> u64 {
-        assert!(
-            !self.pool_addresses.contains_key(&params.address),
-            "pool already registered: {}",
-            params.address
-        );
+    /// Returns [`RegisterV2PoolError::AlreadyRegistered`] if a pool at this
+    /// address is already registered (replaces the prior `assert!` panic).
+    /// Returns [`RegisterV2PoolError::SpecViolation`] when `reserve0` or
+    /// `reserve1` exceed `uint112::MAX` — the on-chain `uint112` storage width
+    /// v2-core asserts at `UniswapV2Pair._update`. Living pool state from
+    /// `Sync(uint112,uint112)` events is structurally spec-bound, so spec
+    /// checks fire only on synthetic / corrupt registration.
+    pub fn register_v2_pool(
+        &mut self,
+        params: &RegisterV2PoolParams,
+    ) -> Result<u64, RegisterV2PoolError> {
+        // Spec-bound admission (epic WOYYS2 / MSTAT2): reject up-front rather
+        // than propagating overlarge reserves into `V2PoolState` (where the
+        // downstream swap-math U512→U256 narrowing would silently degrade to
+        // `U256::MAX` under the prior sat-cap, or panic — see the helper's
+        // `# Panics` section committed in `19218a2c`).
+        ::degenbot_pools::spec_bounds::validate_v2_reserve(params.reserve0, "reserve0")?;
+        ::degenbot_pools::spec_bounds::validate_v2_reserve(params.reserve1, "reserve1")?;
+        if self.pool_addresses.contains_key(&params.address) {
+            return Err(RegisterV2PoolError::AlreadyRegistered {
+                address: params.address,
+            });
+        }
 
         let pool_id = self.next_pool_id;
         self.next_pool_id += 1;
 
-        let RegisterV2PoolParams {
-            address,
-            token0,
-            token1,
-            reserve0,
-            reserve1,
-            fee_token0,
-            fee_token1,
-            factory,
-            deployer,
-            init_hash,
-            update_block,
-            variant,
-            stable_swap,
-            fee_denominator,
-            ..
-        } = *params;
+        // Construct (identity, state) + genesis journal delta on the state
+        // struct (ADR-014 D6/Q7 — V2 joins its 6 siblings; the construction
+        // + genesis-delta push moved out of `register_v2_pool` into
+        // `V2PoolState::from_params`).
+        let (identity, state) = V2PoolState::from_params(params, self.journal_depth);
 
-        // Seed the reorg journal with a genesis delta (ADR-005 slice 4): the
-        // registration reserves at `update_block`. A `before`-only journal
-        // cannot express "land at registration" or "current state"; the
-        // genesis anchor (before == after == registration reserves) is what
-        // makes `restore_before_block` land on it.
-        let mut journal = ReorgJournal::<V2BlockDelta>::new(self.journal_depth);
-        journal.push_delta(V2BlockDelta {
-            block: update_block,
-            reserve0_before: reserve0,
-            reserve1_before: reserve1,
-            reserve0_after: reserve0,
-            reserve1_after: reserve1,
-        });
+        self.pools.insert(pool_id, PoolEntry::V2(identity, state));
+        self.pool_addresses.insert(params.address, pool_id);
 
-        self.pools.insert(
-            pool_id,
-            PoolEntry::V2(
-                V2PoolIdentity {
-                    address,
-                    token0,
-                    token1,
-                    fee_token0,
-                    fee_token1,
-                    factory,
-                    deployer,
-                    init_hash,
-                    variant,
-                    stable_swap,
-                    fee_denominator,
-                },
-                V2PoolState {
-                    reserve0,
-                    reserve1,
-                    update_block,
-                    journal,
-                },
-            ),
-        );
-        self.pool_addresses.insert(address, pool_id);
-
-        pool_id
+        Ok(pool_id)
     }
 
     /// Register a V3 pool by contract address.
     ///
     /// Returns the auto-assigned pool ID.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the pool address is already registered.
-    pub fn register_v3_pool(&mut self, params: &RegisterV3PoolParams) -> u64 {
-        assert!(
-            !self.pool_addresses.contains_key(&params.address),
-            "pool already registered: {}",
-            params.address
-        );
+    /// Returns [`RegisterV3PoolError::AlreadyRegistered`] if a pool at this
+    /// address is already registered (replaces the prior `assert!` panic).
+    ///
+    /// Returns [`RegisterV3PoolError::SpecViolation`] when `sqrt_price_x96`,
+    /// `tick`, `fee`, or `tick_spacing` violates its Solidity-bounded on-chain
+    /// invariant (see [`spec_bounds`]). These checks fire *before* the
+    /// registration-time tick-data seeding (the Db arm of `assemble_*_tick_map`
+    /// supplies `tick_data`/`coverage` via the held snapshot tx) + never touch
+    /// the immutable config / current state scalars under validation here.
+    pub fn register_v3_pool(
+        &mut self,
+        params: &RegisterV3PoolParams,
+    ) -> Result<u64, RegisterV3PoolError> {
+        use ::degenbot_pools::spec_bounds as sb;
+        sb::validate_sqrt_price(params.sqrt_price_x96)
+            .map_err(RegisterV3PoolError::SpecViolation)?;
+        sb::validate_tick(params.tick).map_err(RegisterV3PoolError::SpecViolation)?;
+        sb::validate_v3_fee(params.fee).map_err(RegisterV3PoolError::SpecViolation)?;
+        sb::validate_tick_spacing(params.tick_spacing)
+            .map_err(RegisterV3PoolError::SpecViolation)?;
+
+        if self.pool_addresses.contains_key(&params.address) {
+            return Err(RegisterV3PoolError::AlreadyRegistered {
+                address: params.address,
+            });
+        }
 
         let pool_id = self.next_pool_id;
         self.next_pool_id += 1;
+        let address = params.address;
 
-        let (identity, state) = V3PoolState::from_params(params.clone(), self.journal_depth);
+        // RUQ637/XEANMB: the `seed_from_store` path is retired — the DB
+        // seeding is handled by the Db arm of `assemble_v3_tick_map` (held
+        // snapshot tx). Just clone + flow the params through.
+        let params = params.clone();
+        let (identity, state) = V3PoolState::from_params(params, self.journal_depth);
         self.pools.insert(pool_id, PoolEntry::V3(identity, state));
-        self.pool_addresses.insert(params.address, pool_id);
+        self.pool_addresses.insert(address, pool_id);
 
-        pool_id
+        Ok(pool_id)
     }
 
     /// Register a Curve `StableSwap` pool by contract address.
@@ -473,7 +269,8 @@ impl BotState {
     /// immutable config (tokens, A, fee, variant strategy enums, base-pool
     /// reference) + the registration-time mutable state (`balances`,
     /// `update_block`). Seeds the reorg journal with a genesis anchor (mirror
-    /// of V2's discipline) so `curve_restore_before_block` can land on the
+    /// of V2's discipline) so the balance-vector trait dispatcher
+    /// (`restore_balance_vector_before_block`, ADR-016) can land on the
     /// registration state.
     ///
     /// Returns the auto-assigned pool ID.
@@ -526,28 +323,29 @@ impl BotState {
     /// count — a wiring/programming error (the builder always passes an
     /// `Exchange`-decoded balance tuple of the right arity).
     #[must_use]
-    pub fn apply_curve_balance_update_by_pool_id(
+    /// Apply a balance-vector update (a Curve `Exchange` event or a Balancer
+    /// Vault `PoolBalanceChanged` event) keyed by the handle's `pool_id`,
+    /// dispatching through `BalanceVectorPoolState::apply_balance_update`
+    /// (ADR-017 D1 — replaces the three per-family
+    /// `apply_curve_balance_update_by_pool_id` /
+    /// `apply_balancer_weighted_balance_update_by_pool_id` /
+    /// `apply_balancer_stable_balance_update_by_pool_id` methods, whose bodies
+    /// were byte-identical modulo the arity `assert!` message).
+    ///
+    /// Returns `Some(pool_id)` if the pool is a balance-vector family
+    /// (Curve / `BalancerWeighted` / `BalancerStable`); `None` otherwise (silent
+    /// no-op — mirrors the per-family silent-no-op contract on a non-matching
+    /// family, e.g. a V2 `pool_id`).
+    pub fn apply_balance_update_by_pool_id(
         &mut self,
         pool_id: u64,
         balances: Vec<U256>,
         block_number: u64,
     ) -> Option<u64> {
-        let Some(PoolEntry::Curve(_, state)) = self.pools.get_mut(&pool_id) else {
-            return None;
-        };
-        assert!(
-            balances.len() == state.balances.len(),
-            "Curve balance length mismatch: pool has {} tokens, update has {}",
-            state.balances.len(),
-            balances.len(),
-        );
-        state.journal.push_delta(CurveBlockDelta {
-            block: block_number,
-            balances_before: state.balances.clone(),
-            balances_after: balances.clone(),
-        });
-        state.balances = balances;
-        state.update_block = block_number;
+        let entry = self.pools.get_mut(&pool_id)?;
+        entry
+            .as_balance_vector_mut()?
+            .apply_balance_update(balances, block_number);
         Some(pool_id)
     }
 
@@ -558,15 +356,10 @@ impl BotState {
     /// `None` for non-Curve pools (silent no-op).
     #[must_use]
     pub fn get_curve_pool(&self, pool_id: u64) -> Option<&CurvePoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::Curve(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::curve)
+            .map(|(_, state)| state)
     }
 
     /// Look up a Curve pool's immutable registration identity (address,
@@ -574,15 +367,10 @@ impl BotState {
     /// Returns `None` if the pool is not registered or isn't a Curve pool.
     #[must_use]
     pub fn get_curve_identity(&self, pool_id: u64) -> Option<&CurvePoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::Curve(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::curve)
+            .map(|(identity, _)| identity)
     }
 
     // --- ADR-005 slice 12a: Balancer V2 weighted state port -------------
@@ -634,46 +422,6 @@ impl BotState {
         pool_id
     }
 
-    /// Apply a Balancer weighted `external_update` (new balances from a Vault
-    /// `PoolBalanceChanged` event) by `pool_id` — the
-    /// `PyLiquidityPool.apply_balancer_weighted_balance_update` backing.
-    ///
-    /// Journals the prior balances (genesis-anchor V2-style discipline), then
-    /// lands the new balances + `update_block`. Returns the affected `pool_id`,
-    /// or `None` if not registered / not a Balancer weighted pool (silent
-    /// no-op — don't corrupt a V2/V3/V4/Curve pool).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `balances.len()` doesn't match the registered pool's token
-    /// count — a wiring error (the builder always passes a balance tuple of
-    /// the right arity).
-    #[must_use]
-    pub fn apply_balancer_weighted_balance_update_by_pool_id(
-        &mut self,
-        pool_id: u64,
-        balances: Vec<U256>,
-        block_number: u64,
-    ) -> Option<u64> {
-        let Some(PoolEntry::BalancerWeighted(_, state)) = self.pools.get_mut(&pool_id) else {
-            return None;
-        };
-        assert!(
-            balances.len() == state.balances.len(),
-            "Balancer weighted balance length mismatch: pool has {} tokens, update has {}",
-            state.balances.len(),
-            balances.len(),
-        );
-        state.journal.push_delta(BalancerWeightedBlockDelta {
-            block: block_number,
-            balances_before: state.balances.clone(),
-            balances_after: balances.clone(),
-        });
-        state.balances = balances;
-        state.update_block = block_number;
-        Some(pool_id)
-    }
-
     /// Read a registered Balancer weighted pool's state by `pool_id`.
     ///
     /// The Python companion (slice 12b) reads `balances` / `update_block`
@@ -681,15 +429,10 @@ impl BotState {
     /// for non-Balancer-weighted pools (silent no-op).
     #[must_use]
     pub fn get_balancer_weighted_pool(&self, pool_id: u64) -> Option<&BalancerWeightedPoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::BalancerWeighted(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::balancer_weighted)
+            .map(|(_, state)| state)
     }
 
     /// Look up a Balancer weighted pool's immutable registration identity
@@ -700,15 +443,10 @@ impl BotState {
         &self,
         pool_id: u64,
     ) -> Option<&BalancerWeightedPoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::BalancerWeighted(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::balancer_weighted)
+            .map(|(identity, _)| identity)
     }
 
     // --- ADR-005 slice 12c: Balancer V2 stable state port --------------
@@ -768,46 +506,6 @@ impl BotState {
         pool_id
     }
 
-    /// Apply a Balancer stable `external_update` (new balances from a Vault
-    /// `PoolBalanceChanged` event) by `pool_id` — the
-    /// `PyLiquidityPool.apply_balancer_stable_balance_update` backing.
-    ///
-    /// Journals the prior balances (genesis-anchor V2-style discipline), then
-    /// lands the new balances + `update_block`. Returns the affected `pool_id`,
-    /// or `None` if not registered / not a Balancer stable pool (silent
-    /// no-op — don't corrupt a V2/V3/V4/Curve/BalancerWeighted pool).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `balances.len()` doesn't match the registered pool's token
-    /// count — a wiring error (the builder always passes a balance tuple of
-    /// the right arity).
-    #[must_use]
-    pub fn apply_balancer_stable_balance_update_by_pool_id(
-        &mut self,
-        pool_id: u64,
-        balances: Vec<U256>,
-        block_number: u64,
-    ) -> Option<u64> {
-        let Some(PoolEntry::BalancerStable(_, state)) = self.pools.get_mut(&pool_id) else {
-            return None;
-        };
-        assert!(
-            balances.len() == state.balances.len(),
-            "Balancer stable balance length mismatch: pool has {} tokens, update has {}",
-            state.balances.len(),
-            balances.len(),
-        );
-        state.journal.push_delta(BalancerStableBlockDelta {
-            block: block_number,
-            balances_before: state.balances.clone(),
-            balances_after: balances.clone(),
-        });
-        state.balances = balances;
-        state.update_block = block_number;
-        Some(pool_id)
-    }
-
     /// Read a registered Balancer stable pool's state by `pool_id`.
     ///
     /// The Python companion (slice 12d) reads `balances` / `update_block` /
@@ -816,15 +514,10 @@ impl BotState {
     /// pools (silent no-op).
     #[must_use]
     pub fn get_balancer_stable_pool(&self, pool_id: u64) -> Option<&BalancerStablePoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::BalancerStable(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::balancer_stable)
+            .map(|(_, state)| state)
     }
 
     /// Look up a Balancer stable pool's immutable registration identity
@@ -836,15 +529,10 @@ impl BotState {
         &self,
         pool_id: u64,
     ) -> Option<&BalancerStablePoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::BalancerStable(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::balancer_stable)
+            .map(|(identity, _)| identity)
     }
 
     /// Apply a V2 `Sync` event to a registered pool's state.
@@ -862,8 +550,8 @@ impl BotState {
     pub fn apply_v2_sync(
         &mut self,
         pool_address: Address,
-        reserve0: U256,
-        reserve1: U256,
+        reserve0: U112,
+        reserve1: U112,
         block_number: u64,
     ) -> Option<u64> {
         let &pool_id = self.pool_addresses.get(&pool_address)?;
@@ -903,8 +591,8 @@ impl BotState {
     pub fn update_v2_pool(
         &mut self,
         pool_address: Address,
-        reserve0: U256,
-        reserve1: U256,
+        reserve0: U112,
+        reserve1: U112,
         block_number: u64,
     ) {
         let _ = self.apply_v2_sync(pool_address, reserve0, reserve1, block_number);
@@ -914,26 +602,27 @@ impl BotState {
     /// backing. Returns the affected `pool_id`, or `None` if not registered /
     /// not a V2 pool (no-op). Journals the prior reserves then lands the new.
     #[must_use]
-    pub fn apply_v2_sync_by_pool_id(
+    /// Apply a reserve-pair `Sync` event keyed by the handle's `pool_id`,
+    /// dispatching through `ReservePairPoolState::apply_sync` (ADR-017 D3 —
+    /// replaces the two per-family `apply_v2_sync_by_pool_id` /
+    /// `apply_aerodrome_sync_by_pool_id` dispatchers, whose bodies were
+    /// byte-identical modulo the variant name). Covers both V2 and Aerodrome
+    /// pools (Solidly mirrors v2-core's `Sync(uint112, uint112)`).
+    ///
+    /// Returns `Some(pool_id)` if the pool is a reserve-pair family
+    /// (V2 / `AerodromeV2`); `None` otherwise (silent no-op — a CL / Curve /
+    /// Balancer `pool_id` yields `None`).
+    pub fn apply_sync_by_pool_id(
         &mut self,
         pool_id: u64,
-        reserve0: U256,
-        reserve1: U256,
+        reserve0: U112,
+        reserve1: U112,
         block_number: u64,
     ) -> Option<u64> {
-        let Some(PoolEntry::V2(_, state)) = self.pools.get_mut(&pool_id) else {
-            return None;
-        };
-        state.journal.push_delta(V2BlockDelta {
-            block: block_number,
-            reserve0_before: state.reserve0,
-            reserve1_before: state.reserve1,
-            reserve0_after: reserve0,
-            reserve1_after: reserve1,
-        });
-        state.reserve0 = reserve0;
-        state.reserve1 = reserve1;
-        state.update_block = block_number;
+        let entry = self.pools.get_mut(&pool_id)?;
+        entry
+            .as_reserve_pair_mut()?
+            .apply_sync(reserve0, reserve1, block_number);
         Some(pool_id)
     }
 
@@ -944,15 +633,10 @@ impl BotState {
     /// orientation-specific `IntHopState` at resolve time from `zero_for_one`.
     #[must_use]
     pub fn get_v2_pool_state(&self, pool_id: u64) -> Option<&V2PoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V2(_, state) => Some(state),
-            PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v2)
+            .map(|(_, state)| state)
     }
 
     /// Return the pool-family tag for `pool_id` as a kebab-case string
@@ -982,15 +666,10 @@ impl BotState {
     /// pool is not registered or isn't a V2 pool.
     #[must_use]
     pub fn get_v2_identity(&self, pool_id: u64) -> Option<&V2PoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V2(identity, _) => Some(identity),
-            PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v2)
+            .map(|(identity, _)| identity)
     }
 
     /// Snapshot a V2 pool's current mutable state (reserves + block) under one
@@ -1004,7 +683,11 @@ impl BotState {
     #[must_use]
     pub fn v2_snapshot(&self, pool_id: u64) -> Option<(U256, U256, u64)> {
         let state = self.get_v2_pool_state(pool_id)?;
-        Some((state.reserve0, state.reserve1, state.update_block))
+        Some((
+            state.reserve0.to::<U256>(),
+            state.reserve1.to::<U256>(),
+            state.update_block,
+        ))
     }
 
     /// Update a V3 pool's state from a Swap event.
@@ -1095,42 +778,7 @@ impl BotState {
         let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&pool_id) else {
             return None;
         };
-
-        // Capture priors for any ticks being mutated by this event, so reorg
-        // rollback can reverse-apply them. A tick that had no prior entry gets
-        // `liquidity_gross_before: None` (on rollback, delete it).
-        let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(tick_priors.len());
-        for &(tick_index, ref new_info) in tick_priors {
-            let prior = state.tick_data.get(&tick_index).cloned();
-            journaled_priors.push((
-                tick_index,
-                TickBefore {
-                    liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                    liquidity_net_before: prior
-                        .as_ref()
-                        .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                },
-            ));
-            state.tick_data.insert(tick_index, new_info.clone());
-        }
-
-        // Journal scalar priors (swap scalars change on every Swap).
-        state.journal.push_delta(V3BlockDelta {
-            block: block_number,
-            scalar_priors: Some(ScalarPriors {
-                sqrt_price_x96_before: state.sqrt_price_x96,
-                liquidity_before: state.liquidity,
-                tick_before: state.tick,
-            }),
-            tick_priors: journaled_priors,
-        });
-
-        state.sqrt_price_x96 = sqrt_price_x96;
-        state.liquidity = liquidity;
-        state.tick = tick;
-        state.update_block = block_number;
-        state.invalidate_tick_range_cache();
-
+        state.apply_swap(sqrt_price_x96, liquidity, tick, block_number, tick_priors);
         Some(pool_id)
     }
 
@@ -1189,44 +837,7 @@ impl BotState {
         let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&pool_id) else {
             return None;
         };
-
-        // Capture tick priors before mutation so reorg rollback can reverse-
-        // apply. A tick that had no prior entry (newly initialized by this
-        // Mint) gets `liquidity_gross_before: None` (on rollback, delete it).
-        let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-        for &tick_idx in &[tick_lower, tick_upper] {
-            let prior = state.tick_data.get(&tick_idx).cloned();
-            journaled_priors.push((
-                tick_idx,
-                TickBefore {
-                    liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                    liquidity_net_before: prior
-                        .as_ref()
-                        .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                },
-            ));
-        }
-
-        crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-            &mut state.tick_data,
-            tick_lower,
-            tick_upper,
-            liquidity_delta,
-            block_number,
-        );
-
-        // Journal: Mint/Burn mutate tick_data only, NOT the active `liquidity`
-        // scalar — so the journal carries no scalar priors for this tick-only
-        // event (scalar_priors: None). Only the two tick priors are reverse-
-        // applied on rollback. See ADR-004.
-        state.journal.push_delta(V3BlockDelta {
-            block: block_number,
-            scalar_priors: None,
-            tick_priors: journaled_priors,
-        });
-
-        state.update_block = block_number;
-        state.invalidate_tick_range_cache();
+        state.apply_liquidity_update(tick_lower, tick_upper, liquidity_delta, block_number);
         Some(pool_id)
     }
 
@@ -1254,30 +865,16 @@ impl BotState {
             return false;
         };
         match entry {
-            // Two arms (not an or-pattern) because `V3PoolState` and
-            // `V4PoolState` are distinct structs — an or-pattern binding
-            // `state` would require one type. The read path uses a `&dyn
-            // V3FamilyPool` trait object, but the trait is read-only (no
-            // mutable tick_data accessor); the 4-line body is duplicated
-            // rather than threading a mutable trait. Slice 9a reuses this for V4.
+            // CL-family collapse (ADR-014 D2b): the 4-line replace body lives
+            // once in `ConcentratedLiquidityPoolMut::replace_tick_data`; each
+            // arm only reads its identity's `tick_spacing` (V3 carries it
+            // directly, V4 nests it in `pool_key`) and delegates. The
+            // `_ => false` arm is the single non-CL / unregistered no-op.
             PoolEntry::V3(identity, state) => {
-                state.tick_data = tick_data;
-                if update_block > state.update_block {
-                    state.update_block = update_block;
-                }
-                // tick_spacing read off the entry's identity (no separate lookup).
-                state.seed_known_bitmap_words(identity.tick_spacing);
-                state.invalidate_tick_range_cache();
-                true
+                state.replace_tick_data(tick_data, update_block, identity.tick_spacing)
             }
             PoolEntry::V4(identity, state) => {
-                state.tick_data = tick_data;
-                if update_block > state.update_block {
-                    state.update_block = update_block;
-                }
-                state.seed_known_bitmap_words(identity.pool_key.tick_spacing);
-                state.invalidate_tick_range_cache();
-                true
+                state.replace_tick_data(tick_data, update_block, identity.pool_key.tick_spacing)
             }
             PoolEntry::V2(..)
             | PoolEntry::Curve(..)
@@ -1301,7 +898,7 @@ impl BotState {
     ) {
         if let Some(&key) = self.pool_addresses.get(&pool_address) {
             if let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&key) {
-                crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
+                ::degenbot_pools::tick_bitmap::apply_liquidity_to_tick_range(
                     &mut state.tick_data,
                     tick_lower,
                     tick_upper,
@@ -1359,38 +956,17 @@ impl BotState {
         }
         for update in buffered {
             if let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&key) {
-                // Capture boundary-tick priors before mutation so reorg
-                // rollback can reverse-apply. A tick absent before this update
-                // (newly initialized) gets `liquidity_gross_before: None`
-                // (deleted on rollback). Mint/Burn don't touch slot0 scalars
-                // → `scalar_priors: None`.
-                let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-                for &tick_idx in &[update.tick_lower, update.tick_upper] {
-                    let prior = state.tick_data.get(&tick_idx).cloned();
-                    journaled_priors.push((
-                        tick_idx,
-                        TickBefore {
-                            liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                            liquidity_net_before: prior
-                                .as_ref()
-                                .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                        },
-                    ));
-                }
-                crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-                    &mut state.tick_data,
+                // ADR-017 slice 3: delegate to the CL trait method (formerly
+                // re-inlined here byte-identically to the inherent
+                // `apply_liquidity_update`). Mint/Burn carry no scalar priors —
+                // the trait method journals the two boundary-tick priors +
+                // pushes a `scalar_priors: None` `V3BlockDelta`.
+                state.apply_liquidity_update(
                     update.tick_lower,
                     update.tick_upper,
                     update.liquidity_delta,
                     update.block_number,
                 );
-                state.journal.push_delta(V3BlockDelta {
-                    block: update.block_number,
-                    scalar_priors: None,
-                    tick_priors: journaled_priors,
-                });
-                state.update_block = update.block_number;
-                state.invalidate_tick_range_cache();
             }
         }
     }
@@ -1420,33 +996,14 @@ impl BotState {
         }
         for update in buffered {
             if let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&key) {
-                let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-                for &tick_idx in &[update.tick_lower, update.tick_upper] {
-                    let prior = state.tick_data.get(&tick_idx).cloned();
-                    journaled_priors.push((
-                        tick_idx,
-                        TickBefore {
-                            liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                            liquidity_net_before: prior
-                                .as_ref()
-                                .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                        },
-                    ));
-                }
-                crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-                    &mut state.tick_data,
+                // ADR-017 slice 3: delegate to the CL trait method (formerly
+                // re-inlined here byte-identically to `apply_liquidity_update`).
+                state.apply_liquidity_update(
                     update.tick_lower,
                     update.tick_upper,
                     update.liquidity_delta,
                     update.block_number,
                 );
-                state.journal.push_delta(V3BlockDelta {
-                    block: update.block_number,
-                    scalar_priors: None,
-                    tick_priors: journaled_priors,
-                });
-                state.update_block = update.block_number;
-                state.invalidate_tick_range_cache();
             }
         }
     }
@@ -1481,15 +1038,10 @@ impl BotState {
     /// `build_int_v3_sequence(zfo, 10)` to build the per-hop state.
     #[must_use]
     pub fn get_v3_pool(&self, pool_id: u64) -> Option<&V3PoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V3(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v3)
+            .map(|(_, state)| state)
     }
 
     /// Look up a V3 pool's immutable registration identity (address, tokens,
@@ -1497,15 +1049,10 @@ impl BotState {
     /// registered or isn't a V3 pool.
     #[must_use]
     pub fn get_v3_identity(&self, pool_id: u64) -> Option<&V3PoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V3(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v3)
+            .map(|(identity, _)| identity)
     }
 
     /// Snapshot all V3 pool state for verification (clones every V3 entry).
@@ -1526,6 +1073,32 @@ impl BotState {
                 | PoolEntry::AerodromeV2(..) => None,
             })
             .collect()
+    }
+
+    /// The snapshot seed block `S` — `min(fetch_newest_update_block(V3), V4)`
+    /// across the loaded snapshots. `None` when no snapshot was loaded (the
+    /// cold-start path pumps directly from `first_observed_block`). Set by
+    /// `Bot::load_snapshot_from_db` / `load_snapshot_from_py`; consumed by the
+    /// auto-backfill (`resume_from_subscribe`) that closes `S+1..W-1`.
+    #[must_use]
+    pub const fn snapshot_seed_block(&self) -> Option<u64> {
+        self.snapshot_seed_block
+    }
+
+    /// Snapshot seed block `S` setter — the single source of truth for `S`.
+    ///
+    /// Production paths set `S` here in three ways:
+    /// - DB path: `Bot::load_snapshot_from_db` sets `S = min(newest_update_block_v3, v4)`.
+    /// - Non-DB path: the `PyArbitrageEngine::set_snapshot_seed_block` setter
+    ///   (called by `engine_registry.start()` after `load_*_from_py`) records
+    ///   `S = min(newest_block)` from the file/memory snapshot (2SM4Y7).
+    /// - Tests: inject `S` directly to drive the `S≥W` / `S=0` no-op branches
+    ///   of `BlockPump::backfill_from_snapshot` without a DB (FD7NFG).
+    ///
+    /// `None` clears the seed (cold-start resume — `BlockPump::resume_from_subscribe`
+    /// skips the auto-backfill).
+    pub fn set_snapshot_seed_block(&mut self, s: Option<u64>) {
+        self.snapshot_seed_block = s;
     }
 
     /// Read the pinned snapshot seed for a V3 pool (CBCH6H). Returns the
@@ -1616,7 +1189,7 @@ impl BotState {
     /// Returns `None` for V2 or unregistered (the V3-only contract) — V2 has
     /// a different state shape and is read via the dedicated V2 getters.
     #[must_use]
-    pub fn get_v3_or_v4_pool(&self, pool_id: u64) -> Option<&dyn V3FamilyPool> {
+    pub fn get_v3_or_v4_pool(&self, pool_id: u64) -> Option<&dyn ConcentratedLiquidityPool> {
         match self.pools.get(&pool_id)? {
             PoolEntry::V3(_, state) => Some(state),
             PoolEntry::V4(_, state) => Some(state),
@@ -1692,94 +1265,7 @@ impl BotState {
         let Some(entry) = self.pools.get(&pool_id) else {
             return Ok(U256::ZERO);
         };
-
-        match entry {
-            PoolEntry::V2(identity, state) => {
-                if amount_in.is_zero() {
-                    return Ok(U256::ZERO);
-                }
-
-                let (reserve_in, reserve_out, gamma_numer, fee_denom) = if zero_for_one {
-                    (
-                        state.reserve0,
-                        state.reserve1,
-                        identity.fee_token0.0,
-                        identity.fee_token0.1,
-                    )
-                } else {
-                    (
-                        state.reserve1,
-                        state.reserve0,
-                        identity.fee_token1.0,
-                        identity.fee_token1.1,
-                    )
-                };
-
-                let hop = IntHopState::new(reserve_in, reserve_out, gamma_numer, fee_denom);
-                Ok(hop.swap(amount_in))
-            }
-            // V3 concentrated-liquidity math. Exact-input swap: amount_specified
-            // > 0 (V3 convention). Output is token1 for zfo, token0 for ofz
-            // (matches the V3 Swap callback: zfo pays token0, receives token1).
-            PoolEntry::V3(identity, state) => {
-                if amount_in.is_zero() {
-                    return Ok(U256::ZERO);
-                }
-                let Some(spec) = I256::try_from(amount_in).ok() else {
-                    return Err(SimulateSwapError::NotComputable);
-                };
-                let outcome = v3_simulate_swap(
-                    state,
-                    identity.fee,
-                    identity.tick_spacing,
-                    zero_for_one,
-                    spec,
-                    V3PoolState::default_sqrt_price_limit(zero_for_one),
-                )?;
-                Ok(if zero_for_one {
-                    outcome.amount1
-                } else {
-                    outcome.amount0
-                })
-            }
-            // V4 concentrated-liquidity math. Same CL math as V3; sign
-            // convention: V4 exact-input is `amountSpecified < 0` (negative),
-            // opposite to V3. The caller (calculate_tokens_out) flips so the
-            // simulator sees the V4-native sign.
-            PoolEntry::V4(identity, state) => {
-                if amount_in.is_zero() {
-                    return Ok(U256::ZERO);
-                }
-                let Some(spec) = I256::try_from(amount_in).ok() else {
-                    return Err(SimulateSwapError::NotComputable);
-                };
-                let outcome = v4_simulate_swap(
-                    state,
-                    identity.pool_key.fee,
-                    identity.pool_key.tick_spacing,
-                    zero_for_one,
-                    -spec,
-                    V3PoolState::default_sqrt_price_limit(zero_for_one),
-                )?;
-                Ok(if zero_for_one {
-                    outcome.amount1
-                } else {
-                    outcome.amount0
-                })
-            }
-            // Curve (11a) + Balancer weighted (12a) + Balancer stable (12c): the
-            // stableswap / weighted-product / stable-invariant math is NOT
-            // ported in their state-port sub-slices. The Python companions
-            // (11b / 12b / 12d) keep doing their own math via `DyCalculator`
-            // / `WeightedMath` / `StableMath` through the `swap_fn` returned
-            // by `to_hop_state`; this Rust core path returns 0 (the
-            // "not-yet-Rust-side" sentinel — same as an unregistered pool).
-            // Curve ported in 11c; Balancer weighted stable in 12e.
-            PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => Ok(U256::ZERO),
-        }
+        simulate_swap(entry, zero_for_one, amount_in)
     }
 
     /// Merge a fetched tick-bitmap word into a V3/V4 pool's state.
@@ -1797,33 +1283,18 @@ impl BotState {
     pub fn merge_tick_word(
         &mut self,
         pool_id: u64,
-        fetched: crate::bot_core::tick_fetch::FetchedTickWord,
+        fetched: &::degenbot_pools::tick_fetch::FetchedTickWord,
     ) -> bool {
+        // ADR-017 slice 1: dispatch through `ConcentratedLiquidityPoolMut`
+        // (the body lived inlined in V3/V4 arms here; the trait dedups the
+        // two). The `bool` wraps the trait's always-`true` return: `false`
+        // for non-CL / unregistered pools (the non-CL no-op).
         let Some(entry) = self.pools.get_mut(&pool_id) else {
             return false;
         };
-        match entry {
-            PoolEntry::V3(_, state) => {
-                for (tick, info) in fetched.ticks {
-                    state.tick_data.insert(tick, info);
-                }
-                state.known_bitmap_words.insert(fetched.word);
-                state.invalidate_tick_range_cache();
-                true
-            }
-            PoolEntry::V4(_, state) => {
-                for (tick, info) in fetched.ticks {
-                    state.tick_data.insert(tick, info);
-                }
-                state.known_bitmap_words.insert(fetched.word);
-                state.invalidate_tick_range_cache();
-                true
-            }
-            PoolEntry::V2(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => false,
+        match entry.as_cl_mut() {
+            Some(cl) => cl.merge_tick_word(fetched),
+            None => false,
         }
     }
 
@@ -1852,7 +1323,7 @@ impl BotState {
         // Clone the stored `Arc<dyn TickWordFetcher>` off the V3/V4 state
         // before the loop (avoids a self-referential borrow: the loop both
         // calls the fetcher and mutates `self.pools` via `merge_tick_word`).
-        let fetcher: Option<Arc<dyn crate::bot_core::tick_fetch::TickWordFetcher>> =
+        let fetcher: Option<Arc<dyn ::degenbot_pools::tick_fetch::TickWordFetcher>> =
             match self.pools.get(&pool_id) {
                 Some(PoolEntry::V3(_, state)) => state.fetcher.clone(),
                 Some(PoolEntry::V4(_, state)) => state.fetcher.clone(),
@@ -1875,7 +1346,7 @@ impl BotState {
                     };
                     match fetcher.fetch_missing_tick_word(pool_id, word, block) {
                         Ok(data) => {
-                            self.merge_tick_word(pool_id, data);
+                            self.merge_tick_word(pool_id, &data);
                         }
                         Err(_) => return U256::ZERO,
                     }
@@ -1957,7 +1428,7 @@ impl BotState {
         sqrt_price_limit: U256,
         block: u64,
     ) -> Option<V3SwapOutcome> {
-        let fetcher: Option<Arc<dyn crate::bot_core::tick_fetch::TickWordFetcher>> =
+        let fetcher: Option<Arc<dyn ::degenbot_pools::tick_fetch::TickWordFetcher>> =
             match self.pools.get(&pool_id) {
                 Some(PoolEntry::V3(_, state)) => state.fetcher.clone(),
                 Some(PoolEntry::V4(_, state)) => state.fetcher.clone(),
@@ -1980,7 +1451,7 @@ impl BotState {
                     let fetcher = fetcher.as_ref()?;
                     match fetcher.fetch_missing_tick_word(pool_id, word, block) {
                         Ok(data) => {
-                            self.merge_tick_word(pool_id, data);
+                            self.merge_tick_word(pool_id, &data);
                         }
                         Err(_) => return None,
                     }
@@ -2059,7 +1530,7 @@ impl BotState {
         sqrt_price_limit: U256,
         block: u64,
     ) -> Option<V3SwapOutcome> {
-        let fetcher: Option<Arc<dyn crate::bot_core::tick_fetch::TickWordFetcher>> =
+        let fetcher: Option<Arc<dyn ::degenbot_pools::tick_fetch::TickWordFetcher>> =
             match self.pools.get(&pool_id) {
                 Some(PoolEntry::V3(_, state)) => state.fetcher.clone(),
                 Some(PoolEntry::V4(_, state)) => state.fetcher.clone(),
@@ -2082,7 +1553,7 @@ impl BotState {
                     let fetcher = fetcher.as_ref()?;
                     match fetcher.fetch_missing_tick_word(pool_id, word, block) {
                         Ok(data) => {
-                            self.merge_tick_word(pool_id, data);
+                            self.merge_tick_word(pool_id, &data);
                         }
                         Err(_) => return None,
                     }
@@ -2150,7 +1621,7 @@ impl BotState {
         let spec = I256::try_from(amount).ok()?;
         // Clone the stored fetcher off the registered state (the override
         // state is a transient copy — the fetcher itself is shared via `Arc`).
-        let fetcher: Option<Arc<dyn crate::bot_core::tick_fetch::TickWordFetcher>> = match entry {
+        let fetcher: Option<Arc<dyn ::degenbot_pools::tick_fetch::TickWordFetcher>> = match entry {
             PoolEntry::V3(_, state) => state.fetcher.clone(),
             PoolEntry::V4(_, state) => state.fetcher.clone(),
             _ => None,
@@ -2196,7 +1667,9 @@ impl BotState {
                             }
                             let fetcher = fetcher.as_ref()?;
                             match fetcher.fetch_missing_tick_word(pool_id, word, block) {
-                                Ok(data) => override_state.merge_tick_word(&data),
+                                Ok(data) => {
+                                    override_state.merge_tick_word(&data);
+                                }
                                 Err(_) => return None,
                             }
                         }
@@ -2241,7 +1714,9 @@ impl BotState {
                             }
                             let fetcher = fetcher.as_ref()?;
                             match fetcher.fetch_missing_tick_word(pool_id, word, block) {
-                                Ok(data) => override_state.merge_tick_word(&data),
+                                Ok(data) => {
+                                    override_state.merge_tick_word(&data);
+                                }
                                 Err(_) => return None,
                             }
                         }
@@ -2276,15 +1751,15 @@ impl BotState {
 
                 let (reserve_in, reserve_out, gamma_numer, fee_denom) = if zero_for_one {
                     (
-                        state.reserve0,
-                        state.reserve1,
+                        state.reserve0.to::<U256>(),
+                        state.reserve1.to::<U256>(),
                         identity.fee_token0.0,
                         identity.fee_token0.1,
                     )
                 } else {
                     (
-                        state.reserve1,
-                        state.reserve0,
+                        state.reserve1.to::<U256>(),
+                        state.reserve0.to::<U256>(),
                         identity.fee_token1.0,
                         identity.fee_token1.1,
                     )
@@ -2407,7 +1882,7 @@ impl BotState {
     pub fn unregister_pool(
         &mut self,
         address: Address,
-        pool_id: Option<degenbot_decoders::v4_swap_decoder::PoolId>,
+        pool_id: Option<degenbot_decoders::v4_swap_decoder::V4PoolId>,
     ) -> bool {
         match pool_id {
             None => {
@@ -2479,64 +1954,6 @@ impl BotState {
     /// Get the number of deltas in the reorg journal for a V2 pool.
     ///
     /// Returns 0 if the pool ID is not registered.
-    #[must_use]
-    pub fn v2_journal_len(&self, pool_id: u64) -> usize {
-        match self.pools.get(&pool_id) {
-            Some(PoolEntry::V2(_, state)) => state.journal.len(),
-            _ => 0,
-        }
-    }
-
-    /// Discard V2 reorg journal deltas earlier than the given block.
-    ///
-    /// No-op if the earliest delta is at/after the target (nothing to discard
-    /// — supports a continuously-running bot calling `discard(latest - N)` on
-    /// fresh pools). The genesis delta is discarded like any other when the
-    /// target is past it, as long as at least one delta remains.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta (would remove every known state). The `PyO3` layer maps
-    /// this to `ValueError`.
-    pub fn v2_discard_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::V2(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
-    }
-
-    /// Restore V2 pool state prior to a target block.
-    ///
-    /// Pops reorg journal deltas at/after the target block and restores the
-    /// landed-at state (the `*_after` of the largest delta below the target)
-    /// into the current mutable fields.
-    ///
-    /// Returns `Some(Ok((reserve0, reserve1, block)))` on success, `Some(Err)`
-    /// if the pool exists but the target is at/before registration (no state
-    /// before it — decision 3), or `None` if the pool ID is not registered.
-    pub fn v2_restore_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<Result<(U256, U256, u64), JournalError>> {
-        let PoolEntry::V2(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let (r0, r1, blk) = match state.journal.restore_before_block(block) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        state.reserve0 = r0;
-        state.reserve1 = r1;
-        state.update_block = blk;
-        Some(Ok((r0, r1, blk)))
-    }
-
     /// Restore **every** registered V2 pool's state to just before `target`.
     ///
     /// Bulk restore helper. ADR-006 slice 7 replaced the engine-level
@@ -2552,97 +1969,29 @@ impl BotState {
         let pool_ids: Vec<u64> = self.pools.keys().copied().collect();
         let mut restored = 0usize;
         for pool_id in pool_ids {
-            // Peek the per-pool journal depth without a mutable borrow. Only
-            // pools with a delta at/after the reorg target need rollback;
-            // untouched pools keep their current state (idempotent restore).
-            let needs_restore = match self.pools.get(&pool_id) {
-                Some(PoolEntry::V2(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::V3(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::V4(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::Curve(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::BalancerWeighted(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::BalancerStable(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                Some(PoolEntry::AerodromeV2(_, state)) => {
-                    state.journal.newest_block().is_some_and(|b| b >= target)
-                }
-                None => false,
-            };
+            // Peek the per-pool newest delta block without a mutable borrow
+            // (ADR-016). Only pools with a delta at/after the reorg target
+            // need rollback; untouched pools keep their current state
+            // (idempotent restore). The peek also guards the CL family's
+            // panic-on-empty journal: an empty journal reports `None` → skip.
+            let needs_restore = self
+                .pools
+                .get(&pool_id)
+                .and_then(PoolEntry::as_reorg_state)
+                .and_then(ReorgPoolState::newest_block)
+                .is_some_and(|b| b >= target);
             if !needs_restore {
                 continue;
             }
 
-            let did_restore = match self.pools.get_mut(&pool_id) {
-                Some(PoolEntry::V2(_, state)) => {
-                    // Landed-at restore: on Ok, apply the landed-at state; on
-                    // Err (target at/before registration) skip the pool
-                    // (idempotent — a reorg doesn't touch pools that didn't
-                    // exist before the fork target).
-                    match state.journal.restore_before_block(target) {
-                        Ok((r0, r1, blk)) => {
-                            state.reserve0 = r0;
-                            state.reserve1 = r1;
-                            state.update_block = blk;
-                            true
-                        }
-                        Err(_) => false,
-                    }
-                }
-                Some(PoolEntry::V3(..)) => {
-                    // Reuse the existing V3 restore path: scalars + reverse-
-                    // applied tick priors + cache invalidation.
-                    self.v3_restore_before_block(pool_id, target).is_some()
-                }
-                Some(PoolEntry::V4(..)) => {
-                    // V4 restore: same V3BlockDelta shape (scalar + per-tick
-                    // priors); delegated to `v4_restore_before_block`.
-                    self.v4_restore_before_block(pool_id, target).is_some()
-                }
-                Some(PoolEntry::Curve(..)) => {
-                    // Curve restore: same full-state delta shape as V2;
-                    // delegated to `curve_restore_before_block`.
-                    self.curve_restore_before_block(pool_id, target).is_some()
-                }
-                Some(PoolEntry::BalancerWeighted(..)) => {
-                    // Balancer weighted restore: same full-state delta shape
-                    // as V2/Curve; delegated to
-                    // `balancer_weighted_restore_before_block`.
-                    self.balancer_weighted_restore_before_block(pool_id, target)
-                        .is_some()
-                }
-                Some(PoolEntry::BalancerStable(..)) => {
-                    // Balancer stable restore: same full-state delta shape as
-                    // V2/Curve/BalancerWeighted; delegated to
-                    // `balancer_stable_restore_before_block`.
-                    self.balancer_stable_restore_before_block(pool_id, target)
-                        .is_some()
-                }
-                Some(PoolEntry::AerodromeV2(_, state)) => {
-                    // Aerodrome restore: V2-shaped delta (two reserves);
-                    // mirror the V2 inline path.
-                    match state.journal.restore_before_block(target) {
-                        Ok((r0, r1, blk)) => {
-                            state.reserve0 = r0;
-                            state.reserve1 = r1;
-                            state.update_block = blk;
-                            true
-                        }
-                        Err(_) => false,
-                    }
-                }
-                None => false,
-            };
+            // Dispatch through the unified trait path. On `Ok`, the trait
+            // impl wrote the landed-at state into the struct's own fields; on
+            // `Err` (target at/before registration), skip the pool
+            // (idempotent — a reorg doesn't touch pools that didn't exist
+            // before the fork target).
+            let did_restore = self
+                .restore_pool_before_block(pool_id, target)
+                .is_some_and(|r| r.is_ok());
             if did_restore {
                 restored += 1;
             }
@@ -2650,186 +1999,69 @@ impl BotState {
         restored
     }
 
-    // --- Curve journal methods (ADR-005 slice 11a state port) ---
+    // --- Unified reorg dispatch (ADR-016 ReorgPoolState) ---
+    // One trait-dispatching method per op over all 7 `PoolEntry` variants,
+    // via `PoolEntry::as_reorg_state(_mut)`. The trait impls on each state
+    // struct absorb the field-write; restore returns `()` so `V3RestoreResult`
+    // and the per-family restore-return types stay internal to the impls and
+    // never escape. These three methods replace the per-family `v2_*` /
+    // `aerodrome_*` / `v3_*` / `v4_*` / `curve_*` / `balancer_weighted_*` /
+    // `balancer_stable_*` reorg dispatchers.
 
-    /// Get the number of deltas in the reorg journal for a Curve pool.
+    /// Restore `pool_id`'s state to the landed-at state strictly before
+    /// `block`, dispatching through `ReorgPoolState::restore_before_block`.
+    /// Returns `None` if the pool is not registered.
     ///
-    /// Returns 0 if the pool ID is not registered or is not a Curve pool.
-    #[must_use]
-    pub fn curve_journal_len(&self, pool_id: u64) -> usize {
-        match self.pools.get(&pool_id) {
-            Some(PoolEntry::Curve(_, state)) => state.journal.len(),
-            _ => 0,
-        }
-    }
-
-    /// Discard Curve reorg journal deltas earlier than the given block.
-    ///
-    /// No-op if the earliest delta is at/after the target, or the pool is not
-    /// registered / not a Curve pool.
+    /// A caller needing the restored values (the `PyO3` wrapper, which marshals
+    /// a tuple to Python) reads the struct's current fields after restore —
+    /// the post-restore fields ARE the landed-at (before) values the
+    /// per-family return types previously carried.
     ///
     /// # Errors
     ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta.
-    pub fn curve_discard_before_block(
+    /// `NoStatePriorToBlock` if the target is at/before the registration
+    /// (genesis) delta. The CL family's journal panics on empty instead —
+    /// callers must pre-check [`has_state_prior_to`](Self::has_state_prior_to).
+    pub fn restore_pool_before_block(
         &mut self,
         pool_id: u64,
         block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::Curve(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
+    ) -> Option<Result<(), JournalError>> {
+        Some(
+            self.pools
+                .get_mut(&pool_id)?
+                .as_reorg_state_mut()?
+                .restore_before_block(block),
+        )
     }
 
-    /// Restore Curve pool state prior to a target block.
-    ///
-    /// Pops reorg journal deltas at/after the target block and restores the
-    /// landed-at balances (the `balances_after` of the largest delta below the
-    /// target) into the current mutable fields. Mirrors `v2_restore_before_block`
-    /// (Curve is a full-state delta, same shape as V2).
-    ///
-    /// Returns `Some(Ok((balances, block)))` on success, `Some(Err)` if the
-    /// pool exists but the target is at/before registration (no state before
-    /// it), or `None` if the pool ID is not registered / not a Curve pool.
-    pub fn curve_restore_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<Result<(Vec<U256>, u64), JournalError>> {
-        let PoolEntry::Curve(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let (balances, blk) = match state.journal.restore_curve_before_block(block) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        state.balances.clone_from(&balances);
-        state.update_block = blk;
-        Some(Ok((balances, blk)))
-    }
-
-    // --- ADR-005 slice 12a: Balancer weighted journal methods ---
-
-    /// Get the number of deltas in the reorg journal for a Balancer weighted
-    /// pool. Returns 0 if the pool ID is not registered or is not a Balancer
-    /// weighted pool.
-    #[must_use]
-    pub fn balancer_weighted_journal_len(&self, pool_id: u64) -> usize {
-        match self.pools.get(&pool_id) {
-            Some(PoolEntry::BalancerWeighted(_, state)) => state.journal.len(),
-            _ => 0,
-        }
-    }
-
-    /// Discard Balancer weighted reorg journal deltas earlier than the given
-    /// block. No-op if the pool ID is not registered / not a Balancer weighted
-    /// pool.
+    /// Discard reorg journal deltas earlier than `block`, dispatching through
+    /// `ReorgPoolState::discard_before_block`. Returns `None` if the pool is
+    /// not registered. Does NOT mutate the live state fields (only trims old
+    /// history).
     ///
     /// # Errors
     ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta.
-    pub fn balancer_weighted_discard_before_block(
+    /// `NoStateAtOrAfterBlock` if the target is past the newest delta.
+    pub fn discard_pool_before_block(
         &mut self,
         pool_id: u64,
         block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::BalancerWeighted(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
+    ) -> Option<Result<(), JournalError>> {
+        Some(
+            self.pools
+                .get_mut(&pool_id)?
+                .as_reorg_state_mut()?
+                .discard_before_block(block),
+        )
     }
 
-    /// Restore Balancer weighted pool state prior to a target block.
-    ///
-    /// Pops reorg journal deltas at/after the target block and restores the
-    /// landed-at balances (the `balances_after` of the largest delta below
-    /// the target) into the current mutable fields. Mirrors
-    /// `curve_restore_before_block` (Balancer weighted is a full-state delta,
-    /// same shape as V2/Curve).
-    ///
-    /// Returns `Some(Ok((balances, block)))` on success, `Some(Err)` if the
-    /// pool exists but the target is at/before registration (no state before
-    /// it), or `None` if the pool ID is not registered / not a Balancer
-    /// weighted pool.
-    pub fn balancer_weighted_restore_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<Result<(Vec<U256>, u64), JournalError>> {
-        let PoolEntry::BalancerWeighted(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let (balances, blk) = match state.journal.restore_balancer_weighted_before_block(block) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        state.balances.clone_from(&balances);
-        state.update_block = blk;
-        Some(Ok((balances, blk)))
-    }
-
-    // --- ADR-005 slice 12c: Balancer stable journal methods ---
-
-    /// Get the number of deltas in the reorg journal for a Balancer stable
-    /// pool. Returns 0 if the pool ID is not registered or is not a Balancer
-    /// stable pool.
+    /// Number of deltas in the reorg journal, dispatching through
+    /// `ReorgPoolState::journal_len`. Returns `None` if the pool is not
+    /// registered.
     #[must_use]
-    pub fn balancer_stable_journal_len(&self, pool_id: u64) -> usize {
-        match self.pools.get(&pool_id) {
-            Some(PoolEntry::BalancerStable(_, state)) => state.journal.len(),
-            _ => 0,
-        }
-    }
-
-    /// Discard Balancer stable reorg journal deltas earlier than the given
-    /// block. No-op if the pool ID is not registered / not a Balancer stable
-    /// pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta.
-    pub fn balancer_stable_discard_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::BalancerStable(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
-    }
-
-    /// Restore Balancer stable pool state prior to a target block.
-    ///
-    /// Pops reorg journal deltas at/after the target block and restores the
-    /// landed-at balances (the `balances_after` of the largest delta below
-    /// the target) into the current mutable fields. Mirrors
-    /// `balancer_weighted_restore_before_block` (Balancer stable is a
-    /// full-state delta, same shape as V2/Curve/BalancerWeighted).
-    ///
-    /// Returns `Some(Ok((balances, block)))` on success, `Some(Err)` if the
-    /// pool exists but the target is at/before registration (no state before
-    /// it), or `None` if the pool ID is not registered / not a Balancer
-    /// stable pool.
-    pub fn balancer_stable_restore_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<Result<(Vec<U256>, u64), JournalError>> {
-        let PoolEntry::BalancerStable(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let (balances, blk) = match state.journal.restore_balancer_stable_before_block(block) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        state.balances.clone_from(&balances);
-        state.update_block = blk;
-        Some(Ok((balances, blk)))
+    pub fn pool_journal_len(&self, pool_id: u64) -> Option<usize> {
+        Some(self.pools.get(&pool_id)?.as_reorg_state()?.journal_len())
     }
 
     // --- Aerodrome V2 journal + registration methods ---
@@ -2860,104 +2092,24 @@ impl BotState {
         pool_id
     }
 
-    /// Apply an Aerodrome V2 `Sync` event by `pool_id`: journals the prior
-    /// reserves, then lands the new reserves + `update_block`. Returns the
-    /// affected `pool_id`, or `None` if not registered / not an Aerodrome pool.
-    #[must_use]
-    pub fn apply_aerodrome_sync_by_pool_id(
-        &mut self,
-        pool_id: u64,
-        reserve0: U256,
-        reserve1: U256,
-        block_number: u64,
-    ) -> Option<u64> {
-        let Some(PoolEntry::AerodromeV2(_, state)) = self.pools.get_mut(&pool_id) else {
-            return None;
-        };
-        state.journal.push_delta(V2BlockDelta {
-            block: block_number,
-            reserve0_before: state.reserve0,
-            reserve1_before: state.reserve1,
-            reserve0_after: reserve0,
-            reserve1_after: reserve1,
-        });
-        state.reserve0 = reserve0;
-        state.reserve1 = reserve1;
-        state.update_block = block_number;
-        Some(pool_id)
-    }
-
     /// Look up an Aerodrome V2 pool's immutable registration identity. Returns
     /// `None` if not registered or not an Aerodrome pool.
     #[must_use]
     pub fn get_aerodrome_identity(&self, pool_id: u64) -> Option<&AerodromeV2PoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::AerodromeV2(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::aerodrome_v2)
+            .map(|(identity, _)| identity)
     }
 
     /// Read a registered Aerodrome V2 pool's state by `pool_id` (reserves +
     /// `update_block` + the reorg journal).
     #[must_use]
     pub fn get_aerodrome_pool(&self, pool_id: u64) -> Option<&AerodromeV2PoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::AerodromeV2(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::V4(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..) => None,
-        }
-    }
-
-    /// Discard Aerodrome reorg journal deltas earlier than the given block.
-    /// No-op if not registered / not an Aerodrome pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta.
-    pub fn aerodrome_discard_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::AerodromeV2(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
-    }
-
-    /// Restore Aerodrome pool state prior to a target block (V2-shaped delta —
-    /// two reserves). Pops journal deltas at/after the target and restores the
-    /// landed-at state into the current mutable fields.
-    ///
-    /// Returns `Some(Ok((reserve0, reserve1, block)))` on success, `Some(Err)`
-    /// if the target is at/before registration (no state before it), or `None`
-    /// if the pool ID is not registered / not an Aerodrome pool.
-    pub fn aerodrome_restore_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<Result<(U256, U256, u64), JournalError>> {
-        let PoolEntry::AerodromeV2(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let (r0, r1, blk) = match state.journal.restore_before_block(block) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        state.reserve0 = r0;
-        state.reserve1 = r1;
-        state.update_block = blk;
-        Some(Ok((r0, r1, blk)))
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::aerodrome_v2)
+            .map(|(_, state)| state)
     }
 
     // --- V3 journal methods ---
@@ -2965,81 +2117,6 @@ impl BotState {
     /// Get the number of deltas in the reorg journal for a V3 pool.
     ///
     /// Returns 0 if the pool ID is not registered or is not a V3 pool.
-    #[must_use]
-    pub fn v3_journal_len(&self, pool_id: u64) -> usize {
-        match self.pools.get(&pool_id) {
-            Some(PoolEntry::V3(_, state)) => state.journal.len(),
-            _ => 0,
-        }
-    }
-
-    /// Discard V3 reorg journal deltas earlier than the given block.
-    ///
-    /// No-op if the earliest delta is at/after the target, or the pool is not
-    /// registered / not a V3 pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta. The `PyO3` layer maps this to `ValueError`.
-    pub fn v3_discard_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::V3(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
-    }
-
-    /// Restore V3 pool state prior to a target block.
-    ///
-    /// Pops reorg journal deltas at/after the target block, restores
-    /// scalar "before" values into the current state, and reverse-applies
-    /// tick priors to the current `tick_data` map.
-    ///
-    /// Restore `pool_id`'s state to just before `block` (ADR-006 slice 7).
-    ///
-    /// Single-pool dispatch: routes V2→`v2_restore_before_block`,
-    /// V3→`v3_restore_before_block`, V4→`v4_restore_before_block`. Writes the
-    /// journal's landed-at state into the current mutable fields, releases, then
-    /// `ReorgCoordinator` notifies subscribers. Pools whose newest delta is
-    /// already before `block` are no-ops (idempotent restore).
-    ///
-    /// **Pre-check [`has_state_prior_to`](Self::has_state_prior_to) first** —
-    /// the V3/V4 `restore_before_block` panics on an empty journal; the
-    /// pre-check avoids that and returns `Err` uniformly so the pump shuts down
-    /// gracefully on a too-deep reorg.
-    pub fn restore_pool_before_block(&mut self, pool_id: u64, block: u64) {
-        // V2 returns Result; ignore the Err here (too-deep was pre-checked).
-        // V3/V4 return Option (None for unregistered / non-matching family).
-        match self.pools.get_mut(&pool_id) {
-            Some(PoolEntry::V2(..)) => {
-                let _ = self.v2_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::V3(..)) => {
-                let _ = self.v3_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::V4(..)) => {
-                let _ = self.v4_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::Curve(..)) => {
-                let _ = self.curve_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::BalancerWeighted(..)) => {
-                let _ = self.balancer_weighted_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::BalancerStable(..)) => {
-                let _ = self.balancer_stable_restore_before_block(pool_id, block);
-            }
-            Some(PoolEntry::AerodromeV2(..)) => {
-                let _ = self.aerodrome_restore_before_block(pool_id, block);
-            }
-            None => {}
-        }
-    }
-
     /// Does `pool_id`'s journal have state at or before `block`? (ADR-006
     /// slice 7.) `false` → a too-deep reorg; `ReorgCoordinator` returns
     /// `Err(NoStatePriorToBlock)` and the pump shuts down gracefully.
@@ -3104,68 +2181,6 @@ impl BotState {
         }
     }
 
-    /// Restore V4 pool state prior to a target block (`V3RestoreResult` shape).
-    ///
-    /// Returns `V3RestoreResult` with the before-values, or `None`
-    /// if the pool ID is not registered or is not a V3 pool.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no delta exists before the target block.
-    pub fn v3_restore_before_block(&mut self, pool_id: u64, block: u64) -> Option<V3RestoreResult> {
-        let PoolEntry::V3(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let mut result = state.journal.restore_before_block(block);
-
-        // Sync scalar fields if the rolled-back range had scalar changes.
-        // If scalar_priors is None (tick-only event(s) rolled back), the
-        // current slot0 scalars were never changed by the rolled-back events
-        // and are already correct — skip the write-back. See ADR-004.
-        if let Some(p) = &result.scalar_priors {
-            state.sqrt_price_x96 = p.sqrt_price_x96_before;
-            state.liquidity = p.liquidity_before;
-            state.tick = p.tick_before;
-        }
-        state.update_block = result.block;
-        state.invalidate_tick_range_cache();
-
-        // Reverse-apply tick priors
-        for (tick_idx, tick_before) in &result.tick_priors {
-            match tick_before.liquidity_gross_before {
-                Some(gross_before) => {
-                    // Tick existed before — restore its prior values
-                    state.tick_data.insert(
-                        *tick_idx,
-                        TickInfo {
-                            liquidity_gross: gross_before,
-                            liquidity_net: tick_before.liquidity_net_before,
-                            block: 0,
-                        },
-                    );
-                }
-                None => {
-                    // Tick was newly initialized in this block — remove it
-                    state.tick_data.remove(tick_idx);
-                }
-            }
-        }
-
-        // If scalar_priors was None (tick-only rollback), populate it with the
-        // current (post-restore) scalars so downstream consumers (e.g., the
-        // PyO3 `v3_restore_before_block` wrapper) always see Some — the
-        // current scalars ARE the restored scalars in this case. See ADR-004.
-        if result.scalar_priors.is_none() {
-            result.scalar_priors = Some(ScalarPriors {
-                sqrt_price_x96_before: state.sqrt_price_x96,
-                liquidity_before: state.liquidity,
-                tick_before: state.tick,
-            });
-        }
-
-        Some(result)
-    }
-
     /// Encode a V2 swap call for the given pool.
     ///
     /// Produces pre-encoded calldata for `swap(uint256,uint256,address,bytes)`
@@ -3209,6 +2224,12 @@ impl BotState {
     ///
     /// # Errors
     ///
+    /// Returns [`RegisterV4PoolError::SpecViolation`] when `sqrt_price_x96`,
+    /// `tick`, V4 `fee`, or `tick_spacing` violates its Solidity-bounded
+    /// on-chain invariant (see [`spec_bounds`]). These checks fire *first* —
+    /// before the hooked / dynamic-fee / already-registered rejections — so an
+    /// impossible-CL-config rejection surfaces the primitive at fault.
+    ///
     /// Returns `Err` if the pool has amount-modifying hooks
     /// (`hook_flags & 0xCC != 0`), uses a dynamic fee (`fee == 0x100000`),
     /// or a pool with the same `(pool_manager, pool_id)` is already registered.
@@ -3216,6 +2237,14 @@ impl BotState {
         &mut self,
         params: &RegisterV4PoolParams,
     ) -> Result<u64, RegisterV4PoolError> {
+        use ::degenbot_pools::spec_bounds as sb;
+        sb::validate_sqrt_price(params.sqrt_price_x96)
+            .map_err(RegisterV4PoolError::SpecViolation)?;
+        sb::validate_tick(params.tick).map_err(RegisterV4PoolError::SpecViolation)?;
+        sb::validate_v4_fee(params.pool_key.fee).map_err(RegisterV4PoolError::SpecViolation)?;
+        sb::validate_tick_spacing(params.pool_key.tick_spacing)
+            .map_err(RegisterV4PoolError::SpecViolation)?;
+
         if (params.hook_flags & AMOUNT_MODIFYING_HOOK_MASK) != 0 {
             return Err(RegisterV4PoolError::HookedPool {
                 hook_flags: params.hook_flags,
@@ -3238,7 +2267,11 @@ impl BotState {
         let pool_id = self.next_pool_id;
         self.next_pool_id += 1;
 
-        let (identity, state) = V4PoolState::from_params(params.clone(), self.journal_depth);
+        // RUQ637/XEANMB: the `seed_from_store` path is retired — the DB
+        // seeding is handled by the Db arm of `assemble_v4_tick_map` (held
+        // snapshot tx). Just clone + flow the params through.
+        let params = params.clone();
+        let (identity, state) = V4PoolState::from_params(params, self.journal_depth);
         self.pools.insert(pool_id, PoolEntry::V4(identity, state));
         self.v4_pool_ids.insert(key, pool_id);
 
@@ -3294,7 +2327,7 @@ impl BotState {
     pub fn apply_v4_liquidity_update(
         &mut self,
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         tick_lower: i32,
         tick_upper: i32,
         liquidity_delta: alloy::primitives::I256,
@@ -3334,7 +2367,7 @@ impl BotState {
             ));
         }
 
-        crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
+        ::degenbot_pools::tick_bitmap::apply_liquidity_to_tick_range(
             &mut state.tick_data,
             tick_lower,
             tick_upper,
@@ -3380,38 +2413,7 @@ impl BotState {
         let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&pool_id) else {
             return None;
         };
-
-        let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(tick_priors.len());
-        for &(tick_index, ref new_info) in tick_priors {
-            let prior = state.tick_data.get(&tick_index).cloned();
-            journaled_priors.push((
-                tick_index,
-                TickBefore {
-                    liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                    liquidity_net_before: prior
-                        .as_ref()
-                        .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                },
-            ));
-            state.tick_data.insert(tick_index, new_info.clone());
-        }
-
-        state.journal.push_delta(V3BlockDelta {
-            block: block_number,
-            scalar_priors: Some(ScalarPriors {
-                sqrt_price_x96_before: state.sqrt_price_x96,
-                liquidity_before: state.liquidity,
-                tick_before: state.tick,
-            }),
-            tick_priors: journaled_priors,
-        });
-
-        state.sqrt_price_x96 = sqrt_price_x96;
-        state.liquidity = liquidity;
-        state.tick = tick;
-        state.update_block = block_number;
-        state.invalidate_tick_range_cache();
-
+        state.apply_swap(sqrt_price_x96, liquidity, tick, block_number, tick_priors);
         Some(pool_id)
     }
 
@@ -3437,37 +2439,7 @@ impl BotState {
         let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&pool_id) else {
             return None;
         };
-
-        let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-        for &tick_idx in &[tick_lower, tick_upper] {
-            let prior = state.tick_data.get(&tick_idx).cloned();
-            journaled_priors.push((
-                tick_idx,
-                TickBefore {
-                    liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                    liquidity_net_before: prior
-                        .as_ref()
-                        .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                },
-            ));
-        }
-
-        crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-            &mut state.tick_data,
-            tick_lower,
-            tick_upper,
-            liquidity_delta,
-            block_number,
-        );
-
-        state.journal.push_delta(V3BlockDelta {
-            block: block_number,
-            scalar_priors: None,
-            tick_priors: journaled_priors,
-        });
-
-        state.update_block = block_number;
-        state.invalidate_tick_range_cache();
+        state.apply_liquidity_update(tick_lower, tick_upper, liquidity_delta, block_number);
         Some(pool_id)
     }
 
@@ -3547,7 +2519,7 @@ impl BotState {
     pub fn buffer_backfill_v4_liquidity_update(
         &mut self,
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         tick_lower: i32,
         tick_upper: i32,
         liquidity_delta: alloy::primitives::I256,
@@ -3557,7 +2529,7 @@ impl BotState {
         if let Some(&id) = self.v4_pool_ids.get(&key) {
             if let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&id) {
                 if let Ok(delta_i128) = i128::try_from(liquidity_delta) {
-                    crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
+                    ::degenbot_pools::tick_bitmap::apply_liquidity_to_tick_range(
                         &mut state.tick_data,
                         tick_lower,
                         tick_upper,
@@ -3590,7 +2562,7 @@ impl BotState {
     pub fn apply_backfill_buffer_v4(
         &mut self,
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) {
         let key = (pool_manager, pool_id);
         let Some(&id) = self.v4_pool_ids.get(&key) else {
@@ -3603,34 +2575,18 @@ impl BotState {
             let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&id) else {
                 continue;
             };
+            // ADR-014 D4: the on-chain ModifyLiquidity int256 envelope is
+            // narrowed to i128 (the Tick.liquidityNet type V4 itself narrows
+            // to at PoolManager.sol:666) at the drain→apply seam, then the
+            // trait method journals + applies (ADR-017 slice 3 — formerly
+            // re-inlined here byte-identically to `apply_liquidity_update`).
             if let Ok(delta_i128) = i128::try_from(update.liquidity_delta) {
-                let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-                for &tick_idx in &[update.tick_lower, update.tick_upper] {
-                    let prior = state.tick_data.get(&tick_idx).cloned();
-                    journaled_priors.push((
-                        tick_idx,
-                        TickBefore {
-                            liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                            liquidity_net_before: prior
-                                .as_ref()
-                                .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                        },
-                    ));
-                }
-                crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-                    &mut state.tick_data,
+                state.apply_liquidity_update(
                     update.tick_lower,
                     update.tick_upper,
                     delta_i128,
                     update.block_number,
                 );
-                state.journal.push_delta(V3BlockDelta {
-                    block: update.block_number,
-                    scalar_priors: None,
-                    tick_priors: journaled_priors,
-                });
-                state.update_block = update.block_number;
-                state.invalidate_tick_range_cache();
             }
         }
     }
@@ -3642,7 +2598,7 @@ impl BotState {
     pub fn apply_pump_buffer_v4(
         &mut self,
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) {
         let key = (pool_manager, pool_id);
         let Some(&id) = self.v4_pool_ids.get(&key) else {
@@ -3655,34 +2611,15 @@ impl BotState {
             let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&id) else {
                 continue;
             };
+            // ADR-014 D4: int256→i128 narrow at the drain→apply seam, then
+            // delegate to the trait method (ADR-017 slice 3).
             if let Ok(delta_i128) = i128::try_from(update.liquidity_delta) {
-                let mut journaled_priors: Vec<(i32, TickBefore)> = Vec::with_capacity(2);
-                for &tick_idx in &[update.tick_lower, update.tick_upper] {
-                    let prior = state.tick_data.get(&tick_idx).cloned();
-                    journaled_priors.push((
-                        tick_idx,
-                        TickBefore {
-                            liquidity_gross_before: prior.as_ref().map(|p| p.liquidity_gross),
-                            liquidity_net_before: prior
-                                .as_ref()
-                                .map_or(alloy::primitives::I256::ZERO, |p| p.liquidity_net),
-                        },
-                    ));
-                }
-                crate::bot_core::tick_bitmap::apply_liquidity_to_tick_range(
-                    &mut state.tick_data,
+                state.apply_liquidity_update(
                     update.tick_lower,
                     update.tick_upper,
                     delta_i128,
                     update.block_number,
                 );
-                state.journal.push_delta(V3BlockDelta {
-                    block: update.block_number,
-                    scalar_priors: None,
-                    tick_priors: journaled_priors,
-                });
-                state.update_block = update.block_number;
-                state.invalidate_tick_range_cache();
             }
         }
     }
@@ -3700,18 +2637,112 @@ impl BotState {
         self.v4_buffer.expire(current_block);
     }
 
+    /// Apply a backfill chunk's logs to the snapshot-seeded state WITHOUT
+    /// solving (B3 move, FD7NFG). Decodes V3 swap/mint/burn + V4 swap/modify-
+    /// liquidity logs and applies each via the same `apply_v3_swap` /
+    /// `buffer_backfill_*_liquidity_update` / `apply_v4_swap` path the live
+    /// loop uses; after the chunk, `expire_v3/v4_buffered(chunk_end)` advances
+    /// the liquidity buffers. No `dispatch` / `solve_dirty` — the `Backfilled`
+    /// phase invariant is "state advanced, no batches emitted".
+    ///
+    /// This is the BotState-level relocation of what was
+    /// `ArbitrageEngine::process_backfill_logs` (`solvers/arb_engine/
+    /// event_routing.rs`); the engine method is now a thin delegator +
+    /// `last_processed_block` stamp. `BotState` owns the state (ADR-003);
+    /// `BlockPump::backfill_from_snapshot` (core) reaches it via `self.bot`.
+    pub fn process_backfill_logs(&mut self, logs: &[alloy::rpc::types::Log], chunk_end: u64) {
+        use degenbot_decoders::v3_mint_burn_decoder::{decode_v3_burn_log, decode_v3_mint_log};
+        use degenbot_decoders::v3_swap_decoder::decode_v3_swap_log;
+        use degenbot_decoders::v4_modify_liquidity_decoder::decode_v4_modify_liquidity_log;
+        use degenbot_decoders::v4_swap_decoder::decode_v4_swap_log;
+        let mut v3_touched = false;
+        let mut v4_touched = false;
+        for log in logs {
+            // Stamp this log with its own block number. A backfill log should
+            // always carry `block_number`; fall back to `chunk_end` only for a
+            // malformed log so apply never sees block 0.
+            let log_block = log.block_number.unwrap_or(chunk_end);
+            let Some(topic0) = log.topic0() else { continue };
+            if *topic0 == degenbot_decoders::v3_swap_decoder::V3_SWAP_TOPIC {
+                if let Some(event) = decode_v3_swap_log(log) {
+                    self.apply_v3_swap(
+                        event.pool_address,
+                        event.sqrt_price_x96,
+                        event.liquidity.to::<u128>(),
+                        event.tick,
+                        log_block,
+                        &[],
+                    );
+                    v3_touched = true;
+                }
+            } else if *topic0 == degenbot_decoders::v3_mint_burn_decoder::V3_MINT_TOPIC {
+                if let Some(event) = decode_v3_mint_log(log) {
+                    self.buffer_backfill_v3_liquidity_update(
+                        event.pool_address,
+                        event.tick_lower,
+                        event.tick_upper,
+                        event.amount.cast_signed(),
+                        log_block,
+                    );
+                    v3_touched = true;
+                }
+            } else if *topic0 == degenbot_decoders::v3_mint_burn_decoder::V3_BURN_TOPIC {
+                if let Some(event) = decode_v3_burn_log(log) {
+                    self.buffer_backfill_v3_liquidity_update(
+                        event.pool_address,
+                        event.tick_lower,
+                        event.tick_upper,
+                        -(event.amount.cast_signed()),
+                        log_block,
+                    );
+                    v3_touched = true;
+                }
+            } else if *topic0 == degenbot_decoders::v4_swap_decoder::V4_SWAP_TOPIC {
+                if let Some(event) = decode_v4_swap_log(log) {
+                    self.apply_v4_swap(
+                        &V4SwapUpdate {
+                            pool_manager: log.address(),
+                            pool_id: event.pool_id,
+                            sqrt_price_x96: event.sqrt_price_x96,
+                            liquidity: event.liquidity.to::<u128>(),
+                            tick: event.tick,
+                            tick_priors: vec![],
+                        },
+                        log_block,
+                    );
+                    v4_touched = true;
+                }
+            } else if *topic0
+                == degenbot_decoders::v4_modify_liquidity_decoder::V4_MODIFY_LIQUIDITY_TOPIC
+            {
+                if let Some(event) = decode_v4_modify_liquidity_log(log) {
+                    self.buffer_backfill_v4_liquidity_update(
+                        log.address(),
+                        event.pool_id,
+                        event.tick_lower,
+                        event.tick_upper,
+                        event.liquidity_delta,
+                        log_block,
+                    );
+                    v4_touched = true;
+                }
+            }
+        }
+        if v3_touched {
+            self.expire_v3_buffered(chunk_end);
+        }
+        if v4_touched {
+            self.expire_v4_buffered(chunk_end);
+        }
+    }
+
     /// Read a registered V4 pool's state by `pool_id`.
     #[must_use]
     pub fn get_v4_pool(&self, pool_id: u64) -> Option<&V4PoolState> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V4(_, state) => Some(state),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v4)
+            .map(|(_, state)| state)
     }
 
     /// Look up a V4 pool's immutable registration identity (`pool_manager`,
@@ -3719,15 +2750,10 @@ impl BotState {
     /// isn't a V4 pool.
     #[must_use]
     pub fn get_v4_identity(&self, pool_id: u64) -> Option<&V4PoolIdentity> {
-        match self.pools.get(&pool_id)? {
-            PoolEntry::V4(identity, _) => Some(identity),
-            PoolEntry::V2(..)
-            | PoolEntry::V3(..)
-            | PoolEntry::Curve(..)
-            | PoolEntry::BalancerWeighted(..)
-            | PoolEntry::BalancerStable(..)
-            | PoolEntry::AerodromeV2(..) => None,
-        }
+        self.pools
+            .get(&pool_id)
+            .and_then(PoolEntry::v4)
+            .map(|(identity, _)| identity)
     }
 
     /// Look up the pool ID for a registered `(pool_manager, pool_id)` pair.
@@ -3735,7 +2761,7 @@ impl BotState {
     pub fn v4_pool_id_by_key(
         &self,
         pool_manager: Address,
-        pool_id: &degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: &degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) -> Option<u64> {
         self.v4_pool_ids.get(&(pool_manager, *pool_id)).copied()
     }
@@ -3746,7 +2772,7 @@ impl BotState {
     pub fn v4_snapshot_seed(
         &self,
         pool_manager: Address,
-        pool_id: &degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: &degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) -> Option<&HashMap<i32, TickInfo>> {
         let pid = self.v4_pool_id_by_key(pool_manager, pool_id)?;
         let Some(PoolEntry::V4(_, state)) = self.pools.get(&pid) else {
@@ -3760,7 +2786,7 @@ impl BotState {
     pub fn take_v4_snapshot_seed(
         &mut self,
         pool_manager: Address,
-        pool_id: &degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: &degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) -> Option<HashMap<i32, TickInfo>> {
         let pid = self.v4_pool_id_by_key(pool_manager, pool_id)?;
         let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&pid) else {
@@ -3781,7 +2807,7 @@ impl BotState {
     pub fn pin_v4_post_drain_snapshot(
         &mut self,
         pool_manager: Address,
-        pool_id: &degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: &degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) {
         let Some(pid) = self.v4_pool_id_by_key(pool_manager, pool_id) else {
             return;
@@ -3803,7 +2829,7 @@ impl BotState {
     pub fn take_v4_post_drain_snapshot(
         &mut self,
         pool_manager: Address,
-        pool_id: &degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: &degenbot_decoders::v4_swap_decoder::V4PoolId,
     ) -> Option<(HashMap<i32, TickInfo>, u64)> {
         let pid = self.v4_pool_id_by_key(pool_manager, pool_id)?;
         let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&pid) else {
@@ -3850,7 +2876,7 @@ impl BotState {
     pub fn sync_v4_pool_state(
         &mut self,
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         update: V4StateSync,
     ) {
         let Some(&id) = self.v4_pool_ids.get(&(pool_manager, pool_id)) else {
@@ -3868,119 +2894,6 @@ impl BotState {
     }
 
     // --- V4 journal methods ---
-
-    /// Discard V4 reorg journal deltas earlier than the given block.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(JournalError::NoStateAtOrAfterBlock)` if the target is past
-    /// the newest delta. The `PyO3` layer maps this to `ValueError`.
-    pub fn v4_discard_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        let Some(PoolEntry::V4(_, state)) = self.pools.get_mut(&pool_id) else {
-            return Ok(());
-        };
-        state.journal.discard_before_block(block)
-    }
-
-    /// Family-dispatching journal discard (J63J3N): routes V4 pools to
-    /// `v4_discard_before_block`, V3 (and V2/unregistered) to
-    /// `v3_discard_before_block`. The per-handle Python
-    /// `PyLiquidityPool.discard_v3_before_block` previously gated on a
-    /// `get_v3_pool(...).is_none()` V3 probe that returned `None` for V4 and
-    /// no-op'd — so V4 reorg journals were never trimmed via the handle path.
-    /// The `matches!` probe is a Copy discriminant (immutable borrow ends
-    /// before the `&mut self` call).
-    ///
-    /// # Errors
-    ///
-    /// Propagates the underlying journal's `JournalError` for V3/V4 discard.
-    pub fn discard_v3_or_v4_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Result<(), JournalError> {
-        if matches!(self.pools.get(&pool_id), Some(PoolEntry::V4(..))) {
-            self.v4_discard_before_block(pool_id, block)
-        } else {
-            self.v3_discard_before_block(pool_id, block)
-        }
-    }
-
-    /// Restore V4 pool state prior to a target block (same `V3BlockDelta` shape).
-    pub fn v4_restore_before_block(&mut self, pool_id: u64, block: u64) -> Option<V3RestoreResult> {
-        let PoolEntry::V4(_, state) = self.pools.get_mut(&pool_id)? else {
-            return None;
-        };
-        let mut result = state.journal.restore_before_block(block);
-
-        // Sync scalar fields if the rolled-back range had scalar changes.
-        // If scalar_priors is None (tick-only event(s) rolled back), the
-        // current slot0 scalars were never changed by the rolled-back events
-        // and are already correct — skip the write-back. See ADR-004.
-        if let Some(p) = &result.scalar_priors {
-            state.sqrt_price_x96 = p.sqrt_price_x96_before;
-            state.liquidity = p.liquidity_before;
-            state.tick = p.tick_before;
-        }
-        state.update_block = result.block;
-        state.invalidate_tick_range_cache();
-
-        for (tick_idx, tick_before) in &result.tick_priors {
-            match tick_before.liquidity_gross_before {
-                Some(gross_before) => {
-                    state.tick_data.insert(
-                        *tick_idx,
-                        TickInfo {
-                            liquidity_gross: gross_before,
-                            liquidity_net: tick_before.liquidity_net_before,
-                            block: 0,
-                        },
-                    );
-                }
-                None => {
-                    state.tick_data.remove(tick_idx);
-                }
-            }
-        }
-
-        // If scalar_priors was None (tick-only rollback), populate it with the
-        // current (post-restore) scalars so downstream consumers always see
-        // Some — the current scalars ARE the restored scalars in this case.
-        // See ADR-004.
-        if result.scalar_priors.is_none() {
-            result.scalar_priors = Some(ScalarPriors {
-                sqrt_price_x96_before: state.sqrt_price_x96,
-                liquidity_before: state.liquidity,
-                tick_before: state.tick,
-            });
-        }
-
-        Some(result)
-    }
-
-    /// Family-dispatching journal restore (J63J3N): routes V4 pools to
-    /// `v4_restore_before_block`, V3 (and V2/unregistered) to
-    /// `v3_restore_before_block`. The per-handle
-    /// `PyLiquidityPool.restore_v3_before_block` previously gated on a
-    /// `get_v3_pool(...).is_none()` V3 probe that returned `None` for V4 — so
-    /// V4 reorg rollback via the handle path silently no-op'd, returning
-    /// `None` (not the rolled-back scalars). Mirrors the RAJ3PP
-    /// `apply_liquidity_update_by_pool_id` dispatch shape.
-    pub fn restore_v3_or_v4_before_block(
-        &mut self,
-        pool_id: u64,
-        block: u64,
-    ) -> Option<V3RestoreResult> {
-        if matches!(self.pools.get(&pool_id), Some(PoolEntry::V4(..))) {
-            self.v4_restore_before_block(pool_id, block)
-        } else {
-            self.v3_restore_before_block(pool_id, block)
-        }
-    }
 
     /// Register a token.
     ///
@@ -4030,7 +2943,7 @@ impl Default for BotState {
 /// `Vec<Box<dyn EventSink>>` of attached engines.
 ///
 /// `PyBot` owns a `Bot` outright (not behind a lock) and hands out clones of
-/// [`Bot::state_arc`] so `PyLiquidityPool` / `PyErc20Token` / `UniswapEngine`
+/// [`Bot::state_arc`] so `PyLiquidityPool` / `PyErc20Token` / `ArbitrageEngine`
 /// all reach ONE Rust-owned `BotState` (N handles → one state — the Polars
 /// three-layer invariant, preserved). The standalone-Rust path (D4) runs the
 /// whole bot through this facade without Python.
@@ -4047,6 +2960,19 @@ pub struct Bot {
     /// [`dispatch_log`](Self::dispatch_log) per WS log; engine subscriber
     /// adapters attach via [`attach_engine`](Self::attach_engine).
     dispatcher: log_dispatcher::LogDispatcher,
+    /// The construction-I/O handle (architecture review 2025-07-18 / candidate 1).
+    /// `None` for a bare `Bot::new(chain_id)` (the test-fixture + standalone-
+    /// Rust-no-I/O path). The Python `Bot.__init__` path attaches one via
+    /// [`Bot::set_construction_io`] built from the extracted `AlloyProvider`
+    /// and an optional held `DegenbotDb`; the 7 generic RPC + 12 DB atomic
+    /// methods on `PyBotIo` delegate to this, the 27 choreography wrappers stay
+    /// on `PyBotIo` for now (deleted with the builder-choreography port).
+    ///
+    /// Interior-mutable (`RwLock`) so a `Bot` shared via `Arc` can have the
+    /// handle attached post-construction (the `PyBot` path: `PyBot::new(chain_id)`
+    /// happens before the provider is known, then `set_construction_io` attaches).
+    construction_io:
+        parking_lot::RwLock<Option<Arc<crate::bot_core::construction_io::ConstructionIo>>>,
 }
 
 /// Block metadata included in each `ResultBatch`.
@@ -4072,30 +2998,37 @@ impl Bot {
     ///
     /// ADR-006 slice 8b: the Python `Bot` facade is single-chain and passes the
     /// real `chain_id` via `PyBot::new(chain_id)`; `0` is the default for the
-    /// bare-fixture test path.
+    /// bare-fixture test path. The construction-I/O handle is `None` until
+    /// [`Bot::set_construction_io`] attaches one (the Python path does this at
+    /// `Bot.__init__` time).
     #[must_use]
     pub fn new(chain_id: u64) -> Self {
         Self {
             chain_id,
             state: Arc::new(parking_lot::RwLock::new(BotState::new())),
             dispatcher: log_dispatcher::LogDispatcher::with_uniswap_decoders(),
+            construction_io: parking_lot::RwLock::new(None),
         }
     }
 
     /// Construct a `Bot` that **adopts** an existing shared `BotState` core + a
-    /// fresh `LogDispatcher` (ADR-006 D4). Used so a `Bot` + a `UniswapEngine`
+    /// fresh `LogDispatcher` (ADR-006 D4). Used so a `Bot` + a `ArbitrageEngine`
     /// (and a sibling `PyBot`) all read/write the SAME `BotState` — the engine
-    /// gets the core via `UniswapEngine::with_core`, `BlockPump`'s `Bot`
+    /// gets the core via `ArbitrageEngine::with_core`, `BlockPump`'s `Bot`
     /// shares it, and `dispatch_log` writes flow through to the engine's reads.
     ///
-    /// The adopting path does not carry a `chain_id` (the original owner did);
-    /// `0` here is a placeholder for the standalone/no-pyo3 adoption path.
+    /// The adopting path does not carry a `chain_id` (the original owner did;
+    /// `0` here is a placeholder for the standalone/no-pyo3 adoption path) and
+    /// does not carry a `construction_io` handle (the original owner attached
+    /// one if needed; adopters that need I/O re-attach via
+    /// [`Bot::with_construction_io`]).
     #[must_use]
     pub fn with_core(core: Arc<parking_lot::RwLock<BotState>>) -> Self {
         Self {
             chain_id: 0,
             state: core,
             dispatcher: log_dispatcher::LogDispatcher::with_uniswap_decoders(),
+            construction_io: parking_lot::RwLock::new(None),
         }
     }
 
@@ -4107,8 +3040,30 @@ impl Bot {
         self.chain_id
     }
 
+    /// Attach a construction-I/O handle (architecture review 2025-07-18 /
+    /// candidate 1). The Python `Bot.__init__` path builds the handle from the
+    /// extracted `AlloyProvider` + an optional held `DegenbotDb` and attaches
+    /// it here; the standalone-Rust path builds + attaches directly.
+    ///
+    /// Idempotent: a second call replaces the prior handle.
+    pub fn set_construction_io(&self, io: crate::bot_core::construction_io::ConstructionIo) {
+        *self.construction_io.write() = Some(Arc::new(io));
+    }
+
+    /// Hand out a clone of the construction-I/O handle, when attached. `PyBotIo`'s
+    /// 7 generic RPC + 12 DB atomic methods reach this to delegate through the
+    /// trait objects (`Arc<dyn DbConstruction + Send + Sync>` /
+    /// `Arc<dyn RpcConstruction + Send + Sync>`); the 27 choreography wrappers
+    /// stay on `PyBotIo` this slice. `None` for a bare bot with no I/O attached.
+    #[must_use]
+    pub fn construction_io_arc(
+        &self,
+    ) -> Option<Arc<crate::bot_core::construction_io::ConstructionIo>> {
+        self.construction_io.read().clone()
+    }
+
     /// Hand out a clone of the shared `Arc<RwLock<BotState>>` so a sibling
-    /// consumer (`PyLiquidityPool` / `PyErc20Token` / `UniswapEngine`) reaches
+    /// consumer (`PyLiquidityPool` / `PyErc20Token` / `ArbitrageEngine`) reaches
     /// the SAME state this orchestrator owns. This is the Polars three-layer
     /// sharing seam (ADR-005, revised by ADR-006 D4).
     #[must_use]
@@ -4116,9 +3071,62 @@ impl Bot {
         Arc::clone(&self.state)
     }
 
+    /// Record the snapshot seed block `S` on `BotState` from a held-tx DB
+    /// handle (epic `XEANMB`). The single entry point a standalone Rust
+    /// consumer and the pyo3 `PyBot` constructor both call.
+    ///
+    /// `db` is a [`degenbot_db::snapshot::TickMapDb`] — typically a
+    /// [`degenbot_db::snapshot_db::SnapshotDb`] opened with a held deferred
+    /// read transaction so `S` + every per-pool `fetch_liquidity_map` read
+    /// share one frozen DB snapshot across `build_paths` (the consistency
+    /// replacement for the retired `SnapshotStore`).
+    ///
+    /// Records `S = min(fetch_newest_update_block(V3), V4)`. `None`
+    /// for a family with no pools / NULL `last_update_block`; if BOTH families
+    /// are `None`, `S` is `None` (cold-start path — the pump anchors on
+    /// `first_observed_block`, no snapshot gap to backfill).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotLoadError::Db`] on a DB read failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a `fetch_newest_update_block` returns a negative block number
+    /// (invalid DB state — `SQLite` stores block numbers as signed `i64`, but
+    /// on-chain block numbers are non-negative).
+    pub fn load_snapshot_from_db(
+        &self,
+        db: &dyn degenbot_db::snapshot::TickMapDb,
+        chain_id: u64,
+    ) -> Result<(), SnapshotLoadError> {
+        let chain = i64::try_from(chain_id)
+            .map_err(|_| SnapshotLoadError::Range(format!("chain_id {chain_id} exceeds i64")))?;
+        let mut state = self.state.write();
+        let now_v3 = db
+            .fetch_newest_update_block(chain, degenbot_db::read::ExchangeFamily::V3)
+            .map_err(SnapshotLoadError::from)?;
+        let now_v4 = db
+            .fetch_newest_update_block(chain, degenbot_db::read::ExchangeFamily::V4)
+            .map_err(SnapshotLoadError::from)?;
+        // S = min(fetch_newest_update_block(V3), V4), ignoring None families.
+        let s = match (state.snapshot_seed_block, now_v3, now_v4) {
+            (None, Some(v3), Some(v4)) => {
+                Some(u64::try_from(v3.min(v4)).expect("block number non-negative"))
+            }
+            (None, Some(v3), None) => Some(u64::try_from(v3).expect("block number non-negative")),
+            (None, None, Some(v4)) => Some(u64::try_from(v4).expect("block number non-negative")),
+            (None, None, None) => None,
+            (existing, _, _) => existing,
+        };
+        state.snapshot_seed_block = s;
+        Ok(())
+    }
+
     /// Drive one WS log through the event bus (ADR-006 D4). Decode via a
     /// registered decoder, apply to `BotState` under a write guard, release,
     /// then notify subscribers. The pump (slice 5) calls this per log.
+    #[hotpath::measure(impl_type = "Bot")]
     pub fn dispatch_log(&self, log: &alloy::rpc::types::Log) {
         self.dispatcher.dispatch(log, &self.state);
     }
@@ -4144,7 +3152,9 @@ impl Bot {
     /// Pre-check [`has_state_prior_to`](Self::has_state_prior_to) first — the
     /// V3/V4 journal `restore_before_block` panics on an empty journal.
     pub fn restore_pool_before_block(&self, pool_id: u64, block: u64) {
-        self.state.write().restore_pool_before_block(pool_id, block);
+        // Discard the trait result — the reorg coordinator path is fire-and-
+        // forget (too-deep was pre-checked via `has_state_prior_to`).
+        let _ = self.state.write().restore_pool_before_block(pool_id, block);
     }
 
     /// Does `pool_id`'s journal have state at or before `block`? (ADR-006
@@ -4207,6 +3217,7 @@ impl Bot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::uint;
 
     const FEE_03: (u64, u64) = (997, 1000);
 
@@ -4223,7 +3234,7 @@ mod tests {
         Address::from([0xdd; 20])
     }
 
-    fn make_params(r0: U256, r1: U256) -> RegisterV2PoolParams {
+    fn make_params(r0: U112, r1: U112) -> RegisterV2PoolParams {
         RegisterV2PoolParams {
             address: make_pool_addr(),
             token0: make_token0(),
@@ -4244,7 +3255,9 @@ mod tests {
     #[test]
     fn register_v2_pool_and_calculate_tokens_out() {
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
 
         // Python reference: constant_product_calc_exact_in(100, 1000, 2000, 3/1000) = 181
         let amount_out = core.calculate_tokens_out(pool_id, true, U256::from(100));
@@ -4258,7 +3271,9 @@ mod tests {
         // get_v2_identity. Identity is pure immutable registration data
         // (mirrors TokenEntry), distinct from the mutable V2PoolState.
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
         let id = core
             .get_v2_identity(pool_id)
             .expect("registered V2 pool has an identity");
@@ -4283,7 +3298,9 @@ mod tests {
         // primitive every `_from_py_pool` seam asserts against (replacing the
         // V2-only `variant` getter). Tracer bullet: V2 + unregistered.
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
         assert_eq!(core.pool_family(pool_id), "v2");
         assert_eq!(core.pool_family(999_999), "");
     }
@@ -4310,7 +3327,7 @@ mod tests {
 
         // V4
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let v4_id = core
             .register_v4_pool(&RegisterV4PoolParams {
                 pool_manager,
@@ -4423,8 +3440,8 @@ mod tests {
             variant: degenbot_uniswap::dex_identity::DexVariant::AerodromeV2Volatile,
             stable: false,
             fee: (3, 1000),
-            reserve0: U256::from(1_000_000u64),
-            reserve1: U256::from(2_000_000u64),
+            reserve0: U112::from(1_000_000u64),
+            reserve1: U112::from(2_000_000u64),
             update_block: 0,
         });
         assert_eq!(core.pool_family(aero_id), "aerodrome-v2");
@@ -4433,7 +3450,7 @@ mod tests {
     #[test]
     fn aerodrome_reserve_mutation_and_reorg_rollback() {
         // Aerodrome V2 reserves + reorg journal live in Rust (ADR-005
-        // Aerodrome state port): `apply_aerodrome_sync_by_pool_id` journals
+        // Aerodrome state port): `apply_sync_by_pool_id` journals
         // the prior reserves then lands the new; `aerodrome_restore_before_block`
         // pops back to the landed-at state at the target block.
         use crate::bot_core::RegisterAerodromeV2PoolParams;
@@ -4447,8 +3464,8 @@ mod tests {
             variant: degenbot_uniswap::dex_identity::DexVariant::AerodromeV2Volatile,
             stable: false,
             fee: (3, 1000),
-            reserve0: U256::from(1_000u64),
-            reserve1: U256::from(2_000u64),
+            reserve0: U112::from(1_000u64),
+            reserve1: U112::from(2_000u64),
             update_block: 10,
         });
 
@@ -4461,49 +3478,52 @@ mod tests {
 
         // Initial registration state (genesis anchor at block 10).
         let state = core.get_aerodrome_pool(pool_id).expect("aerodrome state");
-        assert_eq!(state.reserve0, U256::from(1_000u64));
-        assert_eq!(state.reserve1, U256::from(2_000u64));
+        assert_eq!(state.reserve0, U112::from(1_000u64));
+        assert_eq!(state.reserve1, U112::from(2_000u64));
         assert_eq!(state.update_block, 10);
         assert_eq!(state.journal.len(), 1);
 
         // Apply a Sync at block 20 (journals prior reserves, lands new).
-        let applied = core.apply_aerodrome_sync_by_pool_id(
-            pool_id,
-            U256::from(1_500u64),
-            U256::from(2_500u64),
-            20,
-        );
+        let applied =
+            core.apply_sync_by_pool_id(pool_id, U112::from(1_500u64), U112::from(2_500u64), 20);
         assert_eq!(applied, Some(pool_id));
         let state = core.get_aerodrome_pool(pool_id).expect("aerodrome state");
-        assert_eq!(state.reserve0, U256::from(1_500u64));
-        assert_eq!(state.reserve1, U256::from(2_500u64));
+        assert_eq!(state.reserve0, U112::from(1_500u64));
+        assert_eq!(state.reserve1, U112::from(2_500u64));
         assert_eq!(state.update_block, 20);
         assert_eq!(state.journal.len(), 2);
 
         // Reorg to before block 20 → restores registration state (genesis at 10).
-        let restored = core.aerodrome_restore_before_block(pool_id, 20);
-        let (r0, r1, blk) = restored.expect("restore returns Some").expect("Ok");
-        assert_eq!(r0, U256::from(1_000u64));
-        assert_eq!(r1, U256::from(2_000u64));
-        assert_eq!(blk, 10);
+        core.restore_pool_before_block(pool_id, 20)
+            .expect("restore returns Some")
+            .expect("restore succeeds");
         let state = core.get_aerodrome_pool(pool_id).expect("aerodrome state");
-        assert_eq!(state.reserve0, U256::from(1_000u64));
-        assert_eq!(state.reserve1, U256::from(2_000u64));
+        assert_eq!(state.reserve0, U112::from(1_000u64));
+        assert_eq!(state.reserve1, U112::from(2_000u64));
         assert_eq!(state.update_block, 10);
 
-        // A non-Aerodrome pool_id is a silent no-op for apply + restore.
-        let v2_id = core.register_v2_pool(&make_params(U256::from(100), U256::from(200)));
+        // With ADR-017 slice 5 the Aerodrome + V2 `apply_sync` paths are
+        // one dispatcher (`apply_sync_by_pool_id` across both reserve-pair
+        // families), so a V2 pool_id now lands too — the cross-family isolation
+        // that the old per-family method provided is gone by design.
+        let v2_id = core
+            .register_v2_pool(&make_params(U112::from(100), U112::from(200)))
+            .expect("test setup: V2 registration");
         assert_eq!(
-            core.apply_aerodrome_sync_by_pool_id(v2_id, U256::ZERO, U256::ZERO, 99),
-            None
+            core.apply_sync_by_pool_id(v2_id, U112::ZERO, U112::ZERO, 99),
+            Some(v2_id)
         );
-        assert_eq!(core.aerodrome_restore_before_block(v2_id, 1), None);
+        // The no-mutate-on-wrong-family guard for restore moved to the PyO3
+        // wrapper layer (ADR-016); BotState's unified restore dispatches
+        // across all families, so a V2 pool_id is restored as V2.
     }
 
     #[test]
     fn calculate_tokens_out_reverse_direction() {
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(2000), U256::from(1000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(2000), U112::from(1000)))
+            .expect("test setup: V2 registration");
 
         // Python reference: constant_product_calc_exact_in(100, 1000, 2000, 3/1000) = 181
         let amount_out = core.calculate_tokens_out(pool_id, false, U256::from(100));
@@ -4513,14 +3533,16 @@ mod tests {
     #[test]
     fn update_v2_pool_changes_calculation_result() {
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
 
         // Before update: swap 100 token0 → 181 token1
         let before = core.calculate_tokens_out(pool_id, true, U256::from(100));
         assert_eq!(before, U256::from(181));
 
         // Update reserves: now reserve0=2000, reserve1=1000
-        core.update_v2_pool(make_pool_addr(), U256::from(2000), U256::from(1000), 42);
+        core.update_v2_pool(make_pool_addr(), U112::from(2000), U112::from(1000), 42);
 
         // After update: Python: constant_product_calc_exact_in(100, 2000, 1000, 3/1000) = 47
         let after = core.calculate_tokens_out(pool_id, true, U256::from(100));
@@ -4530,7 +3552,9 @@ mod tests {
     #[test]
     fn calculate_tokens_in_for_v2_pool() {
         let mut core = BotState::new();
-        let pool_id = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let pool_id = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
 
         // Python: constant_product_calc_exact_out(50, 1000, 2000, 3/1000) = 26
         let amount_in = core.calculate_tokens_in(pool_id, true, U256::from(50));
@@ -4546,8 +3570,8 @@ mod tests {
         let mut core = BotState::new();
 
         // Realistic: 1.5M USDC / 800 WETH, 0.3% fee
-        let reserve0 = U256::from(1_500_000_000_000u64); // 1.5M USDC (6dp)
-        let reserve1 = U256::from(800u128) * U256::from(10u64).pow(U256::from(18)); // 800 WETH
+        let reserve0 = U112::from(1_500_000_000_000u64); // 1.5M USDC (6dp)
+        let reserve1 = U112::from(800u128) * U112::from(10u64).pow(U112::from(18)); // 800 WETH
 
         let params = RegisterV2PoolParams {
             address: make_pool_addr(),
@@ -4564,7 +3588,9 @@ mod tests {
             fee_denominator: None,
             ..Default::default()
         };
-        let pool_id = core.register_v2_pool(&params);
+        let pool_id = core
+            .register_v2_pool(&params)
+            .expect("test setup: V2 registration");
 
         // Swap 1000 USDC for WETH
         // Python reference: 531380142665175213
@@ -4595,8 +3621,8 @@ mod tests {
             address: Address::from([0x11u8; 20]),
             token0: Address::from([0x01u8; 20]),
             token1: Address::from([0x02u8; 20]),
-            reserve0: U256::from(1000),
-            reserve1: U256::from(2000),
+            reserve0: U112::from(1000),
+            reserve1: U112::from(2000),
             fee_token0: (997, 1000),
             fee_token1: (997, 1000),
             factory: Address::from([0x33u8; 20]),
@@ -4606,7 +3632,10 @@ mod tests {
             fee_denominator: None,
             ..Default::default()
         };
-        state.write().register_v2_pool(&params);
+        state
+            .write()
+            .register_v2_pool(&params)
+            .expect("test setup: V2 registration");
 
         let state2 = bot.state_arc();
         assert_eq!(
@@ -4636,6 +3665,7 @@ mod tests {
             fetcher: None,
             ..Default::default()
         })
+        .expect("test setup: V3 registration")
     }
 
     /// Regression (WZWKKU): `v3_restore_before_block(B)` with `B` strictly past
@@ -4699,7 +3729,7 @@ mod tests {
         // coordinator proceeds to `restore_pool_before_block` →
         // `v3_restore_before_block`.
         assert!(core.has_state_prior_to(pool_id, 12));
-        let result = core.v3_restore_before_block(pool_id, 12);
+        let result = core.restore_pool_before_block(pool_id, 12);
         assert!(
             result.is_some(),
             "restore returns Some even on the no-op path"
@@ -4735,7 +3765,7 @@ mod tests {
     /// caller must buffer events on the SAME core before calling this.
     fn register_v3_on_core(core: &mut BotState, pool_addr: Address, update_block: u64) -> u64 {
         use crate::bot_core::{RegisterV3PoolParams, TickInfo};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use alloy::primitives::{I256, U128};
         let mut tick_data = HashMap::new();
         tick_data.insert(
@@ -4762,6 +3792,7 @@ mod tests {
             fetcher: None,
             ..Default::default()
         })
+        .expect("test setup: V3 registration")
     }
 
     /// Regression (HO3GWT, V3 backfill buffer): a Mint buffered during the
@@ -4819,7 +3850,7 @@ mod tests {
 
         // 4. Restore before block B → rolls back the buffered Mint to the
         //    registration snapshot.
-        core.v3_restore_before_block(pool_id, block_b);
+        core.restore_pool_before_block(pool_id, block_b);
         let s = core.get_v3_pool(pool_id).expect("registered");
         let t60 = s.tick_data.get(&60).expect("tick 60 still present");
         assert_eq!(
@@ -4872,7 +3903,7 @@ mod tests {
             assert!(s.tick_data.contains_key(&120));
         }
 
-        core.v3_restore_before_block(pool_id, block_b);
+        core.restore_pool_before_block(pool_id, block_b);
         let s = core.get_v3_pool(pool_id).expect("registered");
         assert_eq!(
             s.tick_data.get(&60).expect("t60").liquidity_gross,
@@ -4892,11 +3923,11 @@ mod tests {
     #[test]
     fn apply_backfill_buffer_v4_journals_and_advances_update_block() {
         use crate::bot_core::{RegisterV4PoolParams, TickInfo, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use alloy::primitives::{I256, U128};
 
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let block_b = 9u64;
 
         // 1. Pre-registration: buffer a backfill ModifyLiquidity at [60,120].
@@ -4964,7 +3995,7 @@ mod tests {
         }
 
         // 4. Restore before block B → rolls back the ModifyLiquidity.
-        core.v4_restore_before_block(pool_id, block_b);
+        core.restore_pool_before_block(pool_id, block_b);
         let s = core.get_v4_pool(pool_id).expect("registered");
         assert_eq!(
             s.tick_data.get(&60).expect("t60").liquidity_gross,
@@ -4986,7 +4017,7 @@ mod tests {
     #[test]
     fn register_v4_pool_rejects_amount_modifying_hook_with_typed_error() {
         use crate::bot_core::{RegisterV4PoolError, RegisterV4PoolParams, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use std::collections::HashMap;
 
         let mut core = BotState::new();
@@ -5022,7 +4053,7 @@ mod tests {
     #[test]
     fn register_v4_pool_rejects_dynamic_fee_with_typed_error() {
         use crate::bot_core::{RegisterV4PoolError, RegisterV4PoolParams, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use std::collections::HashMap;
 
         let mut core = BotState::new();
@@ -5059,11 +4090,11 @@ mod tests {
     #[test]
     fn register_v4_pool_rejects_duplicate_with_already_registered_variant() {
         use crate::bot_core::{RegisterV4PoolError, RegisterV4PoolParams, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use std::collections::HashMap;
 
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let mut core = BotState::new();
         let params = RegisterV4PoolParams {
             pool_manager,
@@ -5099,6 +4130,148 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Spec-bound admission (epic WOYYS2 / task K3IICB).
+    // Mirrors the V2/V3 spec-bound tests: `register_v4_pool` now rejects
+    // out-of-solidity-bounds `sqrt_price_x96` / `tick` / V4 `fee` /
+    // `tick_spacing` with a typed `RegisterV4PoolError::SpecViolation`, ahead
+    // of the existing `HookedPool` / `DynamicFee` / `AlreadyRegistered`
+    // rejections. The four V4 spec validators (`validate_sqrt_price` /
+    // `validate_tick` / `validate_v4_fee` / `validate_tick_spacing`) are the
+    // same family-agnostic CL validators V3 uses (V4 shares TickMath); only
+    // `validate_v4_fee` is V4-specific (the `0x800000` high bit flags a
+    // dynamic-fee pool, which `DynamicFee` rejects upstream as a more specific
+    // typed variant).
+    // -----------------------------------------------------------------------
+
+    /// Baseline in-spec V4 params at tick 0, srqt=1<<96, fee=500,
+    /// `tick_spacing=10`. Each spec-violation test below derives a
+    /// broken-on-one-field copy.
+    fn make_v4_params_in_spec() -> crate::bot_core::RegisterV4PoolParams {
+        use crate::bot_core::{RegisterV4PoolParams, V4PoolKey};
+        use crate::solvers::arb_engine::PoolTickCoverage;
+        use std::collections::HashMap;
+        RegisterV4PoolParams {
+            pool_manager: Address::from([0x44u8; 20]),
+            pool_id: [0xeeu8; 32],
+            pool_key: V4PoolKey {
+                currency0: Address::ZERO,
+                currency1: Address::from([1u8; 20]),
+                fee: 500,
+                tick_spacing: 10,
+                hooks: Address::ZERO,
+            },
+            hook_flags: 0,
+            sqrt_price_x96: U256::from(1u128) << 96,
+            liquidity: 1_000_000,
+            tick: 0,
+            tick_data: HashMap::new(),
+            update_block: 0,
+            coverage: PoolTickCoverage::Sparse,
+            fetcher: None,
+        }
+    }
+
+    #[test]
+    fn register_v4_pool_rejects_sqrt_price_at_max_as_spec_violation() {
+        use crate::bot_core::RegisterV4PoolError;
+        let mut core = BotState::new();
+        let mut params = make_v4_params_in_spec();
+        // Distinct pool_id so the duplicate-registered guard never fires if the
+        // previous test's params linger in core (defensive; core is fresh here).
+        params.pool_id = [0xe1u8; 32];
+        params.sqrt_price_x96 = U256::from(degenbot_cl_math::cl_lib::tick_math::MAX_SQRT_RATIO);
+        assert!(
+            matches! {
+                core.register_v4_pool(&params),
+                Err(RegisterV4PoolError::SpecViolation(v)) if v.field == "sqrtPriceX96",
+            },
+            "sqrtPriceX96 == MAX_SQRT_RATIO surfaces a V4 typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v4_pool_rejects_sqrt_price_below_min_as_spec_violation() {
+        use crate::bot_core::RegisterV4PoolError;
+        let mut core = BotState::new();
+        let mut params = make_v4_params_in_spec();
+        params.pool_id = [0xe2u8; 32];
+        params.sqrt_price_x96 =
+            U256::from(degenbot_cl_math::cl_lib::tick_math::MIN_SQRT_RATIO) - uint!(1_U256);
+        assert!(
+            matches! {
+                core.register_v4_pool(&params),
+                Err(RegisterV4PoolError::SpecViolation(v)) if v.field == "sqrtPriceX96",
+            },
+            "sqrtPriceX96 < MIN_SQRT_RATIO surfaces a V4 typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v4_pool_rejects_tick_below_min_as_spec_violation() {
+        use crate::bot_core::RegisterV4PoolError;
+        let mut core = BotState::new();
+        let mut params = make_v4_params_in_spec();
+        params.pool_id = [0xe3u8; 32];
+        params.tick = degenbot_cl_math::cl_lib::tick_math::MIN_TICK - 1;
+        assert!(
+            matches! {
+                core.register_v4_pool(&params),
+                Err(RegisterV4PoolError::SpecViolation(v)) if v.field == "tick",
+            },
+            "tick < MIN_TICK surfaces a V4 typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v4_pool_rejects_fee_at_v4_max_as_spec_violation() {
+        // The V4 fee bound is `< 1 << 24` (uint24 width; the `0x800000` high
+        // bit is the dynamic-fee flag, separately rejected as `DynamicFee`).
+        // A fee of `1 << 24` itself is out-of-spec for V4 — distinct from a
+        // dynamic-fee flag, and surfaces as a `SpecViolation`, not `DynamicFee`.
+        use crate::bot_core::RegisterV4PoolError;
+        let mut core = BotState::new();
+        let mut params = make_v4_params_in_spec();
+        params.pool_id = [0xe4u8; 32];
+        params.pool_key.fee = ::degenbot_pools::spec_bounds::V4_FEE_MAX;
+        assert!(
+            matches! {
+                core.register_v4_pool(&params),
+                Err(RegisterV4PoolError::SpecViolation(v)) if v.field == "fee",
+            },
+            "V4 fee >= 1 << 24 surfaces a V4 typed SpecViolation (not DynamicFee)"
+        );
+    }
+
+    #[test]
+    fn register_v4_pool_rejects_tick_spacing_out_of_range_as_spec_violation() {
+        use crate::bot_core::RegisterV4PoolError;
+        let mut core = BotState::new();
+        let mut params = make_v4_params_in_spec();
+        params.pool_id = [0xe5u8; 32];
+        params.pool_key.tick_spacing = ::degenbot_pools::spec_bounds::MAX_TICK_SPACING + 1;
+        assert!(
+            matches! {
+                core.register_v4_pool(&params),
+                Err(RegisterV4PoolError::SpecViolation(v)) if v.field == "tickSpacing",
+            },
+            "tickSpacing > MAX_TICK_SPACING surfaces a V4 typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v4_pool_accepts_in_spec_params() {
+        // Green companion for the V4 reject tests above: baseline
+        // in-spec V4 params must register OK (and reach the
+        // `AlreadyRegistered` guard cleanly past the spec validators).
+        let mut core = BotState::new();
+        let params = make_v4_params_in_spec();
+        let pool_id = core
+            .register_v4_pool(&params)
+            .expect("in-spec V4 params must register");
+        assert!(pool_id > 0, "registration returns a non-zero pool_id");
+    }
+
     /// Regression (RAJ3PP): `PyLiquidityPool.apply_swap` routed V4 pools into
     /// `apply_v3_swap_by_pool_id`, which matches `PoolEntry::V3` only and
     /// silently no-op'd on `PoolEntry::V4` — a Python-side V4 update path
@@ -5111,10 +4284,10 @@ mod tests {
     #[test]
     fn apply_swap_by_pool_id_routes_to_v4_and_matches_apply_v4_swap() {
         use crate::bot_core::{RegisterV4PoolParams, V4PoolKey, V4SwapUpdate};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
 
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0x66u8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0x66u8; 32];
         let block_b = 7u64;
 
         let make_params = || RegisterV4PoolParams {
@@ -5199,11 +4372,11 @@ mod tests {
     #[test]
     fn apply_liquidity_update_by_pool_id_routes_to_v4_and_applies_ticks() {
         use crate::bot_core::{RegisterV4PoolParams, TickInfo, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use alloy::primitives::{I256, U128};
 
         let pool_manager = Address::from([0x55u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0x77u8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0x77u8; 32];
         let block_b = 5u64;
 
         // Pre-seed tick 60 (gross=100, net=+100); tick 120 absent.
@@ -5286,16 +4459,16 @@ mod tests {
     /// which returns `None` for `PoolEntry::V4` — silently dropping V4 reads
     /// (the read-side twin of the RAJ3PP write-side bug). The fix is the
     /// family-dispatching `BotState::get_v3_or_v4_pool` accessor returning a
-    /// `&dyn V3FamilyPool`. This pins both halves of the AC: a V4 pool
+    /// `&dyn ConcentratedLiquidityPool`. This pins both halves of the AC: a V4 pool
     /// returns a non-`None` scalar view, and the scalars match a direct
     /// `apply_v4_swap` on the same inputs.
     #[test]
     fn get_v3_or_v4_pool_reads_v4_scalars_matching_apply_v4_swap() {
         use crate::bot_core::{RegisterV4PoolParams, V4PoolKey, V4SwapUpdate};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
 
         let pool_manager = Address::from([0x88u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0x99u8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0x99u8; 32];
         let block_b = 11u64;
 
         let make_params = || RegisterV4PoolParams {
@@ -5348,7 +4521,7 @@ mod tests {
         assert_eq!(view_a.liquidity(), 9_000_000);
         assert_eq!(view_a.tick(), -240);
         assert_eq!(view_a.update_block(), block_b);
-        // Immutable V4 key fields surface from `pool_key` (the V3FamilyPool
+        // Immutable V4 key fields surface from `pool_key` (the ConcentratedLiquidityPool
         // reader trait was slimmed to mutable-only scalars in the V3/V4
         // identity/state split; identity reads go through the family-specific
         // getter rather than the dyn-dispatch view).
@@ -5388,11 +4561,11 @@ mod tests {
     #[test]
     fn get_v3_or_v4_pool_reads_v4_tick_data_matching_apply_v4_liquidity_update() {
         use crate::bot_core::{RegisterV4PoolParams, TickInfo, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
         use alloy::primitives::{I256, U128};
 
         let pool_manager = Address::from([0xaau8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xbbu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xbbu8; 32];
         let block_b = 13u64;
 
         // Pre-seed tick 60 (gross=100, net=+100); tick 120 absent.
@@ -5486,25 +4659,27 @@ mod tests {
     #[test]
     fn v3_restore_before_block_after_same_block_multi_swap_lands_on_pre_block() {
         use crate::bot_core::RegisterV3PoolParams;
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
 
         let mut core = BotState::new();
-        let pool_id = core.register_v3_pool(&RegisterV3PoolParams {
-            address: Address::from([0xf7u8; 20]),
-            token0: Address::ZERO,
-            token1: Address::from([1u8; 20]),
-            fee: 500,
-            tick_spacing: 10,
-            factory: Address::ZERO,
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 1_000_000,
-            tick: 0,
-            tick_data: HashMap::new(),
-            update_block: 0,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: None,
-            ..Default::default()
-        });
+        let pool_id = core
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: Address::from([0xf7u8; 20]),
+                token0: Address::ZERO,
+                token1: Address::from([1u8; 20]),
+                fee: 500,
+                tick_spacing: 10,
+                factory: Address::ZERO,
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 1_000_000,
+                tick: 0,
+                tick_data: HashMap::new(),
+                update_block: 0,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: None,
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
 
         let block_b = 9u64;
         // Two same-block Swaps with distinct scalars.
@@ -5534,7 +4709,7 @@ mod tests {
         // Roll back block B. Pre-fix this returned post-first-Swap scalars
         // (2<<96, 2_000_000, -10); the fix must land on the pre-B (registration)
         // state (1<<96, 1_000_000, 0).
-        let _ = core.v3_restore_before_block(pool_id, block_b);
+        let _ = core.restore_pool_before_block(pool_id, block_b);
         let s = core.get_v3_pool(pool_id).expect("registered after restore");
         assert_eq!(
             s.sqrt_price_x96,
@@ -5552,8 +4727,10 @@ mod tests {
     #[test]
     fn unregister_v2_pool_returns_true_then_re_register_allocates_fresh_id() {
         let mut core = BotState::new();
-        let params = make_params(U256::from(1000), U256::from(2000));
-        let first_id = core.register_v2_pool(&params);
+        let params = make_params(U112::from(1000), U112::from(2000));
+        let first_id = core
+            .register_v2_pool(&params)
+            .expect("test setup: V2 registration");
         assert_eq!(core.pool_count(), 1);
 
         // Unregister the V2 pool.
@@ -5568,7 +4745,9 @@ mod tests {
 
         // Re-register: must succeed (no panic) and allocate a fresh id
         // (retired ids are NOT reused — ADR-007 U3).
-        let second_id = core.register_v2_pool(&params);
+        let second_id = core
+            .register_v2_pool(&params)
+            .expect("test setup: V2 registration");
         assert_ne!(
             second_id, first_id,
             "re-register must allocate a fresh id (retired, not reused)",
@@ -5580,13 +4759,176 @@ mod tests {
     fn unregister_pool_on_unknown_address_returns_false_silently() {
         let mut core = BotState::new();
         // Register one pool at make_pool_addr().
-        let _ = core.register_v2_pool(&make_params(U256::from(1000), U256::from(2000)));
+        let _ = core
+            .register_v2_pool(&make_params(U112::from(1000), U112::from(2000)))
+            .expect("test setup: V2 registration");
         let unknown = Address::from([0x99u8; 20]);
 
         let removed = core.unregister_pool(unknown, None);
         assert!(!removed, "unregister on an unknown address returns false");
         // No mutation occurred.
         assert_eq!(core.pool_count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Spec-bound admission (epic WOYYS2 / task MSTAT2).
+    // `register_v2_pool` is a typed `Result` that rejects (a) duplicate
+    // address and (b) out-of-spec `uint112` reserves, rather than panicking
+    // on (a) and silently degrading to `U256::MAX` on (b).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn register_v2_pool_rejects_duplicate_address_as_already_registered() {
+        let mut core = BotState::new();
+        let params = make_params(U112::from(1000), U112::from(2000));
+        let _ok = core.register_v2_pool(&params).expect("first registration");
+        // Second registration at the same address: prior impl `assert!`-panicked;
+        // now returns `Err(AlreadyRegistered { address })`.
+        assert!(
+            matches! {
+                core.register_v2_pool(&params),
+                Err(RegisterV2PoolError::AlreadyRegistered { address }) if address == params.address,
+            },
+            "duplicate-address registration surfaces a typed Err, not a panic"
+        );
+    }
+
+    // Note: the overlarge-reserve rejection that lived here pre-ZPHT6X has
+    // moved to the `narrow_v2_reserve` ingestion seam (PyO3 `sync_reserves` /
+    // `register_*_pool` paths + the V2 Sync decoder) — see
+    // `degenbot_pools::spec_bounds::narrow_v2_reserve` and its tests. With
+    // `V2PoolState`/`RegisterV2PoolParams.reserve0/1` typed `U112`, an
+    // overlarge value cannot be constructed at the `register_v2_pool` layer
+    // (the type system enforces the `uint112` bound), so there is nothing to
+    // test here.
+
+    // -----------------------------------------------------------------------
+    // Spec-bound admission (epic WOYYS2 / task 24KNGF).
+    // `register_v3_pool` is a typed `Result` that rejects (a) duplicate
+    // address and (b) out-of-spec `sqrtPriceX96` / `tick` / `fee` /
+    // `tickSpacing`, rather than `assert!`-panicking on (a) and silently
+    // accepting impossible CL config on (b). Mirrors the V2 tests above.
+    // -----------------------------------------------------------------------
+
+    /// Baseline in-spec V3 params at tick 0, `sqrt=1<<96`, `fee=3_000`,
+    /// `tick_spacing=60`, undirectional tokens. Each spec-violation test below
+    /// derives a fresh broken-on-one-field copy.
+    fn make_v3_params_in_spec() -> RegisterV3PoolParams {
+        RegisterV3PoolParams {
+            address: make_pool_addr(),
+            token0: make_token0(),
+            token1: make_token1(),
+            fee: 3_000,
+            tick_spacing: 60,
+            factory: make_factory(),
+            sqrt_price_x96: U256::from(1u64) << 96,
+            liquidity: 1_000_000,
+            tick: 0,
+            tick_data: std::collections::HashMap::new(),
+            update_block: 0,
+            coverage: PoolTickCoverage::Sparse,
+            fetcher: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_duplicate_address_as_already_registered() {
+        let mut core = BotState::new();
+        let params = make_v3_params_in_spec();
+        let _ok = core.register_v3_pool(&params).expect("first registration");
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::AlreadyRegistered { address }) if address == params.address,
+            },
+            "duplicate-address registration surfaces a typed Err, not an assert! panic"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_sqrt_price_at_max_as_spec_violation() {
+        let mut core = BotState::new();
+        let mut params = make_v3_params_in_spec();
+        params.sqrt_price_x96 = U256::from(degenbot_cl_math::cl_lib::tick_math::MAX_SQRT_RATIO);
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::SpecViolation(v)) if v.field == "sqrtPriceX96",
+            },
+            "sqrtPriceX96 == MAX_SQRT_RATIO surfaces a typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_sqrt_price_below_min_as_spec_violation() {
+        let mut core = BotState::new();
+        let mut params = make_v3_params_in_spec();
+        params.sqrt_price_x96 =
+            U256::from(degenbot_cl_math::cl_lib::tick_math::MIN_SQRT_RATIO) - uint!(1_U256);
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::SpecViolation(v)) if v.field == "sqrtPriceX96",
+            },
+            "sqrtPriceX96 < MIN_SQRT_RATIO surfaces a typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_tick_below_min_as_spec_violation() {
+        let mut core = BotState::new();
+        let mut params = make_v3_params_in_spec();
+        params.tick = degenbot_cl_math::cl_lib::tick_math::MIN_TICK - 1;
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::SpecViolation(v)) if v.field == "tick",
+            },
+            "tick < MIN_TICK surfaces a typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_fee_at_max_as_spec_violation() {
+        let mut core = BotState::new();
+        let mut params = make_v3_params_in_spec();
+        params.fee = ::degenbot_pools::spec_bounds::V3_FEE_MAX;
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::SpecViolation(v)) if v.field == "fee",
+            },
+            "fee >= 1_000_000 surfaces a typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_rejects_tick_spacing_out_of_range_as_spec_violation() {
+        let mut core = BotState::new();
+        let mut params = make_v3_params_in_spec();
+        params.tick_spacing = ::degenbot_pools::spec_bounds::MAX_TICK_SPACING + 1;
+        assert!(
+            matches! {
+                core.register_v3_pool(&params),
+                Err(RegisterV3PoolError::SpecViolation(v)) if v.field == "tickSpacing",
+            },
+            "tickSpacing > MAX_TICK_SPACING surfaces a typed SpecViolation"
+        );
+    }
+
+    #[test]
+    fn register_v3_pool_accepts_in_spec_params() {
+        // Green companion for the reject tests above: each validator's accept
+        // boundary (sqrtPriceX96 in [MIN_SQRT_RATIO, MAX_SQRT_RATIO), tick in
+        // [MIN_TICK, MAX_TICK], fee < 1_000_000, tickSpacing in [1, 32_767])
+        // composes — the baseline `make_v3_params_in_spec()` must register OK.
+        let mut core = BotState::new();
+        let params = make_v3_params_in_spec();
+        let pool_id = core
+            .register_v3_pool(&params)
+            .expect("in-spec V3 params must register");
+        assert!(pool_id > 0, "registration returns a non-zero pool_id");
     }
 
     #[test]
@@ -5608,22 +4950,24 @@ mod tests {
         // (drain is caller-driven via `apply_backfill_buffer_v3`); the buffer
         // entry persists. This mirrors the live pump path where events can
         // arrive pre-registration and stay buffered.
-        let _ = core.register_v3_pool(&RegisterV3PoolParams {
-            address: v3_addr,
-            token0: make_token0(),
-            token1: make_token1(),
-            fee: 3_000,
-            tick_spacing: 60,
-            factory: make_factory(),
-            sqrt_price_x96: U256::from(1u64) << 96,
-            liquidity: 0,
-            tick: 0,
-            tick_data: HashMap::new(),
-            update_block: 0,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: None,
-            ..Default::default()
-        });
+        let _ = core
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: v3_addr,
+                token0: make_token0(),
+                token1: make_token1(),
+                fee: 3_000,
+                tick_spacing: 60,
+                factory: make_factory(),
+                sqrt_price_x96: U256::from(1u64) << 96,
+                liquidity: 0,
+                tick: 0,
+                tick_data: HashMap::new(),
+                update_block: 0,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: None,
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
         assert_eq!(
             core.buffered_v3_event_count(&v3_addr),
             1,
@@ -5684,7 +5028,8 @@ mod tests {
             coverage: PoolTickCoverage::Tracked,
             fetcher: None,
             ..Default::default()
-        });
+        })
+        .expect("test setup: V3 registration");
 
         // The seed is pinned at registration for Tracked (snapshot) pools.
         assert_eq!(
@@ -5768,7 +5113,8 @@ mod tests {
             coverage: PoolTickCoverage::Tracked,
             fetcher: None,
             ..Default::default()
-        });
+        })
+        .expect("test setup: V3 registration");
 
         // Pin the post-drain state atomically with the drain (no buffer here →
         // pin == current tick_data == the seed at registration). This is what
@@ -5829,7 +5175,8 @@ mod tests {
             coverage: PoolTickCoverage::Sparse,
             fetcher: None,
             ..Default::default()
-        });
+        })
+        .expect("test setup: V3 registration");
         core.pin_v3_post_drain_snapshot(v3_addr);
         assert_eq!(
             core.take_v3_post_drain_snapshot(v3_addr),
@@ -5904,7 +5251,8 @@ mod tests {
             coverage: PoolTickCoverage::Tracked,
             fetcher: None,
             ..Default::default()
-        });
+        })
+        .expect("test setup: V3 registration");
 
         // Drain both buffers + pin — exactly what `apply_buffer_v3` does
         // inside its single `core.write()` hold.
@@ -5951,7 +5299,7 @@ mod tests {
         use alloy::primitives::{I256, U128};
         use degenbot_cl_math as _;
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let mut core = BotState::new();
 
         let gross: u128 = 1_000_000;
@@ -6049,7 +5397,7 @@ mod tests {
         use alloy::primitives::{I256, U128};
         use degenbot_cl_math as _;
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let mut core = BotState::new();
 
         let gross: u128 = 1_000_000;
@@ -6140,7 +5488,7 @@ mod tests {
     fn v4_post_drain_snapshot_is_none_for_sparse_pools() {
         use crate::bot_core::{RegisterV4PoolParams, V4PoolKey};
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let mut core = BotState::new();
         core.register_v4_pool(&RegisterV4PoolParams {
             pool_manager,
@@ -6173,10 +5521,10 @@ mod tests {
     #[test]
     fn unregister_v4_pool_by_tuple_key_discards_buffered_modify_liquidity() {
         use crate::bot_core::{RegisterV4PoolParams, V4PoolKey};
-        use crate::solvers::uniswap_engine::PoolTickCoverage;
+        use crate::solvers::arb_engine::PoolTickCoverage;
 
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let mut core = BotState::new();
 
         let pool_id_u64 = core
@@ -6244,7 +5592,7 @@ mod tests {
         // (via a fake fetcher) and retries; the result must match the direct
         // no-miss path (word 0 now known after the fetch merge) and must be
         // non-zero (not the miss sentinel).
-        use crate::bot_core::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
+        use ::degenbot_pools::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
 
         #[derive(Debug)]
         struct FakeFetcher;
@@ -6264,22 +5612,24 @@ mod tests {
         }
 
         let mut core = BotState::new();
-        let pool_id = core.register_v3_pool(&RegisterV3PoolParams {
-            address: Address::ZERO,
-            token0: Address::ZERO,
-            token1: Address::from([1u8; 20]),
-            fee: 3000,
-            tick_spacing: 60,
-            factory: Address::ZERO,
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 10_000_000_000_000u128,
-            tick: 0,
-            tick_data: HashMap::new(), // fully sparse — word 0 unknown
-            update_block: 0,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: Some(std::sync::Arc::new(FakeFetcher)),
-            ..Default::default()
-        });
+        let pool_id = core
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: Address::ZERO,
+                token0: Address::ZERO,
+                token1: Address::from([1u8; 20]),
+                fee: 3000,
+                tick_spacing: 60,
+                factory: Address::ZERO,
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 10_000_000_000_000u128,
+                tick: 0,
+                tick_data: HashMap::new(), // fully sparse — word 0 unknown
+                update_block: 0,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: Some(std::sync::Arc::new(FakeFetcher)),
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
 
         // Without the fetch+retry loop: the starting word (0) is unknown →
         // miss → ZERO (calculate_tokens_out does NOT use the stored fetcher).
@@ -6324,7 +5674,7 @@ mod tests {
         // If the fetcher cannot satisfy the missing word (RPC error / out of
         // range), the calc must give up with `U256::ZERO` rather than panic or
         // spin. Covers the `Err(_)` arm of the fetch+retry loop.
-        use crate::bot_core::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
+        use ::degenbot_pools::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
 
         #[derive(Debug)]
         struct FailingFetcher;
@@ -6340,22 +5690,24 @@ mod tests {
         }
 
         let mut core = BotState::new();
-        let pool_id = core.register_v3_pool(&RegisterV3PoolParams {
-            address: Address::ZERO,
-            token0: Address::ZERO,
-            token1: Address::from([1u8; 20]),
-            fee: 3000,
-            tick_spacing: 60,
-            factory: Address::ZERO,
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 10_000_000_000_000u128,
-            tick: 0,
-            tick_data: HashMap::new(),
-            update_block: 0,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: Some(std::sync::Arc::new(FailingFetcher)),
-            ..Default::default()
-        });
+        let pool_id = core
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: Address::ZERO,
+                token0: Address::ZERO,
+                token1: Address::from([1u8; 20]),
+                fee: 3000,
+                tick_spacing: 60,
+                factory: Address::ZERO,
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 10_000_000_000_000u128,
+                tick: 0,
+                tick_data: HashMap::new(),
+                update_block: 0,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: Some(std::sync::Arc::new(FailingFetcher)),
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
 
         assert_eq!(
             core.calculate_tokens_out_with_fetch(pool_id, true, U256::from(1000u64), 0,),
@@ -6371,7 +5723,7 @@ mod tests {
         // the fetcher — the empty word survived in the bitmap (ADR-006/005
         // stored-tick-fetcher task MLJT4V). This is the bitmap empty-word fix
         // that lets the companion delete `_bitmap_override`.
-        use crate::bot_core::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
+        use ::degenbot_pools::tick_fetch::{FetchTickWordError, FetchedTickWord, TickWordFetcher};
         use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
 
@@ -6398,22 +5750,24 @@ mod tests {
             calls: AtomicU32::new(0),
         });
         let mut core = BotState::new();
-        let pool_id = core.register_v3_pool(&RegisterV3PoolParams {
-            address: Address::ZERO,
-            token0: Address::ZERO,
-            token1: Address::from([1u8; 20]),
-            fee: 3000,
-            tick_spacing: 60,
-            factory: Address::ZERO,
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 10_000_000_000_000u128,
-            tick: 0,
-            tick_data: HashMap::new(),
-            update_block: 0,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: Some(counter.clone() as Arc<dyn TickWordFetcher>),
-            ..Default::default()
-        });
+        let pool_id = core
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: Address::ZERO,
+                token0: Address::ZERO,
+                token1: Address::from([1u8; 20]),
+                fee: 3000,
+                tick_spacing: 60,
+                factory: Address::ZERO,
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 10_000_000_000_000u128,
+                tick: 0,
+                tick_data: HashMap::new(),
+                update_block: 0,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: Some(counter.clone() as Arc<dyn TickWordFetcher>),
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
 
         // First solve: misses word 0, fetches (empty), retries → computes.
         let first = core.calculate_tokens_out_with_fetch(pool_id, true, U256::from(1000u64), 0);
@@ -6431,6 +5785,67 @@ mod tests {
             counter.calls.load(Ordering::SeqCst),
             calls_after_first,
             "second solve must NOT re-invoke the fetcher — the empty word survived in known_bitmap_words"
+        );
+    }
+    /// B3OROH / epic `XEANMB`: `Bot::load_snapshot_from_db` against the parity
+    /// fixture DB (`crates/degenbot-db/tests/fixtures/parity.db`) — opens a
+    /// `SnapshotDb` (held read tx) + records `S = min(newest_update_block(V3),
+    /// V4)` read INSIDE the held tx. The `SnapshotStore` is NOT populated
+    /// (the Store is retired by epic `XEANMB`; the held tx replaces it).
+    #[test]
+    fn load_snapshot_from_db_populates_store_and_seed_block() {
+        use degenbot_db::snapshot::TickMapDb;
+        use std::path::PathBuf;
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../degenbot-db/tests/fixtures/parity.db");
+        if !fixture.exists() {
+            // The fixture lives in the sibling crate; skip if absent.
+            eprintln!("skipping: parity fixture not at {}", fixture.display());
+            return;
+        }
+        let (snap, _state) = degenbot_db::snapshot_db::SnapshotDb::open(&fixture).unwrap();
+        let bot = Bot::new(8453);
+        bot.load_snapshot_from_db(&snap, 8453).unwrap();
+
+        let state = bot.state_arc();
+        let core = state.read();
+        // S = min(newest V3, newest V4). The parity fixture records both; the
+        // exact S is whatever the fixture DB carries (we assert it's Some and
+        // matches the per-family min computed independently inside the SAME
+        // held tx).
+        let v3 = snap
+            .fetch_newest_update_block(8453, degenbot_db::read::ExchangeFamily::V3)
+            .unwrap();
+        let v4 = snap
+            .fetch_newest_update_block(8453, degenbot_db::read::ExchangeFamily::V4)
+            .unwrap();
+        let expected_s = match (v3, v4) {
+            (Some(a), Some(b)) => Some(u64::try_from(a.min(b)).expect("block number non-negative")),
+            (Some(a), None) => Some(u64::try_from(a).expect("block number non-negative")),
+            (None, Some(b)) => Some(u64::try_from(b).expect("block number non-negative")),
+            (None, None) => None,
+        };
+        assert_eq!(
+            core.snapshot_seed_block(),
+            expected_s,
+            "snapshot_seed_block must be min(newest_update_block(V3), V4)"
+        );
+    }
+    /// B3OROH: `load_snapshot_from_db` on an empty chain → no snapshot loaded,
+    /// S = None (cold-start path: the pump will anchor on `first_observed_block`).
+    #[test]
+    fn load_snapshot_from_db_empty_chain_is_cold_start() {
+        let (snap, _state) = degenbot_db::snapshot_db::SnapshotDb::open_in_memory().unwrap();
+        let bot = Bot::new(1);
+        bot.load_snapshot_from_db(&snap, 1).unwrap();
+        let state = bot.state_arc();
+        let core = state.read();
+        // No pools → no seed block (cold-start path: the pump anchors on
+        // `first_observed_block`).
+        assert_eq!(
+            core.snapshot_seed_block(),
+            None,
+            "empty chain → no seed block (cold start)"
         );
     }
 }

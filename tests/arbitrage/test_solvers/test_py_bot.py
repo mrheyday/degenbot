@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from degenbot.degenbot_rs import PyBot
+from degenbot.bot import PyBot
 
 
 class TestPyBotV2Pool:
@@ -505,7 +505,8 @@ class TestV2SwapEncoding:
     def test_encode_swap_matches_python_reference(self):
         """Full byte-level comparison against Python eth_abi output."""
         import eth_abi
-        from web3 import Web3
+
+        from degenbot.crypto import function_selector
 
         core, pool_id = self._make_core_with_pool()
         result = core.encode_swap(
@@ -515,7 +516,7 @@ class TestV2SwapEncoding:
         _, calldata_hex, _ = result
 
         # Generate reference calldata from Python eth_abi
-        selector = Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+        selector = function_selector("swap(uint256,uint256,address,bytes)")
         reference_data = eth_abi.abi.encode(
             types=["uint256", "uint256", "address", "bytes"],
             args=[0, 181, self.RECIPIENT, b""],
@@ -527,7 +528,8 @@ class TestV2SwapEncoding:
     def test_encode_swap_one_for_zero(self):
         """Encode a token1→token0 swap (amount0Out nonzero)."""
         import eth_abi
-        from web3 import Web3
+
+        from degenbot.crypto import function_selector
 
         core, pool_id = self._make_core_with_pool()
         result = core.encode_swap(
@@ -537,7 +539,7 @@ class TestV2SwapEncoding:
         _, calldata_hex, _ = result
 
         # Generate reference calldata from Python eth_abi
-        selector = Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+        selector = function_selector("swap(uint256,uint256,address,bytes)")
         reference_data = eth_abi.abi.encode(
             types=["uint256", "uint256", "address", "bytes"],
             args=[181, 0, self.RECIPIENT, b""],
@@ -555,7 +557,8 @@ class TestV2SwapEncoding:
     def test_pool_handle_encode_swap(self):
         """Pool handle can also encode swaps."""
         import eth_abi
-        from web3 import Web3
+
+        from degenbot.crypto import function_selector
 
         core, pool_id = self._make_core_with_pool()
         pool = core.get_pool(pool_id)
@@ -566,7 +569,7 @@ class TestV2SwapEncoding:
         _, calldata_hex, _ = result
 
         # Generate reference calldata from Python eth_abi
-        selector = Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+        selector = function_selector("swap(uint256,uint256,address,bytes)")
         reference_data = eth_abi.abi.encode(
             types=["uint256", "uint256", "address", "bytes"],
             args=[0, 181, self.RECIPIENT, b""],
@@ -984,7 +987,7 @@ class TestDexIdentityPresets:
 
     def test_uniswap_v2_preset(self) -> None:
         """UniswapV2 (Ethereum mainnet) — UNISWAP_V2_MAINNET_POOL_INIT_HASH + 3/1000 fee."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         ident = dex_identity("uniswap-v2")
         assert ident is not None
@@ -1001,7 +1004,7 @@ class TestDexIdentityPresets:
 
     def test_pancakeswap_v2_preset_uses_pancakeswap_reserves_struct_and_fee(self) -> None:
         """PancakeSwap — FEE=Fraction(25,10000) → gamma (9975, 10000) + 3-tuple reserves."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         ident = dex_identity("pancakeswap-v2")
         assert ident is not None
@@ -1017,7 +1020,7 @@ class TestDexIdentityPresets:
 
     def test_camelot_v2_volatile_preset_matches_init_hash_classvar(self) -> None:
         """Camelot (Arbitrum) — CAMELOT_ARBITRUM_POOL_INIT_HASH + 0.3% default volatile fee."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         ident = dex_identity("camelot-v2-volatile")
         assert ident is not None
@@ -1031,7 +1034,7 @@ class TestDexIdentityPresets:
 
     def test_aerodrome_v2_volatile_fee_denominator_is_10000(self) -> None:
         """Aerodrome — FEE_DENOMINATOR=10000 (acceptance criterion from the slice spec)."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         ident = dex_identity("aerodrome-v2-volatile")
         assert ident is not None
@@ -1042,7 +1045,7 @@ class TestDexIdentityPresets:
         assert ident.variant == "aerodrome-v2-volatile"
 
     def test_lookup_is_case_insensitive(self) -> None:
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         lower = dex_identity("uniswap-v2")
         upper = dex_identity("UNISWAP-V2")
@@ -1052,7 +1055,7 @@ class TestDexIdentityPresets:
 
     def test_unknown_variant_returns_none(self) -> None:
         """An unrecognized variant returns None — not a PanicException."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         assert dex_identity("curve") is None
         assert dex_identity("") is None
@@ -1060,7 +1063,7 @@ class TestDexIdentityPresets:
 
     def test_all_eight_variants_resolvable(self) -> None:
         """Every preset variant in the slice spec resolves through the seam."""
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         for variant in [
             "uniswap-v2",
@@ -1085,7 +1088,7 @@ class TestDexIdentityPresets:
 
     def test_view_is_frozen(self) -> None:
         """The PyDexIdentity view is read-only (frozen pyclass)."""
-        from degenbot.degenbot_rs import PyDexIdentity, dex_identity
+        from degenbot._ffi.dex_identity import PyDexIdentity, dex_identity
 
         ident = dex_identity("uniswap-v2")
         assert ident is not None
@@ -1094,7 +1097,7 @@ class TestDexIdentityPresets:
             ident.factory = "0x0"  # type: ignore[misc]
 
     def test_repr(self) -> None:
-        from degenbot.degenbot_rs import dex_identity
+        from degenbot._ffi.dex_identity import dex_identity
 
         ident = dex_identity("uniswap-v2")
         assert ident is not None
@@ -1105,7 +1108,7 @@ class TestDexIdentityPresets:
 
     def test_pyconstructor_builds_custom_identity(self) -> None:
         """The PyDexIdentity #[new] constructor builds a custom identity view."""
-        from degenbot.degenbot_rs import PyDexIdentity
+        from degenbot._ffi.dex_identity import PyDexIdentity
 
         ident = PyDexIdentity(
             factory="0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
@@ -1123,7 +1126,7 @@ class TestDexIdentityPresets:
 
     def test_pyconstructor_pancakeswap_reserves_abi_and_unknown_variant(self) -> None:
         """PancakeStyle 3-tuple + unknown-variant ValueError paths."""
-        from degenbot.degenbot_rs import PyDexIdentity
+        from degenbot._ffi.dex_identity import PyDexIdentity
 
         ident = PyDexIdentity(
             factory="0x1097053Fd2ea711dad45caCcc45EfF7548fCB362",

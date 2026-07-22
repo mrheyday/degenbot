@@ -8,24 +8,23 @@ from typing import Any, Protocol, TypedDict
 import pydantic_core
 import tqdm
 import tqdm.asyncio
-from eth_abi.abi import decode as abi_decode
 from eth_typing import ChecksumAddress, HexAddress, HexStr
 from hexbytes import HexBytes
 from sqlalchemy.orm import Session, scoped_session
-from web3 import Web3
-from web3.types import LogReceipt
 
+from degenbot.abi import decode as abi_decode
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.crypto import event_topic
 from degenbot.database.operations import get_scoped_sqlite_session
 from degenbot.database.session_manager import DatabaseSessionManager
-from degenbot.degenbot_rs import PyDatabaseSnapshot
+from degenbot.db import PyDatabaseSnapshot
 from degenbot.exceptions.pool import UnknownPoolId
 from degenbot.logging import logger
-from degenbot.provider.async_adapter import AsyncProviderAdapter
+from degenbot.provider import AlloyProvider, AsyncAlloyProvider
 from degenbot.provider.log_fetching import fetch_logs_retrying, fetch_logs_retrying_async
-from degenbot.provider.sync_adapter import ProviderAdapter
 from degenbot.types.aliases import BlockNumber, ChainId
 from degenbot.types.concrete import KeyedDefaultDict
+from degenbot.types.rpc_types import LogReceipt
 from degenbot.uniswap.abi import UNISWAP_V4_POOL_MANAGER_ABI
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
 from degenbot.uniswap.v4_types import (
@@ -299,8 +298,12 @@ class DatabaseSnapshot:
 class UniswapV4LiquiditySnapshot:
     """Retrieve and maintain liquidity positions for Uniswap V4 pools."""
 
-    UNISWAP_V4_MODIFYLIQUIDITY_EVENT_HASH = HexBytes(
-        Web3().eth.contract(abi=UNISWAP_V4_POOL_MANAGER_ABI).events.ModifyLiquidity().topic,
+    UNISWAP_V4_MODIFYLIQUIDITY_EVENT_HASH = event_topic(
+        next(
+            e
+            for e in UNISWAP_V4_POOL_MANAGER_ABI
+            if e.get("name") == "ModifyLiquidity" and e.get("type") == "event"
+        )
     )
 
     def __init__(self, source: UniswapV4LiquiditySnapshotSource) -> None:
@@ -391,7 +394,7 @@ class UniswapV4LiquiditySnapshot:
         self,
         to_block: BlockNumber,
         *,
-        provider: ProviderAdapter,
+        provider: AlloyProvider,
         blocks_per_request: int | None = None,
     ) -> None:
         """Fetch liquidity events from the block following the last-known event to the target block.
@@ -432,7 +435,7 @@ class UniswapV4LiquiditySnapshot:
         self,
         to_block: BlockNumber,
         *,
-        provider: AsyncProviderAdapter,
+        provider: AsyncAlloyProvider,
         blocks_per_request: int | None = None,
     ) -> None:
         """Async version of fetch_new_events.

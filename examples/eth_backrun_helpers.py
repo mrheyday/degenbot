@@ -6,14 +6,6 @@ import warnings
 from collections.abc import Mapping
 
 from degenbot.arbitrage.verification_retry import VerificationRetryPolicy
-from degenbot.arbitrage.hop_info import (
-    PathInfo,
-    SolidlyHopInfo,
-    V2HopInfo,
-    V3HopInfo,
-    V4HopInfo,
-    build_hops_from_pools,
-)
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.config import resolve_rpc_uris
 from degenbot.constants import ZERO_ADDRESS as _ZERO_ADDRESS
@@ -62,6 +54,16 @@ _ALLOWED_INTERMEDIATE_TOKENS = frozenset({
 _DEFAULT_EXECUTOR_ADDRESS = "0x543C7eF4F2368a9411c94A055e7236E6Dc6f99D5"
 _DEFAULT_INJECTED_ADDRESS = "0x0D6d4c3cF3BD3b769De1821f2BE0d7d99913E4F1"
 _DEFAULT_EXECUTOR_OWNER = "0x9C56a29c7231974c269E24F9FB3c29203039089E"
+
+# Dry-run operator placeholder: a VALID secp256k1 private key + its derived
+# address, used when `mainnet.env` omits `OPERATOR_*` in non-live mode.
+# The (now-eager) `PyTxSigner(key=operator_private_key, chain_id=1)` site
+# rejects the former all-zero placeholder (zero is not a valid scalar) and
+# raised `ValueError: signature error`. The Anvil account-0 key is a
+# well-known valid throwaway that never signs in dry-run: the Rust submit
+# leaf's `dry_run` guard skips `sign_eip1559` for every candidate.
+_DRY_RUN_OPERATOR_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+_DRY_RUN_OPERATOR_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 
 def _verification_retry_policy_from_env(env: Mapping[str, str | None]) -> VerificationRetryPolicy:
@@ -208,11 +210,15 @@ class BackrunConfig:
         operator_private_key = env.get("OPERATOR_PRIVATE_KEY") or ""
         operator_address = _checksum_or_empty(operator_address_raw) if operator_address_raw else ""
         if not live:
-            # dry-run: allow missing operator → zero-address + dummy key
+            # dry-run: allow missing operator → a valid throwaway key + its
+            # derived address (must be a real secp256k1 scalar so the eagerly
+            # constructed `PyTxSigner` doesn't reject it — see the constants'
+            # docstring). The key never signs: the leaf's `dry_run` guard
+            # skips every candidate before reaching `sign_eip1559`.
             if not operator_address:
-                operator_address = _ZERO_ADDRESS
+                operator_address = _DRY_RUN_OPERATOR_ADDRESS
             if not operator_private_key:
-                operator_private_key = "0x" + "0" * 64
+                operator_private_key = _DRY_RUN_OPERATOR_PRIVATE_KEY
         else:
             msg = (
                 "OPERATOR_ADDRESS and OPERATOR_PRIVATE_KEY must be set in mainnet.env for live mode"

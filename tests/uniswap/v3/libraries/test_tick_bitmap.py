@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from degenbot.exceptions.pool import LiquidityMapWordMissing
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
+from degenbot.uniswap.v3_libraries import MAX_TICK, MIN_TICK
 from degenbot.uniswap.v3_libraries.bit_math import least_significant_bit, most_significant_bit
 from degenbot.uniswap.v3_libraries.tick_bitmap import (
     next_initialized_tick_within_one_word,
     position,
 )
-from degenbot.uniswap.v3_libraries import MAX_TICK, MIN_TICK
 
 # Tests adapted from Typescript tests on Uniswap V3 Github repo
 # ref: https://github.com/Uniswap/v3-core/blob/main/test/TickBitmap.spec.ts
@@ -119,9 +119,6 @@ def test_is_initialized():
     _set_initialized(tick_bitmap=tick_bitmap, tick=1 + 256, tick_spacing=1)
     assert is_initialized(tick_bitmap, 257) is True
     assert is_initialized(tick_bitmap, 1) is False
-
-
-
 
 
 def test_next_initialized_tick_within_one_word() -> None:

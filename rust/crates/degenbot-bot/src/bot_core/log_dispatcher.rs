@@ -52,8 +52,8 @@ pub enum DecodedPoolEvent {
     /// V2 `Sync` — `(address, reserve0, reserve1)`.
     V2Sync {
         pool_address: alloy::primitives::Address,
-        reserve0: alloy::primitives::U256,
-        reserve1: alloy::primitives::U256,
+        reserve0: alloy::primitives::aliases::U112,
+        reserve1: alloy::primitives::aliases::U112,
         block_number: u64,
     },
     /// V3 `Swap` — `(address, sqrt_price_x96, liquidity, tick)`.
@@ -75,7 +75,7 @@ pub enum DecodedPoolEvent {
     /// V4 `Swap` — `(pool_manager, pool_id, sqrt_price_x96, liquidity, tick)`.
     V4Swap {
         pool_manager: alloy::primitives::Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         sqrt_price_x96: alloy::primitives::U256,
         liquidity: alloy::primitives::U256,
         tick: i32,
@@ -84,7 +84,7 @@ pub enum DecodedPoolEvent {
     /// V4 `ModifyLiquidity` — `(pool_manager, pool_id, tick_lower, tick_upper, delta)`.
     V4Liquidity {
         pool_manager: alloy::primitives::Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         tick_lower: i32,
         tick_upper: i32,
         liquidity_delta: alloy::primitives::I256,
@@ -362,14 +362,27 @@ impl LogDispatcher {
     /// any subscriber notify — subscribers take only their own lock (D2's
     /// engine-then-core order preserved by not nesting).
     pub fn dispatch(&self, log: &Log, state: &Arc<parking_lot::RwLock<BotState>>) {
-        let Some(decoded) = self.decoders.iter().find_map(|d| d.try_decode(log)) else {
+        // Phase-labeled `measure_block!` for the rolling-start dirty-path
+        // diagnostic: distinguishes "decode miss" (no decoder recognized the
+        // log) from "apply miss" (pool not registered in BotState → no-op)
+        // from "notify miss" (pool registered but no subscriber attached).
+        // Each appears as its own row in the hotpath functions-timing table
+        // with a per-phase call count — zero-cost no-ops when the `hotpath`
+        // feature is off. See `src/profiling.rs`.
+        let decoded = hotpath::measure_block!("dispatch.decode", {
+            self.decoders.iter().find_map(|d| d.try_decode(log))
+        });
+        let Some(decoded) = decoded else {
             return;
         };
         // Apply under the write guard, then RELEASE before notifying.
-        let Some(pool_id) = decoded.apply(&mut state.write()) else {
+        let pool_id = hotpath::measure_block!("dispatch.apply", decoded.apply(&mut state.write()));
+        let Some(pool_id) = pool_id else {
             return;
         };
-        self.notify(pool_id);
+        hotpath::measure_block!("dispatch.notify", {
+            self.notify(pool_id);
+        });
     }
 
     /// Decode `log` into a [`DecodedPoolEvent`] via the decoder registry, or
@@ -421,8 +434,8 @@ mod tests {
             if log.topics().first().map(|t| t.0) == Some(SENTRY_TOPIC) {
                 Some(DecodedPoolEvent::V2Sync {
                     pool_address: self.pool_address,
-                    reserve0: alloy::primitives::U256::from(1),
-                    reserve1: alloy::primitives::U256::from(2),
+                    reserve0: alloy::primitives::aliases::U112::from(1),
+                    reserve1: alloy::primitives::aliases::U112::from(2),
                     block_number: 0,
                 })
             } else {
@@ -498,8 +511,8 @@ mod tests {
                 address: pool_address,
                 token0: alloy::primitives::Address::ZERO,
                 token1: alloy::primitives::Address::ZERO,
-                reserve0: alloy::primitives::U256::from(1000),
-                reserve1: alloy::primitives::U256::from(2000),
+                reserve0: alloy::primitives::aliases::U112::from(1000),
+                reserve1: alloy::primitives::aliases::U112::from(2000),
                 fee_token0: (997, 1000),
                 fee_token1: (997, 1000),
                 factory: alloy::primitives::Address::ZERO,
@@ -508,7 +521,8 @@ mod tests {
                 stable_swap: false,
                 fee_denominator: None,
                 ..Default::default()
-            });
+            })
+            .expect("test setup: V2 registration");
 
         let mut dispatcher = LogDispatcher::new();
         dispatcher.register_decoder(Box::new(FakeDecoder { pool_address }));
@@ -545,8 +559,8 @@ mod tests {
                 address: pool_address,
                 token0: alloy::primitives::Address::ZERO,
                 token1: alloy::primitives::Address::ZERO,
-                reserve0: alloy::primitives::U256::from(1000),
-                reserve1: alloy::primitives::U256::from(2000),
+                reserve0: alloy::primitives::aliases::U112::from(1000),
+                reserve1: alloy::primitives::aliases::U112::from(2000),
                 fee_token0: (997, 1000),
                 fee_token1: (997, 1000),
                 factory: alloy::primitives::Address::ZERO,
@@ -555,7 +569,8 @@ mod tests {
                 stable_swap: false,
                 fee_denominator: None,
                 ..Default::default()
-            });
+            })
+            .expect("test setup: V2 registration");
 
         let mut dispatcher = LogDispatcher::new();
         dispatcher.register_decoder(Box::new(FakeDecoder { pool_address }));
@@ -630,22 +645,25 @@ mod tests {
         );
 
         let state = Arc::new(parking_lot::RwLock::new(BotState::new()));
-        let pool_id = state.write().register_v3_pool(&RegisterV3PoolParams {
-            address: pool_addr,
-            token0: Address::ZERO,
-            token1: Address::ZERO,
-            fee: 500,
-            tick_spacing: 10,
-            factory: Address::ZERO,
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 1_000_000_000,
-            tick: 201_020,
-            tick_data,
-            update_block: 0,
-            coverage: PoolTickCoverage::Tracked,
-            fetcher: None,
-            ..Default::default()
-        });
+        let pool_id = state
+            .write()
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: pool_addr,
+                token0: Address::ZERO,
+                token1: Address::ZERO,
+                fee: 500,
+                tick_spacing: 10,
+                factory: Address::ZERO,
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 1_000_000_000,
+                tick: 201_020,
+                tick_data,
+                update_block: 0,
+                coverage: PoolTickCoverage::Tracked,
+                fetcher: None,
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
 
         // The exact Mint log emitted at block 25390812 (decoded from cast).
         // topics[1]=owner, topics[2]=tickLower=0x03113c=201020,

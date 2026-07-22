@@ -5,17 +5,12 @@ from dataclasses import dataclass, field
 
 import tqdm
 from hexbytes import HexBytes
-from web3.types import LogReceipt
 
 from degenbot import abi_decode
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.database.models.base import ExchangeTable
 from degenbot.database.models.pools import PoolManagerTable
-from degenbot.degenbot_rs import (
-    LiquidityUpdateEvent,
-    V2PoolRowInput,
-    V3PoolRowInput,
-    V4PoolRowInput,
+from degenbot.db import (
     db_apply_v3_liquidity_updates,
     db_apply_v4_liquidity_updates,
     db_fetch_pool_row,
@@ -23,8 +18,15 @@ from degenbot.degenbot_rs import (
     db_upsert_v3_pools,
     db_upsert_v4_pools,
 )
-from degenbot.provider import ProviderAdapter
+from degenbot.provider import AlloyProvider
 from degenbot.provider.call_helpers import encode_function_calldata, raw_call
+from degenbot.types.rpc_types import LogReceipt
+from degenbot.updater import (
+    LiquidityUpdateEvent,
+    V2PoolRowInput,
+    V3PoolRowInput,
+    V4PoolRowInput,
+)
 
 # V3 liquidity event topic0 hashes (Mint/Burn). Used by the V3 decode shell
 # (`apply_v3_liquidity_updates`) to recognize the Burn signature + negate the
@@ -100,7 +102,7 @@ class V4PoolUpdateConfig:
 
 
 def update_v2_pools(
-    provider: ProviderAdapter,
+    provider: AlloyProvider,
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
@@ -183,7 +185,7 @@ def update_v2_pools(
 
 
 def update_v3_pools(
-    provider: ProviderAdapter,
+    provider: AlloyProvider,
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
@@ -257,7 +259,7 @@ def update_v3_pools(
 
 
 def update_v4_pools(
-    provider: ProviderAdapter,
+    provider: AlloyProvider,
     start_block: int,
     end_block: int,
     exchange: ExchangeTable,
@@ -320,7 +322,7 @@ def update_v4_pools(
 
 
 def apply_v3_liquidity_updates(
-    provider: ProviderAdapter,
+    provider: AlloyProvider,
     pool_address: str,
     liquidity_events: list[LogReceipt],
     exchanges_in_scope: set[ExchangeTable],

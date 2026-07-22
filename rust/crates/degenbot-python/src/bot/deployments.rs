@@ -111,11 +111,17 @@ fn resolve_v2_init_hash(chain_id: u64, factory: &str) -> PyResult<String> {
 /// Register the `init_hash_for` / `deployer_for` free functions on the
 /// top-level `degenbot_rs` module.
 pub(crate) fn add_deployments(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(init_hash_for, m)?)?;
-    m.add_function(wrap_pyfunction!(deployer_for, m)?)?;
-    m.add_function(wrap_pyfunction!(resolve_deployer, m)?)?;
-    m.add_function(wrap_pyfunction!(resolve_v3_init_hash, m)?)?;
-    m.add_function(wrap_pyfunction!(resolve_v2_init_hash, m)?)?;
+    let py = m.py();
+    let submod = PyModule::new(py, "degenbot._ffi.deployments")?;
+    submod.add_function(wrap_pyfunction!(init_hash_for, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(deployer_for, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(resolve_deployer, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(resolve_v3_init_hash, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(resolve_v2_init_hash, &submod)?)?;
+    m.add_submodule(&submod)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("degenbot._ffi.deployments", &submod)?;
     Ok(())
 }
 
@@ -163,4 +169,48 @@ pub(crate) fn verify_v3(
 ) -> PyResult<()> {
     deployments::verify_v3_pool_address(chain_id, factory, expected, token0, token1, fee)
         .map_err(map_mismatch)
+}
+
+/// Verify an Aerodrome V2 pool registration's declared address against the
+/// JSON-sourced EIP-1167 deployer + implementation address (the Aerodrome V2
+/// salt includes the `stable` flag). `Ok(())` if it matches or is not
+/// applicable; `Err(PyValueError)` on a verified mismatch.
+/// (Fork A follow-on, S5SJXF/WLJD2Y — the Aerodrome parity gap of JC6OFG.)
+pub(crate) fn verify_aerodrome_v2(
+    chain_id: u64,
+    factory: alloy::primitives::Address,
+    expected: alloy::primitives::Address,
+    token0: alloy::primitives::Address,
+    token1: alloy::primitives::Address,
+    stable: bool,
+) -> PyResult<()> {
+    deployments::verify_aerodrome_v2_pool_address(
+        chain_id, factory, expected, token0, token1, stable,
+    )
+    .map_err(map_mismatch)
+}
+
+/// Verify an Aerodrome V3 (Slipstream) pool registration's declared address
+/// against the JSON-sourced EIP-1167 deployer + implementation address (the
+/// V3 salt includes the `tick_spacing`). `Ok(())` if it matches or is not
+/// applicable; `Err(PyValueError)` on a verified mismatch.
+/// (Fork A follow-on, S5SJXF/WLJD2Y.)
+#[allow(dead_code)] // wired when a tick_spacing-aware register_aerodrome_v3 lands
+pub(crate) fn verify_aerodrome_v3(
+    chain_id: u64,
+    factory: alloy::primitives::Address,
+    expected: alloy::primitives::Address,
+    token0: alloy::primitives::Address,
+    token1: alloy::primitives::Address,
+    tick_spacing: i32,
+) -> PyResult<()> {
+    deployments::verify_aerodrome_v3_pool_address(
+        chain_id,
+        factory,
+        expected,
+        token0,
+        token1,
+        tick_spacing,
+    )
+    .map_err(map_mismatch)
 }

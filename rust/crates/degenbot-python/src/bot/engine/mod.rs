@@ -1,28 +1,29 @@
-//! `PyO3` wrapper for the `UniswapEngine`.
+//! `PyO3` wrapper for the `ArbitrageEngine`.
 //!
-//! [`PyUniswapArbEngine`] wraps [`UniswapEngine`] with a `parking_lot::Mutex`
+//! [`PyArbitrageEngine`] wraps [`ArbitrageEngine`] with a `parking_lot::Mutex`
 //! for safe access from the Tokio pump task. All Python-facing methods
 //! acquire the lock, perform their operation, and release it.
 
 //! # Layout
 //!
-//! - [`PyUniswapArbEngine`] (the `#[pyclass]`) is declared here; its
+//! - [`PyArbitrageEngine`] (the `#[pyclass]`) is declared here; its
 //!   `#[pymethods]` surface is split across [`register`], [`snapshot`],
 //!   [`verify`], [`solve`], [`result_channel`] (`PyO3` permits multiple
-//!   `#[pymethods] impl PyUniswapArbEngine` blocks). [`errors`] holds the
+//!   `#[pymethods] impl PyArbitrageEngine` blocks). [`errors`] holds the
 //!   `#[create_exception]` types.
 //! - Mirrors `polars-python/src/expr/`'s 17-file `PyExpr` split and the
-//!   existing `crates/degenbot-bot/src/solvers/uniswap_engine/` core split.
+//!   existing `crates/degenbot-bot/src/solvers/arb_engine/` core split.
 //!   (ergo UG6FKN task 74W2Z6.)
 
 mod errors;
+mod path_info;
 mod register;
 mod result_channel;
 mod snapshot;
 mod solve;
 mod verify;
 
-pub(crate) use register::map_register_v4_err;
+pub(crate) use register::{map_register_v2_err, map_register_v3_err, map_register_v4_err};
 
 pub use errors::*;
 pub use result_channel::BlockStream;
@@ -31,7 +32,7 @@ use crate::prelude::*;
 pub(crate) use std::collections::HashMap;
 pub(crate) use std::sync::Arc;
 
-pub(crate) use alloy::primitives::{Address, U256};
+pub(crate) use alloy::primitives::{aliases::U112, Address, U256};
 pub(crate) use pyo3::exceptions::PyStopAsyncIteration;
 pub(crate) use pyo3::types::{PyDict, PyList};
 pub(crate) use tokio::sync::mpsc;
@@ -43,23 +44,32 @@ pub(crate) use degenbot_bot::bot_core::{
     drain_sink::DrainSink, Bot, V3SwapUpdate, V4StateSync, V4SwapUpdate,
 };
 
-pub(crate) use degenbot_bot::solvers::uniswap_engine::engine_handle::EngineHandle;
-pub(crate) use degenbot_bot::solvers::uniswap_engine::engine_subscriber::EngineSubscriber;
+pub(crate) use degenbot_bot::solvers::arb_engine::engine_handle::EngineHandle;
 
-pub(crate) use degenbot_bot::bot_core::snapshot_verify::{SnapshotStore, VerifyError};
-pub(crate) use degenbot_bot::solvers::uniswap_engine::{
-    BlockMetadata, BlockNotification, EnginePhase, HopType, MixedPoolRef, PoolHop, ResultBatch,
-    SolvePathResult, UniswapEngine,
+pub(crate) use degenbot_bot::solvers::arb_engine::{
+    ArbitrageEngine, BlockMetadata, BlockNotification, ResultBatch,
 };
+pub(crate) use degenbot_solvers::mixed::{HopType, MixedPoolRef, PoolHop, SolvePathResult};
 
 /// Python-facing mixed V2/V3 arbitrage engine.
 ///
-/// Wraps [`UniswapEngine`] with a `parking_lot::Mutex` for safe access
+/// Wraps [`ArbitrageEngine`] with a `parking_lot::Mutex` for safe access
 /// from the Tokio pump task.
-#[pyclass(name = "UniswapArbEngine", skip_from_py_object)]
-pub struct PyUniswapArbEngine {
+#[pyclass(
+    name = "ArbitrageEngine",
+    skip_from_py_object,
+    module = "degenbot._ffi"
+)]
+pub struct PyArbitrageEngine {
     /// Shared engine state
-    engine: Arc<parking_lot::Mutex<UniswapEngine>>,
+    engine: Arc<parking_lot::Mutex<ArbitrageEngine>>,
+    /// Retained `EngineHandle` — the ADR-006 cycle-free owner of the strong
+    /// `EngineSubscriber`. `register_path`/`register_and_solve_path` draw a
+    /// live `Weak` from this (see `subscriber_weak`) so `LogDispatcher::notify`
+    /// routes `on_pool_state_updated` → `insert_dirty` on the live engine.
+    /// A clone of this same `Arc<EngineHandle>` is the `Arc<dyn Engine>` held
+    /// by `SolveCoordinator`.
+    engine_handle: Arc<EngineHandle>,
     /// ADR-006 D4 (T3): the pump lifecycle state (coordinator, reorg
     /// coordinator, bot, shutdown, pump handle, subscribe state, phase) now
     /// lives in a shared `Arc<PumpState>` co-owned with `PyBot`. The legacy
@@ -77,20 +87,14 @@ pub struct PyUniswapArbEngine {
     /// Python consumes this as its block clock (not `ResultBatch::solve_block`).
     /// Consumed by `BlockStream::__anext__`; wrapped in Arc for the coroutine.
     block_rx: Arc<parking_lot::Mutex<Option<mpsc::UnboundedReceiver<BlockNotification>>>>,
-    /// V3 snapshot tick data, loaded via `load_v3_snapshot()` and consumed
-    /// at registration time. One-way transfer: `remove()` not `clone()`.
-    v3_snapshot: SnapshotStore<Address>,
-    /// V4 snapshot tick data, loaded via `load_v4_snapshot()` and consumed
-    /// at registration time. One-way transfer: `remove()` not `clone()`.
-    v4_snapshot: SnapshotStore<(Address, degenbot_decoders::v4_swap_decoder::PoolId)>,
 }
 
-impl PyUniswapArbEngine {
+impl PyArbitrageEngine {
     /// Parse V2 Sync updates from a Python list of 3-tuples.
     pub(crate) fn parse_v2_updates(
         v2_sync_updates: &Bound<'_, PyList>,
-    ) -> PyResult<Vec<(Address, U256, U256)>> {
-        let mut rust_v2: Vec<(Address, U256, U256)> = Vec::with_capacity(v2_sync_updates.len());
+    ) -> PyResult<Vec<(Address, U112, U112)>> {
+        let mut rust_v2: Vec<(Address, U112, U112)> = Vec::with_capacity(v2_sync_updates.len());
         for item in v2_sync_updates.iter() {
             let tuple = item.cast::<pyo3::types::PyTuple>()?;
             if tuple.len() != 3 {
@@ -105,8 +109,16 @@ impl PyUniswapArbEngine {
             let addr = addr_str.parse::<Address>().map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("Invalid address: {e}"))
             })?;
-            let r0 = crate::conversion::alloy::extract_python_u256(&tuple.get_item(1)?)?;
-            let r1 = crate::conversion::alloy::extract_python_u256(&tuple.get_item(2)?)?;
+            let r0 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+                crate::conversion::alloy::extract_python_u256(&tuple.get_item(1)?)?,
+                "reserve0",
+            )
+            .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
+            let r1 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+                crate::conversion::alloy::extract_python_u256(&tuple.get_item(2)?)?,
+                "reserve1",
+            )
+            .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
             rust_v2.push((addr, r0, r1));
         }
         Ok(rust_v2)
@@ -228,16 +240,6 @@ impl PyUniswapArbEngine {
         }
         Ok(rust_v4)
     }
-
-    /// Get the current engine phase.
-    pub(crate) fn current_phase(&self) -> EnginePhase {
-        self.pump.current_phase()
-    }
-
-    /// Set the engine phase (advancing only).
-    pub(crate) fn set_phase(&self, phase: EnginePhase) {
-        self.pump.set_phase(phase);
-    }
 }
 
 pub(crate) fn make_tick_info(
@@ -252,10 +254,10 @@ pub(crate) fn make_tick_info(
     }
 }
 
-/// Helper to decode a hex string (e.g. "0xabcd...") to a V4 `PoolId` ([u8; 32]).
+/// Helper to decode a hex string (e.g. "0xabcd...") to a V4 `V4PoolId` ([u8; 32]).
 pub(crate) fn hex_string_to_pool_id(
     hex_str: &str,
-) -> PyResult<degenbot_decoders::v4_swap_decoder::PoolId> {
+) -> PyResult<degenbot_decoders::v4_swap_decoder::V4PoolId> {
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
     if hex_str.len() != 64 {
         let msg = format!(
@@ -275,67 +277,42 @@ pub(crate) fn hex_string_to_pool_id(
     Ok(pool_id)
 }
 
-#[cfg(test)]
-mod tests {
-    //! VP42BP: pin the `LiquidityVerifyError` → `VerifyError` → Python
-    //! exception-type chain so a per-call RPC transport failure surfaces as
-    //! `VerificationRpcError` (retryable), distinct from a genuine on-chain
-    //! mismatch which surfaces as `VerificationMismatchError` (fatal). The AC
-    //! test ("a mock-provider verifier that returns a transport error surfaces
-    //! `VerificationRpcError`") is exercised at the mapping seam — the
-    //! verifier's RPC-failure branch (in `liquidity_verifier`) feeds a
-    //! `LiquidityVerifyError::Rpc` through `map_liquidity_verify_error` and
-    //! `map_verify_err` to a typed Python exception.
+/// `#[pymethods]` slice for the JUCFCB snapshot-seed getter. `PyO3` allows
+/// multiple `#[pymethods] impl PyArbitrageEngine { ... }` blocks; this is the
+/// snapshot-seed surface (the phase / startup ritual lives in `pump.rs`/`solve.rs`).
+#[pymethods]
+impl PyArbitrageEngine {
+    /// The snapshot seed block `S` (JUCFCB) — set at `Bot.__init__` time by
+    /// `Bot::load_snapshot_from_db` for the DB path, OR via
+    /// [`set_snapshot_seed_block`](Self::set_snapshot_seed_block) for the
+    /// non-DB (file/memory) path (2SM4Y7 — the pyo3 `backfill_from_snapshot`
+    /// is retired; the core auto-backfill inside `BlockPump::resume_from_subscribe`
+    /// reads `S` from the shared `BotState`). `None` = cold-start (no snapshot
+    /// loaded).
+    #[getter]
+    fn snapshot_seed_block(&self) -> Option<u64> {
+        self.engine.lock().core.read().snapshot_seed_block()
+    }
 
-    use super::verify::map_verify_err;
-    use super::*;
-    use degenbot_bot::solvers::uniswap_engine::snapshot_verify::VerifyError;
-
-    /// `map_verify_err` (the `PyO3` seam) routes `VerifyError::Rpc` →
-    /// `VerificationRpcError` and `VerifyError::Snapshot` →
-    /// `VerificationMismatchError` (distinct Python types). Requires the GIL to
-    /// construct the Python exceptions.
-    #[test]
-    fn map_verify_err_routes_rpc_to_verification_rpc_error() {
-        pyo3::Python::attach(|py| {
-            // RPC transport failure → VerificationRpcError (retryable).
-            let res: PyResult<()> = map_verify_err(Err(VerifyError::Rpc(
-                "tickBitmap(0) RPC call failed: timeout".to_string(),
-            )));
-            let err = res.expect_err("Rpc must surface as a PyErr");
-            assert!(
-                err.is_instance_of::<VerificationRpcError>(py),
-                "VerifyError::Rpc must surface as VerificationRpcError (retryable), not VerificationMismatchError"
-            );
-
-            // Genuine mismatch → VerificationMismatchError (fatal).
-            let res: PyResult<()> = map_verify_err(Err(VerifyError::Snapshot(
-                "tick 5 lg mismatch".to_string(),
-            )));
-            let err = res.expect_err("Snapshot must surface as a PyErr");
-            assert!(
-                err.is_instance_of::<VerificationMismatchError>(py),
-                "VerifyError::Snapshot must surface as VerificationMismatchError (fatal)"
-            );
-            // Cross-check the two are distinct types.
-            assert!(
-                !err.is_instance_of::<VerificationRpcError>(py),
-                "genuine mismatch is NOT an Rpc error (distinct types)"
-            );
-
-            // Provider construction → VerificationRpcError (unchanged, now
-            // shares the arm with Rpc).
-            let res: PyResult<()> = map_verify_err(Err(VerifyError::Provider(
-                "failed to create provider: connection refused".to_string(),
-            )));
-            let err = res.expect_err("Provider must surface as a PyErr");
-            assert!(
-                err.is_instance_of::<VerificationRpcError>(py),
-                "VerifyError::Provider still surfaces as VerificationRpcError"
-            );
-
-            Ok::<_, pyo3::PyErr>(())
-        })
-        .expect("gil test must not panic");
+    /// Set the snapshot seed block `S` on the shared `BotState` for the
+    /// non-DB (file/memory) snapshot path (2SM4Y7).
+    ///
+    /// The DB path (`Bot::load_snapshot_from_db`) sets `S` itself; the
+    /// non-DB path calls this once after `load_v3_snapshot_from_py` /
+    /// `load_v4_snapshot_from_py` so the shared `BotState` carries `S =
+    /// min(newest_block_v3, newest_block_v4)` — the seed the core
+    /// auto-backfill (J3FMDO) closes the snapshot→WS gap from.
+    ///
+    /// `None` clears the seed (cold-start resume); `Some(b)` overrides the
+    /// stored seed (used only when no snapshot has set it yet — the DB path's
+    /// already-set seed takes precedence on the production path because the
+    /// non-DB path does not call this setter).
+    #[setter]
+    fn set_snapshot_seed_block(&self, block: Option<u64>) {
+        self.engine
+            .lock()
+            .core
+            .write()
+            .set_snapshot_seed_block(block);
     }
 }

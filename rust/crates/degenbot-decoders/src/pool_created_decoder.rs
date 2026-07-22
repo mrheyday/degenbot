@@ -77,7 +77,7 @@
 //!
 //! ```text
 //! event Initialize(
-//!     PoolId indexed id,
+//!     V4PoolId indexed id,
 //!     address indexed currency0,
 //!     address indexed currency1,
 //!     uint24 fee,
@@ -88,7 +88,7 @@
 //! )
 //!
 //! topic[0] = 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
-//! topic[1] = PoolId (indexed bytes32)
+//! topic[1] = V4PoolId (indexed bytes32)
 //! topic[2] = currency0 (indexed address)
 //! topic[3] = currency1 (indexed address)
 //! data    = abi.encode(uint24 fee, int24 tickSpacing, address hooks, ...)
@@ -97,6 +97,9 @@
 
 use alloy::primitives::{Address, B256, U256};
 use alloy::rpc::types::Log;
+
+use crate::uniswap_tick_range::extract_int24_from_word;
+use crate::v4_swap_decoder::V4PoolId;
 
 // ── topic constants ───────────────────────────────────────────────────────
 
@@ -195,14 +198,17 @@ pub struct V3PoolCreatedEvent {
 }
 
 /// Decoded V4 `Initialize` event (the V4 `PoolCreated`). The pool is
-/// identified by its `PoolId` (a bytes32, NOT a contract address — V4 pools
+/// identified by its `V4PoolId` (a bytes32, NOT a contract address — V4 pools
 /// live inside the singleton `PoolManager`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V4InitializeEvent {
     /// The `PoolManager` that emitted the event (the log emitter).
     pub pool_manager_address: Address,
-    /// The pool ID (from topic[1] — a bytes32).
-    pub pool_id: B256,
+    /// The pool ID (from topic[1] — a bytes32). Typed as the V4 [`V4PoolId`]
+    /// alias so every V4 decoded event shares one `pool_id` type, matching
+    /// [`crate::v4_swap_decoder::V4SwapEvent`] and
+    /// [`crate::v4_modify_liquidity_decoder::V4ModifyLiquidityEvent`].
+    pub pool_id: V4PoolId,
     /// Currency0 (from topic[2]).
     pub currency0: Address,
     /// Currency1 (from topic[3]).
@@ -335,7 +341,7 @@ pub fn decode_v4_initialize_log(log: &Log) -> Option<V4InitializeEvent> {
     if topics.len() < 4 {
         return None;
     }
-    let pool_id = topics[1];
+    let pool_id: V4PoolId = topics[1].0;
     let currency0 = Address::from_word(topics[2]);
     let currency1 = Address::from_word(topics[3]);
     // data = abi.encode(uint24 fee, int24 tickSpacing, address hooks, ...)
@@ -357,22 +363,6 @@ pub fn decode_v4_initialize_log(log: &Log) -> Option<V4InitializeEvent> {
         tick_spacing,
         hooks,
     })
-}
-
-/// Extract an int24 from a 32-byte word (sign-extended to int256 in the ABI).
-///
-/// Returns `None` if the value is outside the valid int24 range
-/// `[-887272, 887272]`.
-fn extract_int24_from_word(word: &[u8]) -> Option<i32> {
-    if word.len() < 32 {
-        return None;
-    }
-    let last4: [u8; 4] = word[28..32].try_into().ok()?;
-    let value = i32::from_be_bytes(last4);
-    if !(-887_272..=887_272).contains(&value) {
-        return None;
-    }
-    Some(value)
 }
 
 #[cfg(test)]
@@ -674,7 +664,7 @@ mod tests {
         );
         let event = decode_v4_initialize_log(&log).unwrap();
         assert_eq!(event.pool_manager_address, pool_manager);
-        assert_eq!(event.pool_id, pool_id);
+        assert_eq!(B256::from(event.pool_id), pool_id);
         assert_eq!(event.currency0, currency0);
         assert_eq!(event.currency1, currency1);
         assert_eq!(event.fee, fee);

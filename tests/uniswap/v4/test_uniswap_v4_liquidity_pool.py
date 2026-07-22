@@ -7,20 +7,19 @@ import hypothesis.strategies
 import pydantic_core
 import pytest
 from hexbytes import HexBytes
-from web3.contract import Contract
-from web3.exceptions import ContractLogicError
 
-from degenbot.anvil_fork import AnvilFork
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import MAX_INT128, ZERO_ADDRESS
+from degenbot.exceptions import ContractLogicError
 from degenbot.exceptions.pool import (
     HookedPoolResult,
     IncompleteSwap,
     LiquidityPoolError,
 )
-from degenbot.provider import ProviderAdapter
+from degenbot.fork import AnvilFork
 from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
 from tests.helpers.bot_factory import make_bot_with_provider
+from tests.helpers.w3_contract import make_contract
 
 if TYPE_CHECKING:
     from eth_typing import HexStr
@@ -58,7 +57,7 @@ SNAPSHOT_BLOCK = 21883665
 
 @pytest.fixture
 def eth_usdc_v4(fork_mainnet_full: AnvilFork) -> UniswapV4Pool:
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork_mainnet_full.w3))
+    bot = make_bot_with_provider(fork_mainnet_full.provider)
     return bot.build_managed_pool(
         V4_POOL_MANAGER_ADDRESS,
         ETH_USDC_V4_POOL_ID,
@@ -96,9 +95,9 @@ def _test_pool_exact_input(
 
     pool_id: HexStr = pool["pool_id"]
 
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork.w3))
+    bot = make_bot_with_provider(fork.provider)
     lp = bot.managed_pools.get(
-        chain_id=fork.w3.eth.chain_id,
+        chain_id=fork.provider.get_chain_id(),
         pool_manager_address=V4_POOL_MANAGER_ADDRESS,
         pool_id=pool_id,
     )
@@ -214,9 +213,9 @@ def _test_pool_exact_output(
 ):
     pool_id: HexStr = pool["pool_id"]
 
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork.w3))
+    bot = make_bot_with_provider(fork.provider)
     lp = bot.managed_pools.get(
-        chain_id=fork.w3.eth.chain_id,
+        chain_id=fork.provider.get_chain_id(),
         pool_manager_address=V4_POOL_MANAGER_ADDRESS,
         pool_id=pool_id,
     )
@@ -358,9 +357,8 @@ def test_cached_calculations(
     eth_usdc_v4: UniswapV4Pool,
     fork_mainnet_full: AnvilFork,
 ) -> None:
-    quoter = fork_mainnet_full.w3.eth.contract(
-        address=UNISWAP_V4_QUOTER_ADDRESS,
-        abi=UNISWAP_V4_QUOTER_ABI,
+    quoter = make_contract(
+        fork_mainnet_full.http_url, UNISWAP_V4_QUOTER_ADDRESS, UNISWAP_V4_QUOTER_ABI
     )
 
     for token_in, token_out in [
@@ -413,9 +411,8 @@ def test_first_200_pools(
     fork_mainnet_full: AnvilFork,
     testing_pools,
 ):
-    quoter = fork_mainnet_full.w3.eth.contract(
-        address=UNISWAP_V4_QUOTER_ADDRESS,
-        abi=UNISWAP_V4_QUOTER_ABI,
+    quoter = make_contract(
+        fork_mainnet_full.http_url, UNISWAP_V4_QUOTER_ADDRESS, UNISWAP_V4_QUOTER_ABI
     )
 
     for pool in testing_pools:
@@ -442,9 +439,8 @@ def test_first_200_pools_with_snapshot(
     testing_pools,
     liquidity_snapshot,
 ):
-    quoter = fork_mainnet_archive.w3.eth.contract(
-        address=UNISWAP_V4_QUOTER_ADDRESS,
-        abi=UNISWAP_V4_QUOTER_ABI,
+    quoter = make_contract(
+        fork_mainnet_archive.http_url, UNISWAP_V4_QUOTER_ADDRESS, UNISWAP_V4_QUOTER_ABI
     )
 
     for pool in testing_pools:

@@ -21,7 +21,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from degenbot.degenbot_rs import CancelHandle, db_upgrade_database, run_aave_update
+from degenbot._ffi.aave import run_aave_update
+from degenbot._ffi.cancel import CancelHandle
+from degenbot.db import db_upgrade_database
 from tests.aave.writer_parity.harness import (
     CONFIGURATOR_REVISION_SELECTOR,
     POOL_ADDRESS,

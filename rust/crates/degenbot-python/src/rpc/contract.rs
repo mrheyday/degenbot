@@ -11,7 +11,11 @@ use runtime::get_runtime;
 use std::sync::Arc;
 
 /// Python wrapper for a Contract.
-#[pyclass(name = "Contract", skip_from_py_object)]
+#[pyclass(
+    name = "Contract",
+    skip_from_py_object,
+    module = "degenbot._ffi.contract"
+)]
 pub struct PyContract {
     contract: Contract,
 }
@@ -71,6 +75,7 @@ impl PyContract {
     ///
     /// Returns:
     ///     List of decoded return values as strings
+    #[pyo3(signature = (function_signature, args, block_number=None))]
     fn call(
         &self,
         py: Python<'_>,
@@ -126,6 +131,7 @@ impl PyContract {
     ///
     /// Returns:
     ///     List of decoded return values as native Python types
+    #[pyo3(signature = (function_signature, args, block_number=None))]
     fn call_typed(
         &self,
         py: Python<'_>,
@@ -295,9 +301,17 @@ fn abi_value_to_python<'py>(
 /// Add contract module to Python module.
 #[allow(clippy::missing_errors_doc)]
 pub fn add_contract_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyContract>()?;
-    m.add_function(wrap_pyfunction!(encode_function_call, m)?)?;
-    m.add_function(wrap_pyfunction!(decode_return_data, m)?)?;
-    m.add_function(wrap_pyfunction!(get_function_selector, m)?)?;
+    let py = m.py();
+    let submod = PyModule::new(py, "degenbot._ffi.contract")?;
+    submod.add_class::<PyContract>()?;
+    submod.add_function(wrap_pyfunction!(encode_function_call, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(decode_return_data, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(get_function_selector, &submod)?)?;
+    #[cfg(feature = "async")]
+    submod.add_class::<crate::rpc::async_contract::PyAsyncContract>()?;
+    m.add_submodule(&submod)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("degenbot._ffi.contract", &submod)?;
     Ok(())
 }

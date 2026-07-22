@@ -17,7 +17,6 @@ import pytest
 from degenbot.camelot.pools import CamelotLiquidityPool
 from hexbytes import HexBytes
 
-from degenbot.anvil_fork import AnvilFork
 from degenbot.bot import Bot
 from degenbot.camelot.abi import CAMELOT_POOL_ABI
 from degenbot.checksum_cache import get_checksum_address
@@ -30,8 +29,7 @@ from degenbot.exceptions.pool import (
     LiquidityPoolError,
     NoPoolStateAvailable,
 )
-from degenbot.provider import ProviderAdapter
-from degenbot.uniswap.abi import UNISWAP_V2_ROUTER_ABI
+from degenbot.fork import AnvilFork
 from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import (
     UniswapV2PoolExternalUpdate,
@@ -40,10 +38,9 @@ from degenbot.uniswap.v2_types import (
 )
 from tests.helpers.bot_factory import make_bot_with_provider
 from tests.helpers.v2_pool_factory import make_v2_pool
+from tests.helpers.w3_contract import make_contract
 
 if TYPE_CHECKING:
-    from web3.contract.contract import Contract
-
     from degenbot.types.aliases import BlockNumber
 
 
@@ -64,7 +61,7 @@ CAMELOT_MIM_USDC_LP_ADDRESS = get_checksum_address("0x68A0859de50B4Dfc6EFEbE981c
 
 def _make_bot(fork: AnvilFork) -> Bot:
     """Create a Bot with the fork's provider registered."""
-    provider = ProviderAdapter.from_web3(fork.w3)
+    provider = fork.provider
     return make_bot_with_provider(provider)
 
 
@@ -170,9 +167,8 @@ def test_create_camelot_v2_stable_pool(fork_arbitrum_full: AnvilFork):
     amount_in = 1000 * 10**token_in.decimals  # nominal value of $1000
 
     # Test that the swap output from the pool contract matches the off-chain calculation
-    w3_contract = fork_arbitrum_full.w3.eth.contract(
-        address=CAMELOT_MIM_USDC_LP_ADDRESS,
-        abi=CAMELOT_POOL_ABI,
+    w3_contract = make_contract(
+        fork_arbitrum_full.http_url, CAMELOT_MIM_USDC_LP_ADDRESS, CAMELOT_POOL_ABI
     )
 
     contract_amount = w3_contract.functions.getAmountOut(
@@ -193,9 +189,8 @@ def test_create_camelot_v2_pool(fork_arbitrum_full: AnvilFork):
     token_in = lp.token1
     amount_in = 1000 * 10**token_in.decimals  # nominal value of $1000
 
-    w3_contract: Contract = fork_arbitrum_full.w3.eth.contract(
-        address=CAMELOT_WETH_USDC_LP_ADDRESS,
-        abi=CAMELOT_POOL_ABI,
+    w3_contract: Contract = make_contract(
+        fork_arbitrum_full.http_url, CAMELOT_WETH_USDC_LP_ADDRESS, CAMELOT_POOL_ABI
     )
     assert w3_contract.functions.getAmountOut(
         amountIn=amount_in,

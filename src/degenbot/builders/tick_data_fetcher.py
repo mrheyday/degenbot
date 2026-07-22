@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-import threading
 from typing import TYPE_CHECKING, Any, cast
 
-import eth_abi.abi
-
-from degenbot.checksum_cache import get_checksum_address
 from degenbot.logging import logger
-from degenbot.provider.call_helpers import encode_function_calldata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from eth_typing import ChecksumAddress
-    from hexbytes import HexBytes
 
-    from degenbot.builders.pool_io import AsyncPoolIO, PoolIO
+    from degenbot.bot import PyBotIo
     from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
     from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
 
@@ -54,7 +47,7 @@ FetchedTickData = dict[int, tuple[int, int, int]]
 
 def make_tick_data_fetcher(
     pool_lookup: Callable[[int], UniswapV3Pool | UniswapV4Pool | None],
-    io: PoolIO,
+    io: PyBotIo,
     types: TickDataTypes,
     *,
     state_view_address: str | None = None,
@@ -143,7 +136,7 @@ def make_tick_data_fetcher(
 
 def _fetch_v3(
     *,
-    io: PoolIO,
+    io: PyBotIo,
     pool_ref: _PoolRef,
     word_position: int,
     block_number: int,
@@ -159,26 +152,12 @@ def _fetch_v3(
 
     """
     # ADR-005 slice 14j: when io is a PyBotIo, delegate tick RPC calls to Rust.
-    fetch_tick_bitmap = getattr(io, "fetch_tick_bitmap", None)
-    fetch_tick_data = getattr(io, "fetch_tick_data", None)
-
-    if fetch_tick_bitmap is not None:
-        try:
-            bitmap_value = fetch_tick_bitmap(pool_ref.address, word_position, block=block_number)
-        except Exception:  # noqa: BLE001
-            return False
-    else:
-        try:
-            (bitmap_value,) = eth_abi.abi.decode(
-                types=["uint256"],
-                data=io.call(
-                    to=pool_ref.address,
-                    data=encode_function_calldata("tickBitmap(int16)", [word_position]),
-                    block=block_number,
-                ),
-            )
-        except Exception:  # noqa: BLE001
-            return False
+    # ADR-005 slice 14j: delegate tick RPC calls to Rust (PyBotIo is the only
+    # executor; the Python parity-gate fallback is retired).
+    try:
+        bitmap_value = io.fetch_tick_bitmap(pool_ref.address, word_position, block=block_number)
+    except Exception:  # noqa: BLE001
+        return False
 
     if bitmap_value != 0:
         active_ticks = [
@@ -188,39 +167,19 @@ def _fetch_v3(
         ]
 
         for active_tick in active_ticks:
-            if fetch_tick_data is not None:
-                try:
-                    liquidity_gross, liquidity_net = fetch_tick_data(
-                        pool_ref.address,
-                        active_tick,
-                        block=block_number,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "Failed to fetch tick data for tick %d",
-                        active_tick,
-                        exc_info=True,
-                    )
-                    continue
-            else:
-                try:
-                    result = io.call(
-                        to=pool_ref.address,
-                        data=encode_function_calldata("ticks(int24)", [active_tick]),
-                        block=block_number,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "Failed to fetch tick data for tick %d",
-                        active_tick,
-                        exc_info=True,
-                    )
-                    continue
-
-                liquidity_gross, liquidity_net, *_ = eth_abi.abi.decode(
-                    types=types.tick_struct_types,
-                    data=result,
+            try:
+                liquidity_gross, liquidity_net = io.fetch_tick_data(
+                    pool_ref.address,
+                    active_tick,
+                    block=block_number,
                 )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "Failed to fetch tick data for tick %d",
+                    active_tick,
+                    exc_info=True,
+                )
+                continue
 
             fetched[active_tick] = types.liquidity_at_tick(
                 liquidity_net=int(liquidity_net),
@@ -232,7 +191,7 @@ def _fetch_v3(
 
 def _fetch_v4(
     *,
-    io: PoolIO,
+    io: PyBotIo,
     state_view_address: str,
     pool_id: bytes,
     pool_ref: _PoolRef,
@@ -247,35 +206,17 @@ def _fetch_v4(
         ``True`` if the bitmap RPC succeeded, ``False`` on failure.
 
     """
-    # ADR-005 slice 14k: when io is a PyBotIo, delegate V4 tick RPCs to Rust.
-    fetch_v4_tick_bitmap = getattr(io, "fetch_v4_tick_bitmap", None)
-    fetch_v4_tick_data = getattr(io, "fetch_v4_tick_data", None)
-
-    if fetch_v4_tick_bitmap is not None:
-        try:
-            bitmap_value = fetch_v4_tick_bitmap(
-                state_view_address,
-                pool_id,
-                word_position,
-                block=block_number,
-            )
-        except Exception:  # noqa: BLE001
-            return False
-    else:
-        try:
-            (bitmap_value,) = eth_abi.abi.decode(
-                types=["uint256"],
-                data=io.call(
-                    to=get_checksum_address(state_view_address),
-                    data=encode_function_calldata(
-                        "getTickBitmap(bytes32,int16)",
-                        [pool_id, word_position],
-                    ),
-                    block=block_number,
-                ),
-            )
-        except Exception:  # noqa: BLE001
-            return False
+    # ADR-005 slice 14k: delegate V4 tick RPCs to Rust (PyBotIo is the only
+    # executor; the Python parity-gate fallback is retired).
+    try:
+        bitmap_value = io.fetch_v4_tick_bitmap(
+            state_view_address,
+            pool_id,
+            word_position,
+            block=block_number,
+        )
+    except Exception:  # noqa: BLE001
+        return False
 
     if bitmap_value != 0:
         active_ticks = [
@@ -285,43 +226,20 @@ def _fetch_v4(
         ]
 
         for active_tick in active_ticks:
-            if fetch_v4_tick_data is not None:
-                try:
-                    liquidity_gross, liquidity_net = fetch_v4_tick_data(
-                        state_view_address,
-                        pool_id,
-                        active_tick,
-                        block=block_number,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "Failed to fetch V4 tick data for tick %d",
-                        active_tick,
-                        exc_info=True,
-                    )
-                    continue
-            else:
-                try:
-                    result = io.call(
-                        to=state_view_address,
-                        data=encode_function_calldata(
-                            "getTickLiquidity(bytes32,int24)",
-                            [pool_id, active_tick],
-                        ),
-                        block=block_number,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "Failed to fetch V4 tick data for tick %d",
-                        active_tick,
-                        exc_info=True,
-                    )
-                    continue
-
-                liquidity_gross, liquidity_net = eth_abi.abi.decode(
-                    types=types.tick_struct_types,
-                    data=result,
+            try:
+                liquidity_gross, liquidity_net = io.fetch_v4_tick_data(
+                    state_view_address,
+                    pool_id,
+                    active_tick,
+                    block=block_number,
                 )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "Failed to fetch V4 tick data for tick %d",
+                    active_tick,
+                    exc_info=True,
+                )
+                continue
 
             fetched[active_tick] = types.liquidity_at_tick(
                 liquidity_net=int(liquidity_net),
@@ -329,129 +247,3 @@ def _fetch_v4(
                 block=block_number,
             )
     return True
-
-
-# ---------------------------------------------------------------------------
-# Async -> sync bridge (AsyncBot sparse-pool feature parity)
-# ---------------------------------------------------------------------------
-# The Rust ``TickWordFetcher`` seam (``PyTickWordFetcher``) is SYNCHRONOUS:
-# pyo3 calls the Python fetcher via ``call1`` while holding the ``BotState``
-# write lock. AsyncBot's IO is ``AsyncPoolIO`` (``.call`` is ``async def``),
-# so an async fetcher must run its coroutine to completion and return the
-# result synchronously. ``asyncio.run`` cannot be used — the swap may be
-# called from inside a running event loop ("asyncio.run() cannot be called
-# from a running event loop"). The solution: a single shared daemon-thread
-# event loop, lazily started per process, that runs every async ``io.call``
-# submitted via ``asyncio.run_coroutine_threadsafe`` (the calling thread
-# blocks on ``.result()``). Bounded (one thread per process, never per pool),
-# and works whether or not the caller's thread has a running loop.
-
-
-class _BlockingAsyncPoolIO:
-    """A sync ``.call`` facade over an :class:`AsyncPoolIO`.
-
-    Each ``call`` submits the async ``io.call`` coroutine to the shared daemon
-    loop and blocks the calling (Rust) thread until it completes, re-raising
-    any exception. Exposes only ``call`` — the only ``PoolIO`` method the tick
-    data fetcher exercises (the ``fetch_tick_bitmap``/``fetch_tick_data``
-    PyBotIO shortcuts are absent, so the fetcher always takes the ``io.call``
-    eth_call path).
-    """
-
-    def __init__(self, async_io: AsyncPoolIO) -> None:
-        self._async_io = async_io
-
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
-        loop = _get_shared_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._async_io.call(to=to, data=data, block=block),
-            loop,
-        )
-        return future.result()  # blocks; re-raises the coroutine's exception
-
-
-class _LoopHolder:
-    """Process-wide holder for the shared daemon-thread event loop."""
-
-    __slots__ = ("lock", "loop")
-
-    def __init__(self) -> None:
-        self.loop: asyncio.AbstractEventLoop | None = None
-        self.lock = threading.Lock()
-
-
-_holder = _LoopHolder()
-
-
-def _get_shared_loop() -> asyncio.AbstractEventLoop:
-    """Return the process-wide daemon-thread event loop, starting it lazily.
-
-    Returns:
-        The shared event loop running on a daemon thread.
-
-    """
-    if _holder.loop is not None:
-        return _holder.loop
-    with _holder.lock:
-        if _holder.loop is None:
-            ready = threading.Event()
-
-            def _runner() -> None:
-                loop = asyncio.new_event_loop()
-                _holder.loop = loop
-                ready.set()
-                try:
-                    loop.run_forever()
-                finally:
-                    try:
-                        pending = asyncio.all_tasks(loop)
-                        for task in pending:
-                            task.cancel()
-                    finally:
-                        loop.close()
-
-            thread = threading.Thread(
-                target=_runner,
-                name="degenbot-async-io-bridge",
-                daemon=True,
-            )
-            thread.start()
-            ready.wait()
-        assert _holder.loop is not None
-        return _holder.loop
-
-
-def make_tick_data_fetcher_from_async_io(
-    pool_lookup: Callable[[int], UniswapV3Pool | UniswapV4Pool | None],
-    async_io: AsyncPoolIO,
-    types: TickDataTypes,
-    *,
-    state_view_address: str | None = None,
-    pool_id: bytes | None = None,
-) -> Callable[[int, int], FetchedTickData | None]:
-    """Create a tick data fetcher for an ``AsyncPoolIO``-backed sparse pool.
-
-    Feature-parity counterpart to :func:`make_tick_data_fetcher` for
-    ``AsyncBot``-built V3/V4 pools. Wraps the async IO in a sync ``.call``
-    adapter (daemon-loop bridge) then delegates to the existing sync factory,
-    so the return-data contract and RPC choreography are identical.
-
-    Args:
-        pool_lookup: Sync registry lookup returning the pool (or ``None``).
-        async_io: An ``AsyncPoolIO`` (or any object with an ``async def call``).
-        types: V3/V4 :class:`TickDataTypes`.
-        state_view_address: V4 state-view contract address (V4 only).
-        pool_id: V4 pool id bytes (V4 only).
-
-    Returns:
-        The fetcher callback (same contract as :func:`make_tick_data_fetcher`).
-
-    """
-    blocking_io = _BlockingAsyncPoolIO(async_io)
-    return make_tick_data_fetcher(
-        pool_lookup=pool_lookup,
-        io=cast("PoolIO", blocking_io),
-        types=types,
-        state_view_address=state_view_address,
-        pool_id=pool_id,
-    )

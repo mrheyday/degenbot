@@ -26,8 +26,8 @@ from degenbot.uniswap.v2_functions import (
 )
 
 if TYPE_CHECKING:
-    from degenbot.degenbot_rs import PyLiquidityPool
     from degenbot.erc20 import Erc20Token
+    from degenbot.types import PyLiquidityPool
     from degenbot.uniswap.v2_types import UniswapV2PoolState
 
 
@@ -254,12 +254,3 @@ class UniswapV2PoolCalc:
             if token == self._token0
             else Fraction(10**self._token0.decimals, 10**self._token1.decimals)
         )
-
-    def extract_fee(self, zero_for_one: bool) -> Fraction:  # noqa: FBT001
-        """Extract fee.
-
-        Returns:
-            The fee as a Fraction for the given swap direction.
-
-        """
-        return self._fee_token0 if zero_for_one else self._fee_token1

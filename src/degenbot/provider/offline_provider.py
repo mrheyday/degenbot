@@ -1,71 +1,53 @@
 """Offline provider for testing without RPC calls.
 
-This module provides a ProviderBackend implementation that serves
+This module provides a provider implementation that serves
 pre-recorded chain data from JSON files, allowing tests to run without
 requiring a live blockchain connection.
 
+The heavy lifting lives in the Rust ``degenbot_rpc::offline`` module (an
+in-memory alloy ``Transport`` over recorded data). This Python class is a thin
+delegating shell: it parses the recorded JSON for metadata (``chain_id``,
+``block_numbers``) and holds a real Rust :class:`AlloyProvider` (``PyAlloyProvider``)
+that answers ``call``/``get_code``/``get_block``/``get_block_number`` via the
+offline transport — so a consumer cannot distinguish an ``OfflineProvider`` from
+a live provider. ``PyBotIo`` can hold it natively (O2/B1).
+
 Example:
-    >>> from degenbot.provider import OfflineProvider, ProviderAdapter
+    >>> from degenbot.provider import OfflineProvider
     >>>
     >>> # Load recorded data
     >>> offline = OfflineProvider.from_json_file(
     ...     Path("tests/fixtures/chain_data/1/multi_block.json")
     ... )
-    >>> provider = ProviderAdapter.from_offline(offline)
     >>>
     >>> # Use in tests
-    >>> result = provider.call(to="0x...", data=calldata, block=24945700)
+    >>> result = offline.call(to="0x...", data=calldata, block=24945700)
 
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hexbytes import HexBytes
 
+from degenbot.provider import RustAlloyProvider
 
-class BlockNotRecordedError(Exception):
-    """Raised when requesting data for a block that was not recorded."""
-
-    def __init__(self, block: int, available: list[int]) -> None:
-        """Initialize the instance."""
-        self.block = block
-        self.available = available
-        available_str = ", ".join(str(b) for b in available)
-        super().__init__(f"No data recorded for block {block}. Available blocks: {available_str}")
-
-
-class OfflineDataMissing(Exception):
-    """Raised when requested call data was not recorded."""
-
-    def __init__(self, to: str, data: bytes) -> None:
-        """Initialize the instance."""
-        super().__init__(f"No recorded data for call to {to} with data 0x{data.hex()[:40]}...")
-
-
-class OfflineCallReverted(Exception):
-    """Raised when a recorded call reverted or the contract didn't exist at the block.
-
-    This is signaled by a `null` result in the recorded data.
-    """
-
-    def __init__(self, to: str, data: bytes) -> None:
-        self.to = to
-        self.data = data
-        msg = (
-            f"Recorded call reverted or contract not deployed"
-            f" for call to {to} with data 0x{data.hex()[:40]}..."
-        )
-        super().__init__(msg)
+if TYPE_CHECKING:
+    from degenbot.types.rpc_types import BlockData, TxParams
 
 
 class OfflineProvider:
     """Ethereum provider that serves pre-recorded chain data.
 
-    This class implements the ProviderBackend Protocol (minus async methods)
-    by loading recorded RPC responses from JSON files. It allows tests to
-    run without requiring a live blockchain connection.
+    This class delegates every data-serving RPC (``call``, ``get_code``,
+    ``get_block``, ``get_block_number``, ``get_block_timestamp``) to a real
+    Rust :class:`AlloyProvider` built over an in-memory offline transport, so it is
+    indistinguishable from a live provider to any consumer (including
+    :class:`PyBotIo`). Recorded-JSON metadata (``chain_id``, ``block_numbers``)
+    is parsed in Python for the convenience accessors.
 
     Attributes:
         chain_id: The chain ID this provider serves data for
@@ -112,8 +94,14 @@ class OfflineProvider:
             msg = "No blocks recorded in provider data"
             raise ValueError(msg)
 
+        # Build the Rust offline transport from the same recorded data. The
+        # multi-block `{"chain_id", "blocks": {...}}` envelope matches the
+        # `RecordedData` wire format parsed by `OfflineProvider::from_json_bytes`.
+        recorded_json = json.dumps({"chain_id": chain_id, "blocks": blocks})
+        self._alloy: RustAlloyProvider = RustAlloyProvider.offline_from_json_string(recorded_json)
+
     @classmethod
-    def from_json_file(cls, path: Path) -> "OfflineProvider":
+    def from_json_file(cls, path: Path) -> OfflineProvider:
         """Load recorded data from a JSON file.
 
         Supports both old multi-block format (with "blocks" key) and new single-block
@@ -126,10 +114,11 @@ class OfflineProvider:
             An OfflineProvider instance loaded from the file.
 
         """
-        with Path(path).open(encoding="utf-8") as f:
-            data = json.load(f)
+        # Build the Rust transport from the raw file (it handles both formats
+        # natively), then parse the JSON again for the Python-side metadata.
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
 
-        # Check if this is new single-block format
         if "block_number" in data:
             # Single block format - wrap in blocks dict
             block_number = str(data["block_number"])
@@ -145,7 +134,7 @@ class OfflineProvider:
         )
 
     @classmethod
-    def from_json_string(cls, json_str: str) -> "OfflineProvider":
+    def from_json_string(cls, json_str: str) -> OfflineProvider:
         """Load recorded data from a JSON string.
 
         Args:
@@ -188,125 +177,75 @@ class OfflineProvider:
             The latest recorded block number.
 
         """
-        return self.block_number
-
-    def _get_block_key(self, block: int | None) -> str:
-        """Validate block number and return string key.
-
-        Args:
-            block: Block number, or None for latest
-
-        Returns:
-            String block key
-
-        Raises:
-            BlockNotRecordedError: If the block is not in the recorded data.
-
-        """
-        if block is None:
-            block = self.block_number
-
-        block_key = str(block)
-        if block_key not in self._blocks:
-            raise BlockNotRecordedError(block, self._block_numbers)
-
-        return block_key
+        return self._alloy.get_block_number()
 
     def call(
         self,
         to: str,
         data: bytes,
-        *,
-        block_number: int | None = None,
+        block: int | None = None,
     ) -> HexBytes:
         """Execute a contract call using recorded data.
+
+        Delegates to the Rust offline transport. A recorded revert (``null``
+        result) surfaces as a :class:`ContractLogicError`; an unrecorded call
+        surfaces as a provider ``RuntimeError``.
 
         Args:
             to: Contract address to call
             data: Calldata bytes
-            block_number: Block number, or None for latest
+            block: Block number, or None for latest
 
         Returns:
             Raw return data from the contract call
 
-        Raises:
-            OfflineDataMissing: If the specific call was not recorded
-            OfflineCallReverted: If the recorded call reverted (result is null)
-
         """
-        block_key = self._get_block_key(block_number)
-
-        call_key = f"{to.lower()}:0x{data.hex()}"
-        block_data = self._blocks[block_key]
-
-        if call_key not in block_data["calls"]:
-            raise OfflineDataMissing(to, data)
-
-        result = block_data["calls"][call_key]
-
-        # Handle null/reverted calls
-        if result is None:
-            raise OfflineCallReverted(to, data)
-
-        return HexBytes(result)
+        return self._alloy.call(to, HexBytes(data), block_number=block)
 
     def get_code(
         self,
         address: str,
-        block_number: int | None = None,
+        block: int | None = None,
     ) -> HexBytes:
         """Get contract bytecode at an address.
 
         Args:
             address: Contract address
-            block_number: Block number, or None for latest
+            block: Block number, or None for latest
 
         Returns:
             Contract bytecode, or empty bytes if not recorded
 
         """
-        block_key = self._get_block_key(block_number)
-        block_data = self._blocks[block_key]
-
-        code = block_data.get("code", {}).get(address.lower(), "")
-        return HexBytes(code)
+        return self._alloy.get_code(address, block_number=block)
 
     def get_block(
         self,
         block_identifier: int | str,
-    ) -> dict[str, Any] | None:
+    ) -> BlockData | None:
         """Get a block by number or identifier.
 
         Args:
             block_identifier: Block number or "latest"
 
         Returns:
-            Block data dict with "number", "timestamp", or None if not found
+            Block data dict (including ``number`` and ``timestamp``), or
+            ``None`` if the block is not recorded.
 
         """
         if block_identifier == "latest":
-            block_num = self.block_number
+            block_num = self._alloy.get_block_number()
         else:
             try:
                 block_num = int(block_identifier)
             except (ValueError, TypeError):
                 return None
-
-        try:
-            block_key = self._get_block_key(block_num)
-        except BlockNotRecordedError:
-            return None
-
-        block_data = self._blocks[block_key]
-        return {
-            "number": block_num,
-            "timestamp": block_data.get("timestamp", 0),
-        }
+        return self._alloy.get_block(block_num)
 
     def get_balance(
         self,
         address: str,
-        block_number: int | None = None,
+        block: int | None = None,
     ) -> int:
         """Get the balance of an address.
 
@@ -315,7 +254,7 @@ class OfflineProvider:
 
         Args:
             address: Ethereum address
-            block_number: Block number, or None for latest
+            block: Block number, or None for latest
 
         Raises:
             NotImplementedError: Balances are not recorded
@@ -331,7 +270,7 @@ class OfflineProvider:
         self,
         address: str,
         position: int,
-        block_number: int | None = None,
+        block: int | None = None,
     ) -> HexBytes:
         """Get storage at a given position.
 
@@ -341,7 +280,7 @@ class OfflineProvider:
         Args:
             address: Contract address
             position: Storage slot position
-            block_number: Block number, or None for latest
+            block: Block number, or None for latest
 
         Raises:
             NotImplementedError: Storage is not recorded
@@ -356,7 +295,7 @@ class OfflineProvider:
     def get_transaction_count(
         self,
         address: str,
-        block_number: int | None = None,
+        block: int | None = None,
     ) -> int:
         """Get the transaction count (nonce) for an address.
 
@@ -365,7 +304,7 @@ class OfflineProvider:
 
         Args:
             address: Ethereum address
-            block_number: Block number, or None for latest
+            block: Block number, or None for latest
 
         Raises:
             NotImplementedError: Transaction counts are not recorded
@@ -411,6 +350,105 @@ class OfflineProvider:
         """
         return True
 
+    def call_raw(self, tx: TxParams, block: int | None = None) -> HexBytes:
+        """Execute an eth_call with a raw transaction dict.
+
+        Args:
+            tx: Transaction dict with at least ``to`` and ``data`` keys.
+            block: Block number, or None for latest.
+
+        Returns:
+            The raw return data from the contract call.
+
+        """
+        return self.call(tx["to"], HexBytes(tx["data"]), block=block)
+
+    def batch_call(self, calls: list[TxParams], block: int | None = None) -> list[HexBytes]:
+        """Execute multiple eth_calls sequentially.
+
+        Args:
+            calls: List of transaction dicts, each with ``to`` and ``data``.
+            block: Block number, or None for latest.
+
+        Returns:
+            A list of raw return data from each call.
+
+        """
+        return [self.call_raw(tx, block) for tx in calls]
+
+    def get_block_timestamp(self, block: int | None = None) -> int:
+        """Get the timestamp for a block.
+
+        Args:
+            block: Block number, or None for latest.
+
+        Returns:
+            The block timestamp as an integer (Unix seconds).
+
+        Raises:
+            ValueError: If the block is not found.
+
+        """
+        block_data = self.get_block(block if block is not None else self.get_block_number())
+        if block_data is None:
+            msg = f"Block {block} not found"
+            raise ValueError(msg)
+        return block_data["timestamp"]
+
+    def make_request(self, method: str, params: list[Any]) -> Any:  # noqa: ANN401
+        """Raw JSON-RPC request — not supported by OfflineProvider."""
+        msg = f"OfflineProvider does not support make_request (method={method!r})"
+        raise NotImplementedError(msg)
+
+    def close(self) -> None:  # noqa: PLR6301
+        """Close the provider — no resources to release."""
+        return
+
+    def to_alloy_provider(self) -> RustAlloyProvider:
+        """Return the underlying Rust :class:`AlloyProvider`.
+
+        The offline provider *is* a real Rust ``AlloyProvider`` over an
+        in-memory transport, so this returns the held pyclass.
+
+        Returns:
+            The wrapped :class:`degenbot._ffi.AlloyProvider`.
+
+        """
+        return self._alloy
+
+    @property
+    def provider_type(self) -> str:
+        """The provider type (always 'offline')."""
+        return "offline"
+
+    @property
+    def provider(self) -> RustAlloyProvider:
+        """The underlying Rust ``AlloyProvider`` (the offline pyclass)."""
+        return self._alloy
+
+    @staticmethod
+    def as_web3() -> None:
+        """Return ``None`` — this provider has no Web3 backend."""
+        return
+
+    def as_alloy(self) -> RustAlloyProvider:
+        """Return the underlying Rust :class:`AlloyProvider`.
+
+        Returns:
+            The wrapped :class:`degenbot._ffi.AlloyProvider`.
+
+        """
+        return self._alloy
+
+    def as_offline(self) -> OfflineProvider:
+        """Return ``self`` as an ``OfflineProvider``.
+
+        Returns:
+            This provider instance.
+
+        """
+        return self
+
     def __repr__(self) -> str:
         """Return a string representation.
 
@@ -422,7 +460,5 @@ class OfflineProvider:
 
 
 __all__ = [
-    "BlockNotRecordedError",
-    "OfflineDataMissing",
     "OfflineProvider",
 ]

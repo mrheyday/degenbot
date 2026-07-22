@@ -11,7 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from degenbot.aave.analysis.core import UserPositionSummary
+from degenbot.aave import (
+    activate_aave_market,
+    deactivate_aave_market,
+    run_aave_update,
+)
+from degenbot.aave import (
+    cleanup_zero_balance_positions as rs_cleanup_zero_balance_positions,
+)
 from degenbot.aave.analysis.orchestrator import analyze_positions_for_market
 from degenbot.aave.deployments import EthereumMainnetAaveV3
 from degenbot.bot import Bot
@@ -25,23 +32,15 @@ from degenbot.database.models.aave import (
     AaveV3User,
 )
 from degenbot.database.operations import backup_sqlite_database
-from degenbot.degenbot_rs import (
-    CancelHandle,
-    activate_aave_market,
-    deactivate_aave_market,
-    run_aave_update,
-)
-from degenbot.degenbot_rs import (
-    cleanup_zero_balance_positions as rs_cleanup_zero_balance_positions,
-)
+from degenbot.db import PyUserPositionSummary
 from degenbot.exceptions import DegenbotValueError
 from degenbot.logging import logger
 from degenbot.provider.block_helpers import get_number_for_block_identifier
 from degenbot.provider.factory import get_provider_from_config
+from degenbot.updater import CancelHandle
 
 if TYPE_CHECKING:
     from eth_typing.evm import BlockParams
-
 
 # Display limit for ``aave position risk`` output (the sole survivor of the
 # former ``constants.py`` — the rest was deleted by the §4.2 writer
@@ -363,7 +362,7 @@ def aave_update(
 
     """
     # AVS4DR (epic AZGJUN): the per-market chunk loop is delegated to the Rust
-    # core (`degenbot_rs.run_aave_update`). Python is a driver shell —
+    # core (`degenbot._ffi.run_aave_update`). Python is a driver shell —
     # market selection (READ), `--to-block` resolution, SIGINT -> cancel flag,
     # tqdm-on-callback, a per-market report echo, + post-run cleanup/backup
     # hygiene. The chunk loop, the RPC fetches, the decode, the DB writes, +
@@ -827,7 +826,7 @@ def position_risk(  # noqa: PLR0917
 
 
 def _display_user_risk(
-    user_summary: UserPositionSummary,
+    user_summary: PyUserPositionSummary,
     *,
     show_positions: bool,
 ) -> None:

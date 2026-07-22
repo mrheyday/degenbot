@@ -14,7 +14,7 @@
 //! registered as a `Weak<dyn PoolStateSubscriber>` so a dropped subscriber is
 //! silently skipped by `LogDispatcher::notify`'s `Weak::upgrade` (no leak, no
 //! panic). The difference is the lifetime anchor: the engine adapter's strong
-//! `Arc` lives on the shared `UniswapEngine`; THIS adapter's strong `Arc` lives
+//! `Arc` lives on the shared `ArbitrageEngine`; THIS adapter's strong `Arc` lives
 //! on a returned [`PySubscription`] handle Python holds — drop the handle
 //! (or call `.unsubscribe()`) → the Arc drops → the registered `Weak` goes dead
 //! (explicit unsubscribe, mirroring `PublisherMixin.unsubscribe`).
@@ -108,7 +108,7 @@ impl PoolStateSubscriber for PySubscriberAdapter {
 /// no-op-drop that simply releases the strong ref. To re-add, call
 /// `register_subscriber` again (a fresh `Weak` registers + a fresh handle
 /// returns).
-#[pyclass(name = "PySubscription")]
+#[pyclass(name = "PySubscription", module = "degenbot._ffi.subscriber")]
 pub struct PySubscription {
     /// The strong ref keeping the adapter's `Weak` alive in `LogDispatcher`.
     /// `subscribe_pool_state_change` registered only a `Weak`; this anchor
@@ -190,7 +190,13 @@ pub(crate) fn register_subscriber(
 /// pyfunction + the `PySubscription` handle class. Mirrors `add_dex_identity` /
 /// `add_deployments`.
 pub(crate) fn add_subscriber_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(register_subscriber, m)?)?;
-    m.add_class::<PySubscription>()?;
+    let py = m.py();
+    let submod = PyModule::new(py, "degenbot._ffi.subscriber")?;
+    submod.add_function(wrap_pyfunction!(register_subscriber, &submod)?)?;
+    submod.add_class::<PySubscription>()?;
+    m.add_submodule(&submod)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("degenbot._ffi.subscriber", &submod)?;
     Ok(())
 }

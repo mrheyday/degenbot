@@ -27,7 +27,11 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
 
 /// Python wrapper for async provider operations.
-#[pyclass(name = "AsyncAlloyProvider", skip_from_py_object)]
+#[pyclass(
+    name = "AsyncAlloyProvider",
+    skip_from_py_object,
+    module = "degenbot._ffi.provider"
+)]
 pub struct PyAsyncAlloyProvider {
     provider: Arc<AlloyProvider>,
     max_blocks_per_request: u64,
@@ -202,14 +206,21 @@ impl PyAsyncAlloyProvider {
             .map_err(|e| PyValueError::new_err(format!("Invalid address: {e}")))?;
         let data_bytes = alloy::primitives::Bytes::from(data);
         let provider = Arc::clone(&self.provider);
+        let to_owned = to.to_string();
 
         future_into_py(py, async move {
-            let result = provider
+            match provider
                 .eth_call(&to_address, data_bytes, block_number)
                 .await
-                .map_err(Into::<PyErr>::into)?;
-
-            Python::attach(|py| create_hexbytes(py, &result).map(Bound::unbind))
+            {
+                Ok(result) => Python::attach(|py| create_hexbytes(py, &result).map(Bound::unbind)),
+                Err(degenbot_core::errors::ProviderError::ExecutionReverted {
+                    message, ..
+                }) => Python::attach(|py| -> PyResult<Py<PyAny>> {
+                    Err(crate::rpc::revert_to_pyerr(py, &to_owned, &message))
+                }),
+                Err(e) => Err(e.into()),
+            }
         })
     }
 

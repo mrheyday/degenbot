@@ -42,11 +42,12 @@ import pytest
 
 from degenbot.aerodrome.abi import AERODROME_V2_POOL_ABI
 from degenbot.aerodrome.pools import AerodromeV2Pool
-from degenbot.anvil_fork import AnvilFork
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot
+from degenbot.fork import AnvilFork
 from tests.helpers.aerodrome_pool_factory import make_aerodrome_v2_pool
 from tests.helpers.erc20_factory import make_erc20
+from tests.helpers.w3_contract import make_contract
 
 # Pinned well inside mainnet.base.org's keyless archive window (tip ~47.8M).
 AERODROME_V2_PARITY_BLOCK = 46_875_151
@@ -202,10 +203,7 @@ def _run_parity(
     with _RecordFork(recording=golden.is_recording) as ctx:
         if golden.is_recording:
             assert ctx.fork is not None
-            ctx.contract = ctx.fork.w3.eth.contract(
-                address=lp.address,
-                abi=AERODROME_V2_POOL_ABI,
-            )
+            ctx.contract = make_contract(ctx.fork.http_url, lp.address, AERODROME_V2_POOL_ABI)
         for key, token_in, amount_in in cases:
             oracle = golden.check(
                 key,

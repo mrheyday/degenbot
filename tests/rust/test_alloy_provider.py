@@ -1,6 +1,6 @@
 """Tests for AlloyProvider's direct interface.
 
-These tests verify that AlloyProvider exposes the ProviderBackend
+These tests verify that AlloyProvider exposes the AlloyProvider
 interface with correct method signatures and default values.
 """
 
@@ -9,7 +9,7 @@ import inspect
 import pytest
 from hexbytes import HexBytes
 
-from degenbot.anvil_fork import AnvilFork
+from degenbot.fork import AnvilFork
 from degenbot.provider import AlloyProvider
 
 
@@ -62,25 +62,25 @@ class TestAlloyProviderMethodSignatures:
     """Test method signatures match the expected interface."""
 
     def test_get_code_signature(self, alloy_provider: AlloyProvider):
-        """Test get_code accepts address and block_number parameters."""
+        """Test get_code accepts address and block parameter."""
         sig = inspect.signature(alloy_provider.get_code)
         params = list(sig.parameters.keys())
         assert "address" in params
-        assert "block_number" in params
+        assert "block" in params
 
     def test_call_signature(self, alloy_provider: AlloyProvider):
-        """Test call accepts to, data, and block_number parameters."""
+        """Test call accepts to, data, and block parameter."""
         sig = inspect.signature(alloy_provider.call)
         params = list(sig.parameters.keys())
         assert "to" in params
         assert "data" in params
-        assert "block_number" in params
+        assert "block" in params
 
     def test_get_block_signature(self, alloy_provider: AlloyProvider):
-        """Test get_block accepts block_number parameter."""
+        """Test get_block accepts a block identifier (number or tag)."""
         sig = inspect.signature(alloy_provider.get_block)
         params = list(sig.parameters.keys())
-        assert "block_number" in params
+        assert "block_identifier" in params
 
     def test_get_logs_signature(self, alloy_provider: AlloyProvider):
         """Test get_logs accepts LogFilter or keyword arguments."""
@@ -94,12 +94,12 @@ class TestAlloyProviderMethodSignatures:
         assert params["to_block"].kind == inspect.Parameter.KEYWORD_ONLY
 
     def test_get_storage_at_signature(self, alloy_provider: AlloyProvider):
-        """Test get_storage_at accepts address, position, block_number."""
+        """Test get_storage_at accepts address, position, block."""
         sig = inspect.signature(alloy_provider.get_storage_at)
         params = list(sig.parameters.keys())
         assert "address" in params
         assert "position" in params
-        assert "block_number" in params
+        assert "block" in params
 
     def test_get_transaction_signature(self, alloy_provider: AlloyProvider):
         """Test get_transaction accepts tx_hash parameter."""
@@ -212,26 +212,74 @@ class TestAlloyProviderContextManager:
 class TestProviderDefaults:
     """Test default parameter values."""
 
-    def test_get_code_default_block_number(self, alloy_provider: AlloyProvider):
-        """Test get_code has None default for block_number (latest)."""
+    def test_get_code_default_block(self, alloy_provider: AlloyProvider):
+        """Test get_code has None default for block (latest)."""
         sig = inspect.signature(alloy_provider.get_code)
-        default = sig.parameters["block_number"].default
+        default = sig.parameters["block"].default
         assert default is None
 
-    def test_call_default_block_number(self, alloy_provider: AlloyProvider):
-        """Test call has None default for block_number (latest)."""
+    def test_call_default_block(self, alloy_provider: AlloyProvider):
+        """Test call has None default for block (latest)."""
         sig = inspect.signature(alloy_provider.call)
-        default = sig.parameters["block_number"].default
+        default = sig.parameters["block"].default
         assert default is None
 
-    def test_get_block_default_block_number(self, alloy_provider: AlloyProvider):
-        """Test get_block has no default - requires block number."""
+    def test_get_block_default_block(self, alloy_provider: AlloyProvider):
+        """Test get_block accepts a block identifier (number or tag)."""
         sig = inspect.signature(alloy_provider.get_block)
-        # block_number is required, no default
-        assert sig.parameters["block_number"].default is inspect.Parameter.empty
+        # block_identifier is required, no default
+        assert sig.parameters["block_identifier"].default is inspect.Parameter.empty
 
-    def test_get_storage_at_default_block_number(self, alloy_provider: AlloyProvider):
-        """Test get_storage_at has None default for block_number (latest)."""
+    def test_get_storage_at_default_block(self, alloy_provider: AlloyProvider):
+        """Test get_storage_at has None default for block (latest)."""
         sig = inspect.signature(alloy_provider.get_storage_at)
-        default = sig.parameters["block_number"].default
+        default = sig.parameters["block"].default
         assert default is None
+
+
+class TestAlloyProviderRevertRaisesContractLogicError:
+    """eth_call execution reverts raise degenbot.exceptions.ContractLogicError.
+
+    Replaces the Python adapter-seam string-scraping (alloy_errors): the Rust
+    core classifies reverts as ProviderError::ExecutionReverted, and the FFI
+    layer raises the degenbot-owned ContractLogicError directly. Probe sites
+    catch RpcError (the base class) to mean "method not implemented."
+    """
+
+    WETH9 = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+
+    @staticmethod
+    def _revert_calldata() -> bytes:
+        """Calldata for WETH9.withdraw(uint256) with an impossibly large amount.
+
+        The zero-address caller has no WETH balance, so the call reverts with
+        "execution reverted" — a reliable, portable revert trigger.
+        """
+        import eth_abi
+
+        selector = bytes.fromhex("2e1a7d4d")  # withdraw(uint256)
+        return selector + eth_abi.encode(["uint256"], [2**255])
+
+    def test_sync_call_revert_raises_contract_logic_error(self, alloy_provider):
+        """AlloyProvider.call raises ContractLogicError on an EVM revert."""
+        from degenbot.exceptions import ContractLogicError
+
+        with pytest.raises(ContractLogicError, match="reverted"):
+            alloy_provider.call(self.WETH9, self._revert_calldata())
+
+    def test_sync_call_revert_is_catchable_as_rpc_error(self, alloy_provider):
+        """ContractLogicError is a subclass of RpcError (probe-site contract)."""
+        from degenbot.exceptions import RpcError
+
+        with pytest.raises(RpcError):
+            alloy_provider.call(self.WETH9, self._revert_calldata())
+
+    @pytest.mark.asyncio
+    async def test_async_call_revert_raises_contract_logic_error(self, alloy_provider):
+        """AsyncAlloyProvider.call raises ContractLogicError on an EVM revert."""
+        from degenbot._ffi.provider import AsyncAlloyProvider
+        from degenbot.exceptions import ContractLogicError
+
+        async_alloy = await AsyncAlloyProvider.create(alloy_provider.rpc_url)
+        with pytest.raises(ContractLogicError, match="reverted"):
+            await async_alloy.call(self.WETH9, self._revert_calldata())

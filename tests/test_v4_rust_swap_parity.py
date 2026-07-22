@@ -17,10 +17,10 @@ import pathlib
 
 import eth_abi.abi
 import pytest
-from web3 import Web3
 
+from degenbot.bot import PyBot
 from degenbot.constants import ZERO_ADDRESS
-from degenbot.degenbot_rs import PyBot
+from degenbot.crypto import keccak256
 from degenbot.uniswap.concentrated.types import LiquidityAtTick
 from degenbot.uniswap.v3_libraries import MIN_SQRT_RATIO as MIN_SQRT_PRICE
 from tests.helpers.erc20_factory import make_erc20
@@ -44,7 +44,7 @@ def _compute_v4_pool_id(
     """Mirror UniswapV4Pool's pool_id derivation so the test pool validates."""
     return (
         "0x"
-        + Web3.keccak(
+        + keccak256(
             eth_abi.abi.encode(
                 types=["address", "address", "uint24", "int24", "address"],
                 args=[currency0, currency1, fee, tick_spacing, hooks],
@@ -138,13 +138,25 @@ def test_sparse_mainline_v4_swap_fetch_merge_matches_dense_oracle():
     # unknown → the first `v4_simulate_swap` call raises `MissingTickWord(0)` →
     # the fetch+retry loop backfills the bounds' words on demand.
     token0_b = make_erc20(
-        py_bot, address=f"0x{'b' * 40}", name="T0b", symbol="T0b", decimals=18,
+        py_bot,
+        address=f"0x{'b' * 40}",
+        name="T0b",
+        symbol="T0b",
+        decimals=18,
     )
     token1_b = make_erc20(
-        py_bot, address=f"0x{'b' * 39}{'e'}", name="T1b", symbol="T1b", decimals=18,
+        py_bot,
+        address=f"0x{'b' * 39}{'e'}",
+        name="T1b",
+        symbol="T1b",
+        decimals=18,
     )
     pool_id_b = _compute_v4_pool_id(
-        token0_b.address, token1_b.address, _FEE, _TICK_SPACING, ZERO_ADDRESS,
+        token0_b.address,
+        token1_b.address,
+        _FEE,
+        _TICK_SPACING,
+        ZERO_ADDRESS,
     )
     fetched_words: list[int] = []
 
@@ -234,7 +246,7 @@ def _build_pool_from_corpus(
     token1 = make_erc20(py_bot, address="0x" + "bb" * 20, name="T1", symbol="T1", decimals=18)
     pool_id = (
         "0x"
-        + Web3.keccak(
+        + keccak256(
             eth_abi.abi.encode(
                 ["address", "address", "uint24", "int24", "address"],
                 [token0.address, token1.address, state["fee"], state["tick_spacing"], ZERO_ADDRESS],
@@ -436,7 +448,11 @@ def test_sparse_fetch_reaches_min_tick_via_empty_words_v4():
     token0b = make_erc20(py_bot, address="0x" + "d" * 40, name="T0b", symbol="T0", decimals=18)
     token1b = make_erc20(py_bot, address="0x" + "c" * 40, name="T1b", symbol="T1", decimals=18)
     pool_id2 = _compute_v4_pool_id(
-        token0b.address, token1b.address, _FEE, _TICK_SPACING, ZERO_ADDRESS,
+        token0b.address,
+        token1b.address,
+        _FEE,
+        _TICK_SPACING,
+        ZERO_ADDRESS,
     )
     sparse = make_v4_pool(
         pool_id=pool_id2,

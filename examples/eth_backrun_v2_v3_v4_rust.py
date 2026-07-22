@@ -1,6 +1,6 @@
 """Ethereum mainnet backrun bot: Uniswap V2/V3/V4 arbitrage using the Rust engine.
 
-A thin Python orchestration layer over the Rust-owned UniswapArbEngine.
+A thin Python orchestration layer over the Rust-owned ArbitrageEngine.
 The Rust engine owns all pool state and path solving. Python does: pool
 construction, swap encoding, simulation, and transaction submission.
 
@@ -30,50 +30,24 @@ Startup sequence:
 import argparse
 import asyncio
 import contextlib
-import dataclasses
-import datetime
 import gc
-import itertools
-import json
-import operator
 import os
 import pathlib
 import signal
 import time
-import traceback
-from collections import deque
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 import dotenv
-import eth_abi.abi
-import eth_account
-import web3
-from degenbot import degenbot_rs
 from eth_backrun_helpers import (
     BackrunConfig,
-    classify_revert,
-    filter_thin_margin_results,
     format_failure_breakdown,
-    format_sim_diag_line,
 )
 from eth_typing import ChainId, ChecksumAddress
-from hexbytes import HexBytes
-from web3 import Web3
-from web3.exceptions import TransactionNotFound, Web3Exception
-from web3.types import (
-    HexStr,
-    Nonce,
-    StateOverride,
-    TxParams,
-    Wei,
-)
 
 from degenbot import Bot, UniswapV2Pool, UniswapV3Pool, get_checksum_address
-from degenbot.arbitrage.encoding import fits_int128
 from degenbot.arbitrage.engine_registry import EngineRegistry
-from degenbot.arbitrage.hop_info import HopInfo, V2HopInfo, V3HopInfo, V4HopInfo
 from degenbot.arbitrage.verification_retry import (
     VerificationRetryPolicy,
     retry_verification_call,
@@ -88,22 +62,25 @@ from degenbot.database.models.pools import (
     UniswapV4PoolTable,
     UniswapV4PoolTableBase,
 )
-from degenbot.degenbot_rs import (
-    AsyncAlloyProvider,
+from degenbot.dispatch import (
+    DispatchCandidate,
+    Dispatcher,
+    DispatchOutcome,
+    SimulateContext,
+    TxSigner,
+    dispatch_and_submit,
+    dispatch_profitable,
+    fetch_fee_history,
+)
+from degenbot.exceptions import (
     DynamicFeePoolRejectedError,
     HookedPoolRejectedError,
-    PyDispatcher,
-    PySubmitCandidate,
-    PyTxSigner,
     VerificationMismatchError,
     VerificationRpcError,
-    dispatch_and_submit_py,
-    fetch_fee_history_py,
 )
 from degenbot.logging import logger as bot_logger
 from degenbot.pathfinding import find_paths_async
-from degenbot.provider.async_adapter import AsyncProviderAdapter
-from degenbot.provider.sync_adapter import ProviderAdapter
+from degenbot.provider import AlloyProvider, AsyncAlloyProvider
 from degenbot.uniswap.deployments import EthereumMainnetUniswapV4
 from degenbot.uniswap.trackers import UniswapV3PoolTracker
 from degenbot.uniswap.v3_snapshot import DatabaseSnapshot as V3DatabaseSnapshot
@@ -280,6 +257,11 @@ def _pool_types_from_filter(perms: set[str] | None) -> list[type]:
 # Number of consecutive sim-failures before a path is suppressed.
 PATH_SUPPRESS_THRESHOLD = 10
 
+# Cap on per-batch `[sim-fail]` lines emitted by `_render_sim_failures`. A
+# thin-margin revert storm can otherwise flood the log during a stalled BP —
+# the remainder is summarized as a single `… (+N more)` trailing line.
+_SIM_FAIL_RENDER_CAP = 25
+
 # How many blocks between retry attempts for suppressed paths.
 PATH_SUPPRESS_RETRY_INTERVAL = 100
 
@@ -347,10 +329,6 @@ EXECUTOR_ADDRESS = os.environ.get(
     "EXECUTOR_CONTRACT_ADDRESS",
     "0x543C7eF4F2368a9411c94A055e7236E6Dc6f99D5",  # OLD — update after deployment
 )
-EXECUTOR_OWNER = os.environ.get(
-    "EXECUTOR_OWNER_ADDRESS",
-    "0x9C56a29c7231974c269E24F9FB3c29203039089E",  # Throwaway — override with real key at runtime
-)
 EXECUTOR_ABI = [
     # execute(commands, config) — cmd_executor
     {
@@ -366,17 +344,6 @@ EXECUTOR_ABI = [
         ],
     },
 ]
-
-
-BALANCEOF_SELECTOR = web3.Web3.keccak(text="balanceOf(address)")[:4]
-
-
-def encode_balanceof_calldata(account: str) -> bytes:
-    """Encode an ERC20 balanceOf(address) call for simulation."""
-    return BALANCEOF_SELECTOR + eth_abi.abi.encode(
-        types=["address"],
-        args=[account],
-    )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -415,119 +382,28 @@ def _load_executor_runtime_bytecode() -> str:
     return _runtime_bytecode_cache
 
 
-def build_simulation_state_overrides(
-    *,
-    executor_owner: str,
-    inject_code: bool = False,
-    injected_address: str | None = None,
-) -> StateOverride:
-    """Build the stateOverrides dict for eth_simulateV1.
+def _hop_display_addr(hop: dict[str, Any]) -> str:
+    """Return a short display address for logging (WEFVGE: plain-dict hop)."""
+    family = hop["family"]
+    if family in ("V2", "V3"):
+        return hop["pool_address"]
+    return hop["pool_id_hex"]
 
-    All fields (code, balance, nonce, state, stateDiff) go under
-    stateOverrides per the Alloy AccountOverride spec. Reth v2.3.0
-    applies all of them correctly from stateOverrides in eth_simulateV1.
 
-    IMPORTANT: the runtime bytecode must have Vyper CBOR metadata
-    intact and immutables appended AFTER it. Vyper's CODECOPY offsets
-    assume the deployed layout [code][CBOR][immutables]; removing
-    the CBOR breaks the jump table, JUMPDEST targets, and immutable
-    reads. The recompile.py script handles this automatically.
+def _hop_token_summary(hops: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> str:
+    """One-line summary of hop input→output tokens for sim-fail diagnostics.
 
-    When inject_code=True:
-      - Injects runtime bytecode at injected_address via code
-      - Pre-warms the executor's ERC6909 and WETH storage slots via
-        stateDiff (avoids ~61K gas in cold SSTORE penalties per simulation)
-      - Funds the injected executor with ETH and WETH for V3 callbacks
-      - Funds the executor owner with ETH for gas
-
-    When inject_code=False:
-      - Only funds the executor owner with ETH for gas
+    WEFVGE: reads plain dicts (the `outcome.path_infos` render shape) instead
+    of the retired `*HopInfo` dataclasses.
     """
-    overrides: dict[str, dict[str, Any]] = {}
-
-    # Fund executor owner with ETH for gas
-    overrides[get_checksum_address(executor_owner)] = {"balance": cast("Wei", 100 * 10**18)}
-
-    if inject_code and injected_address:
-        # Inject executor runtime bytecode at the fresh address.
-        # CBOR metadata must remain intact — see IMPORTANT note in the
-        # docstring and contracts/recompile.py.
-        runtime_code = _load_executor_runtime_bytecode()
-        overrides[get_checksum_address(injected_address)] = {
-            "code": cast("HexStr", runtime_code),
-            # Fund the injected executor with ETH for V4 settlement and
-            # V3 callback WETH payments (the deployed contract wraps 10 ETH
-            # at construction; code injection skips this, so we must set
-            # the balance explicitly).
-            "balance": cast("Wei", 10 * 10**18),
-        }
-
-        # Pre-warm ERC6909 and WETH storage slots to avoid cold SSTORE
-        # penalties. compute_simulation_warmup_slots() returns stateDiff
-        # entries for 3 slots:
-        #   1. WETH9.balanceOf[executor] = 1 wei (mapping slot 3)
-        #   2. PM.erc6909_balanceOf[executor][weth_id] = 1 (slot 4)
-        #   3. PM.erc6909_balanceOf[executor][native_id] = 1 (slot 4)
-        warmup = degenbot_rs.compute_simulation_warmup_slots(
-            executor_address=injected_address,
-            weth_address=WETH_ADDRESS,
-            pool_manager_address=UNISWAP_V4_POOL_MANAGER_ADDRESS,
-        )
-
-        for contract_addr, contract_overrides in warmup.items():
-            addr = get_checksum_address(contract_addr)
-            if addr not in overrides:
-                overrides[addr] = {}
-            for key, value in contract_overrides.items():
-                if key == "stateDiff":
-                    overrides[addr].setdefault("stateDiff", {})
-                    overrides[addr]["stateDiff"].update(value)
-                elif key == "balance":
-                    # Don't let the warmup's 1 wei balance override the
-                    # 10 ETH we already set for the executor or owner
-                    if "balance" not in overrides[addr]:
-                        overrides[addr][key] = value
-                else:
-                    overrides[addr][key] = value
-
-        # Override the WETH balance with the operational amount (10 ETH)
-        # for V3 callbacks. The warmup function set it to 1 wei for
-        # slot-warming purposes; we need a much larger balance.
-        overrides[get_checksum_address(WETH_ADDRESS)].setdefault("stateDiff", {})
-
-        # Compute the WETH balanceOf slot (same formula as the warmup
-        # function uses internally — keccak256(pad(executor, 32) || pad(3, 32)))
-        # We overwrite the warmup's 1-wei entry with 10 ETH.
-
-        WETH_BALANCEOF_MAPPING_SLOT = 3
-        weth_balance_slot = degenbot_rs.mapping_slot(
-            WETH_BALANCEOF_MAPPING_SLOT, int(injected_address, 16)
-        )
-        overrides[get_checksum_address(WETH_ADDRESS)]["stateDiff"][
-            f"0x{weth_balance_slot:064x}"
-        ] = cast("HexStr", "0x" + (10 * 10**18).to_bytes(32, "big").hex())
-
-    return cast("StateOverride", overrides)
-
-
-def _hop_display_addr(hop: HopInfo) -> str:
-    """Return a short display address for logging."""
-    if isinstance(hop, V2HopInfo):
-        return hop.pool_address
-    if isinstance(hop, V3HopInfo):
-        return hop.pool_address
-    return hop.pool_id_hex
-
-
-def _hop_token_summary(hops: list[HopInfo] | tuple[HopInfo, ...]) -> str:
-    """One-line summary of hop input→output tokens for sim-fail diagnostics."""
     parts: list[str] = []
     for h in hops:
-        if isinstance(h, (V2HopInfo, V3HopInfo)):
-            t0, t1 = h.token0_address, h.token1_address
+        family = h["family"]
+        if family in ("V2", "V3"):
+            t0, t1 = h["token0_address"], h["token1_address"]
         else:
-            t0, t1 = h.currency0_address, h.currency1_address
-        parts.append(f"{t0}→{t1}{'↗' if h.zfo else '↘'}")
+            t0, t1 = h["currency0_address"], h["currency1_address"]
+        parts.append(f"{t0}→{t1}{'↗' if h['zfo'] else '↘'}")
     return " ".join(parts)
 
 
@@ -654,7 +530,7 @@ class BackrunSession:
         *,
         bot: Bot | None = None,
         engine_registry: EngineRegistry | None = None,
-        async_w3: AsyncProviderAdapter | None = None,
+        async_w3: AsyncAlloyProvider | None = None,
         snapshots: tuple[Any, Any, Any, Any] | None = None,
         path_builder: Any = None,
         consumer: Any = None,
@@ -670,8 +546,9 @@ class BackrunSession:
         # Resolved in start():
         self.bot: Bot | None = None
         self.engine_registry: EngineRegistry | None = None
-        self.async_w3: AsyncProviderAdapter | None = None
-        self.dispatcher: PyDispatcher | None = None
+        self.async_w3: AsyncAlloyProvider | None = None
+        self.dispatcher: Dispatcher | None = None
+        self._sim_ctx: SimulateContext | None = None
         self.v3_snapshot: Any = None
         self.v4_snapshot: Any = None
         self.current_block: int = 0
@@ -717,26 +594,71 @@ class BackrunSession:
         self.current_block = latest_block["number"]
 
         # ── Coordination state ──
-        self.dispatcher = PyDispatcher.for_block(self.current_block)
+        self.dispatcher = Dispatcher.for_block(self.current_block)
 
-        # ── Snapshots (injected or from the DB via get_snapshots) ──
+        # ── Simulation seam context (A5) — one SimulateContext per session,
+        # held alongside the dispatcher. The runtime-bytecode file-load stays
+        # Python (A2 disposition `stays-python`); the bytes cross here. The
+        # AsyncAlloyProvider handle is taken from the session's provider so
+        # `dispatch_profitable` shares one provider with the rest of the
+        # pipeline.
+        async_alloy = self.async_w3.as_async_alloy()
+        if async_alloy is None:
+            # Non-Alloy provider (test fakes). Defer the sim context:
+            # production sessions are Alloy-backed + build it eagerly here;
+            # dispatch raises a clear error if reached without one.
+            self._sim_ctx = None
+        else:
+            runtime_code = _load_executor_runtime_bytecode()
+            self._sim_ctx = SimulateContext(
+                provider=async_alloy,
+                executor_owner=cfg.executor_owner,
+                executor_address=cfg.executor_address,
+                weth_address=WETH_ADDRESS,
+                pool_manager_address=UNISWAP_V4_POOL_MANAGER_ADDRESS,
+                multicall3_address=MULTICALL3_ADDRESS,
+                inject_code=INJECT_EXECUTOR_CODE,
+                executor_runtime_bytecode=bytes.fromhex(runtime_code[2:]),
+                injected_address=INJECTED_EXECUTOR_ADDRESS if INJECT_EXECUTOR_CODE else None,
+            )
+
+        # ── Snapshots (V3 pool tracker pre-population only; the engine's DB
+        # snapshot is loaded eagerly at PyBot construction via
+        # `Bot::load_snapshot_from_db` — JUCFCB, Shape 2 — and the
+        # snapshot→WS gap closes in `resume_from_subscribe` — J3FMDO).
+        # `engine_registry.start()` takes `v3_snapshot`/`v4_snapshot` kwargs
+        # ONLY when the snapshots are non-DB (file/memory) — the `_injected`
+        # fast path. The production DB path reads the snapshot at
+        # construction and `start()` takes no snapshot kwargs (the retired
+        # DB-snapshot `stream_*_to_engine` SQLAlchemy forwarding is gone —
+        # JUCFCB/2SM4Y7).
+        v3_snap: Any = None
+        v4_snap: Any = None
+        start_v3 = None  # snapshots passed to `start()` (non-DB only)
+        start_v4 = None
         if self._injected_snapshots is not None:
             v3_snap, v4_snap, _v3_blk, _v4_blk = self._injected_snapshots
+            start_v3, start_v4 = v3_snap, v4_snap
         else:
+            # Production DB path: snapshot for the V3 pool tracker only
+            # (engine feeds from the core store, set at Bot construction).
             v3_snap, v4_snap, _v3_blk, _v4_blk = get_snapshots(self.bot)
         self.v3_snapshot = v3_snap
         self.v4_snapshot = v4_snap
 
-        # ── Engine pre-resume ritual (subscribe → stream → backfill → verify) ──
-        # Two-step verify_on_register=True: detect snapshot/backfill drift at
-        # the moment a pool is registered (fail-fast), rather than only at the
-        # end-of-discovery batch verify — shortens time-to-first-failure if the
-        # engine/builder has a state bug.
+        # ── Engine pre-resume ritual (subscribe → verify) ──
+        # J3FMDO: the snapshot→WS gap is closed automatically inside
+        # `BlockPump::resume_from_subscribe` at resume. `start()` only
+        # subscribes + sets up verify config; resume drives both the backfill
+        # and the live loop. Non-DB snapshots flow through `load_*_from_py`
+        # in `start()`; the DB path takes no kwargs (snapshot loaded at
+        # construction; `snapshot_seed_block` is read from the core
+        # `BotState` by `start()` via the `snapshot_seed_block` getter).
         backfill_target = self.engine_registry.start(
             cfg.node_http,
             cfg.node_ws,
-            v3_snapshot=v3_snap,
-            v4_snapshot=v4_snap,
+            v3_snapshot=start_v3,
+            v4_snapshot=start_v4,
             verify_state_view=EthereumMainnetUniswapV4.state_view.address,
         )
         if backfill_target > self.current_block:
@@ -782,6 +704,7 @@ class BackrunSession:
             consumer(
                 engine_registry=self.engine_registry,
                 async_w3=self.async_w3,
+                sim_ctx=self._sim_ctx,
                 executor_address=cfg.executor_address,
                 operator_address=cfg.operator_address,
                 operator_private_key=cfg.operator_private_key,
@@ -804,6 +727,17 @@ class BackrunSession:
             v4_snapshot=self.v4_snapshot,
             retry_policy=cfg.verification_retry_policy,
         )
+
+        # 3b. Release the held snapshot read transaction (epic XEANMB).
+        # `load_snapshot_from_db` opened a deferred read tx so every
+        # `assemble_*_tick_map` Db-arm read during `build_paths` shared one
+        # frozen DB snapshot. Pool registration is done — commit the tx to
+        # release the WAL snapshot so the updater's checkpoint can reclaim
+        # `-wal` space for the hot loop. No-op for the cold-start path (no DB).
+        # `getattr` so test fakes (`_FakeBot`) without a real `_py_bot` skip.
+        _py_bot = getattr(self.bot, "_py_bot", None)
+        if _py_bot is not None:
+            _py_bot.close_snapshot_tx()
 
         # 3b. STARTUP batch verify REMOVED — redundant with the per-pool two-step
         # verify and racy at the moving head. Step-1 (seed @ snapshot block) runs
@@ -864,15 +798,22 @@ class BackrunSession:
     @staticmethod
     def _build_bot(cfg: BackrunConfig) -> Bot:
         config_obj = _make_backrun_config(cfg.node_http)
-        sync_w3 = web3.Web3(web3.HTTPProvider(cfg.node_http))
-        sync_w3.middleware_onion.clear()
-        return Bot(config_obj, provider=ProviderAdapter.from_web3(sync_w3))
+        # ADR-005: the Bot's build path (ERC20 + V2/V3/V4 pool construction)
+        # issues many `eth_call`s via `PyBotIo` → `provider.call`. A web3.py
+        # sync backend (`from_web3`) holds the GIL through every
+        # `requests.post` on the event-loop thread, starving the asyncio loop
+        # during `build_paths`. Use the Rust `AlloyProvider` instead —
+        # `PyAlloyProvider.call` releases the GIL (`py.detach`) and does HTTP
+        # in Rust, so the pump/consumer can proceed and RPC is faster. This
+        # is the sync web3.py AlloyProvider being retired.
+        alloy = AlloyProvider(cfg.node_http)
+        return Bot(config_obj, provider=alloy)
 
     @staticmethod
-    async def _build_async_w3(cfg: BackrunConfig) -> AsyncProviderAdapter:
+    async def _build_async_w3(cfg: BackrunConfig) -> AsyncAlloyProvider:
         """Build the dispatch-path RPC provider (PAGQCK).
 
-        Returns an ``AsyncProviderAdapter`` wrapping a Rust
+        Returns an ``AsyncAlloyProvider`` wrapping a Rust
         ``AsyncAlloyProvider`` — every dispatch-side ``eth_*`` call the hot
         loop makes goes through Rust (releasing the GIL), not raw
         ``AsyncWeb3(AsyncHTTPProvider(...))``. The four typed calls
@@ -883,11 +824,11 @@ class BackrunSession:
         the adapter's typed methods.
 
         Returns:
-            An ``AsyncProviderAdapter`` (alloy backend) for the dispatch path.
+            An ``AsyncAlloyProvider`` (alloy backend) for the dispatch path.
 
         """
         alloy = await AsyncAlloyProvider.create(cfg.node_http)
-        return AsyncProviderAdapter.from_alloy(async_alloy=alloy)
+        return alloy
 
     # ── Async context manager ────────────────────────────────────────
     async def __aenter__(self) -> "BackrunSession":
@@ -1052,13 +993,14 @@ async def build_paths(
     as typed HookedPoolRejectedError / DynamicFeePoolRejectedError.
 
     Tick data for V3/V4 engine registration is resolved automatically from
-    the stored binary snapshots (already streamed via
-    stream_v3_snapshot_to_engine/stream_v4_snapshot_to_engine
-    in main() before backfill). The Rust engine applies buffered events on top
-    of stale snapshot data to bring it current. Verification is handled internally
-    by the engine (verify_on_register) — the tick data snapshot is taken while the
-    engine lock is held, eliminating the race that existed with Python-side async
-    verification.
+    the core `SnapshotStore` (the DB snapshot loaded eagerly at `PyBot`
+    construction via `Bot::load_snapshot_from_db`; `register_v3_pool`
+    consumes it via `seed_from_store=True` when `coverage="tracked"` + no
+    inline `tick_data`). The Rust engine applies buffered events on top of
+    stale snapshot data to bring it current. Verification is handled
+    internally by the engine (verify_on_register) — the tick data snapshot is
+    taken while the engine lock is held, eliminating the race that existed
+    with Python-side async verification.
 
     VP42BP AC item 4: each ``register_vN_pool`` call is wrapped in
     ``retry_verification_call`` with a bounded retry-with-backoff policy
@@ -1376,11 +1318,17 @@ def get_snapshots(
     int | None,
     int | None,
 ]:
-    """Load V3 and V4 liquidity snapshots from the database.
+    """Load V3 and V4 liquidity snapshots from the database for the V3 pool
+    tracker pre-population.
 
-    Snapshots provide tick_data for Python pool builds via trackers.
-    The Rust engine backfills events from the snapshot block to the
-    current chain head via backfill_from_snapshot().
+    Historically the snapshot also fed `engine_registry.start()` via
+    `stream_v3_snapshot_to_engine`/`stream_v4_snapshot_to_engine` SQLAlchemy
+    forwarding — that path is retired (JUCFCB/2SM4Y7/DADWUP: the engine's DB
+    snapshot is loaded eagerly at `PyBot` construction by
+    `Bot::load_snapshot_from_db`, and the snapshot→WS gap is closed
+    automatically inside `BlockPump::resume_from_subscribe` — J3FMDO; the
+    per-pool `insert_*_pool_snapshot` pyo3 surface + the SQLAlchemy
+    `yield_per` loops are removed).
 
     Returns (v3_snapshot, v4_snapshot, v3_snapshot_block, v4_snapshot_block).
     """
@@ -1415,1071 +1363,76 @@ def get_snapshots(
     return v3_snapshot, v4_snapshot, v3_snapshot_block, v4_snapshot_block
 
 
-def _compute_priority_fee(
-    gross_profit: int,
-    gas_used: int,
-    base_fee_next: int,
-    solve_block: int,
-    current_block: int,
-    block_priority_fees: dict[int, dict[int, int]],
-) -> int:
-    """Compute a market-aware priority fee with age decay.
-
-    The fee is:
-    1. Target fee: the priority fee that would achieve TARGET_PROFIT_RATIO
-    2. Age decay: older results are worth less (exponential decay)
-    3. Market bounds: clamped to feeHistory percentiles so we're competitive
-       but not wasteful
-    """
-    # Target fee from profit ratio
-    if gas_used <= 0:
-        return 1
-    target_priority_fee = max(
-        1,
-        int((gross_profit / TARGET_PROFIT_RATIO - gas_used * base_fee_next) / gas_used),
-    )
-
-    # Age decay: older results are worth less
-    age = max(0, current_block - solve_block)
-    age_factor = 1.0 / (1.0 + AGE_DECAY_CONSTANT * age)
-    priority_fee = int(target_priority_fee * age_factor)
-
-    # Market bounds from feeHistory
-    min_priority_fee = 1
-    max_priority_fee = target_priority_fee  # default ceiling
-    if block_priority_fees:
-        latest_fees = block_priority_fees[max(block_priority_fees)]
-        p10 = latest_fees.get(MIN_PRIORITY_FEE_PERCENTILE, 0)
-        p50 = latest_fees.get(MAX_PRIORITY_FEE_PERCENTILE, 0)
-        min_priority_fee = max(p10 + 1, 1)  # At least 10th percentile + 1
-        max_priority_fee = max(p50 + 1, min_priority_fee)  # At most 50th percentile + 1
-
-    # Clamp to market bounds
-    return max(
-        min_priority_fee,
-        min(priority_fee, max_priority_fee),
-    )
-
-
-
-
-async def dispatch_profitable_results(
-    results: list[
-        tuple[int, int, int, tuple[int, ...], tuple[int, ...], int]
-    ],  # (path_id, opt_input, profit, hop_outputs, consumed_inputs, solve_block)
+async def _dispatch_profitable(
+    *,
+    results: list[tuple[int, int, int, tuple[int, ...], tuple[int, ...], int]],
     engine_registry: EngineRegistry,
-    async_w3: AsyncProviderAdapter,
-    executor_address: str,
-    operator_address: str,
+    async_w3: AsyncAlloyProvider,
+    sim_ctx: SimulateContext,
     operator_private_key: str,
-    base_fee_next: int,
-    current_block: int,
     operator_nonce: int,
-    dispatcher: PyDispatcher,
+    dispatcher: Dispatcher,
+    current_block: int,
+    base_fee_next: int,
     dry_run: bool,
 ) -> None:
-    """Encode, simulate, and submit profitable results from the Rust engine.
+    """Encode → simulate → submit a batch of profitable results via the Rust seam.
 
-    Pipeline (Slices 1-5):
-    1. Sort by engine profit descending (Slice 4 — best-path first)
-    2. Fan out parallel simulation with asyncio.gather (Slice 1)
-    3. Each simulation: encode, simulate, gas from sim (Slice 5)
-    4. Market-aware priority fee with age decay (Slice 3)
-    5. Submit profit-descending with mutual exclusivity (Slice 4)
-
-    Simulation uses a 7-call pattern:
-      1. WETH balanceOf(executor) — before
-      2. Multicall3.getEthBalance(executor) — before
-      3. PM.balanceOf(executor, uint160(WETH)) — ERC-6909 before
-      4. execute(commands)
-      5. WETH balanceOf(executor) — after
-      6. Multicall3.getEthBalance(executor) — after
-      7. PM.balanceOf(executor, uint160(WETH)) — ERC-6909 after
-
-    Gross profit = (weth + eth + erc6909)_after - (weth + eth + erc6909)_before.
-    This correctly measures profit in WETH (physical ERC-20), native ETH,
-    and ERC-6909 WETH held inside the PoolManager (from V4_MINT_COMPACT).
-
-    Submitted transactions are tracked by the Rust submit leaf
-    (`dispatch_and_submit_py` spawns Rust monitor tasks that release
-    nonces and pools on confirmation or expiry).
+    The A5 cutover: this replaces the Python ``dispatch_profitable_results`` +
+    ``simulate_one`` chain with ``dispatch_profitable`` (simulate) →
+    ``dispatch_and_submit`` (submit). The sim fan-out, the gross/net profit
+    arithmetic, the market-aware priority fee, the path suppression, and the
+    thin-margin pre-filter all run in the Rust core; Python only builds the
+    candidate list, renders the ``[sim]``/``[profit]`` summaries, and chains to
+    the submit seam.
     """
-    bot_logger.info(f"[dispatch] entered with {len(results)} results, dry_run={dry_run}")
-
-    # The RPC endpoint string the [sim-diag] diagnostic snapshot needs to fetch
-    # on-chain per-hop state (slot0/liquidity) inside diagnostic_inspect_path.
-    # Derived from the AsyncProviderAdapter — no new RPC beyond this endpoint.
-    # (PAGQCK: the dispatch path no longer holds a raw AsyncWeb3, so the
-    # web3-specific ``async_w3.provider.endpoint_uri`` is replaced by the
-    # adapter's ``rpc_url`` — same underlying endpoint, Rust-owned surface.)
-    node_rpc_url = async_w3.rpc_url
-
-    # Per-dispatch trace dedup — prevents log spam from debug_traceCall
-    _traced_reverts_local: set[tuple[int, str]] = set()
-    # One-shot dump per V4-hybrid path type (V4-V2, V2-V4, V4-V4)
-    _dumped_path_types: set[str] = set()
-    # Per-dump deduplication for JSONL state dumps
-    _state_dump_keys: set[tuple[int, int]] = set()
-
-    # PAGQCK: the former ``async_w3.eth.contract(address=..., abi=EXECUTOR_ABI)``
-    # binding is dropped — it constructed ``_executor_contract`` but never read
-    # it (dead code; the dispatch loop uses raw calldata + ``make_request``
-    # for executor calls, not the web3.py contract object). The web3.py-only
-    # ``.contract()`` surface has no equivalent on AsyncProviderAdapter.
-
-    # Pre-build the balanceOf call for the executor
-    weth_balance_calldata = encode_balanceof_calldata(executor_address)
-    weth_balance_call = TxParams(
-        to=WETH_ADDRESS,
-        data=weth_balance_calldata,
-    )
-    # Pre-build the getEthBalance call for the executor (via Multicall3)
-    get_eth_balance_selector = web3.Web3.keccak(text="getEthBalance(address)")[:4]
-    eth_balance_calldata = get_eth_balance_selector + eth_abi.abi.encode(
-        types=["address"],
-        args=[executor_address],
-    )
-    eth_balance_call = TxParams(
-        to=MULTICALL3_ADDRESS,
-        data=eth_balance_calldata,
-    )
-
-    # Pre-build the ERC-6909 balanceOf call for the executor in the PM.
-    # PM.balanceOf(executor, uint160(WETH_ADDRESS)) returns the executor's
-    # ERC-6909 token balance for WETH held inside the PoolManager.
-    # This detects profit stored via V4_MINT_COMPACT (no physical transfer)
-    # alongside the existing WETH balanceOf check (physical ERC-20 transfer).
-    pm_balanceof_selector = web3.Web3.keccak(text="balanceOf(address,uint256)")[:4]
-    weth_erc6909_id = int.from_bytes(Web3.to_bytes(hexstr=WETH_ADDRESS)[-20:], byteorder="big")
-    erc6909_balance_calldata = pm_balanceof_selector + eth_abi.abi.encode(
-        types=["address", "uint256"],
-        args=[executor_address, weth_erc6909_id],
-    )
-    erc6909_balance_call = TxParams(
-        to=UNISWAP_V4_POOL_MANAGER_ADDRESS,
-        data=erc6909_balance_calldata,
-    )
-
-    # ── Slice 4: Sort by engine profit descending — best paths first ──
-    results.sort(key=operator.itemgetter(2), reverse=True)
-
-    # ── Slice 4: Mutual exclusivity — pools already claimed by this dispatch ──
-    committed_pools: set[str] = set()
-
-    # ── Slice 1: Parallel simulation ──────────────────────────────────────
-    # Budget for INFO-level logging of simulation failures (same pattern as
-    # exceptions). Once exhausted, failures are logged at DEBUG only.
-    _sim_info_budget = [5]
-
-    def _sim_log(msg: str) -> None:
-        if _sim_info_budget[0] > 0:
-            _sim_info_budget[0] -= 1
-            bot_logger.info(msg)
-        else:
-            bot_logger.debug(msg)
-
-    # Per-root-cause tally of simulation failures, mutated by simulate_one.
-    # The [sim] summary appends this breakdown so a block's reverts are
-    # classified (e.g. "CurrencyNotSettled=9 no-profit=5") instead of a
-    # single opaque "N failed" count.
-    _fail_buckets: dict[str, int] = {}
-
-    def _tally_fail(bucket: str) -> None:
-        _fail_buckets[bucket] = _fail_buckets.get(bucket, 0) + 1
-
-    def _write_jsonl(file_path: Path, obj: dict[str, Any]) -> None:
-        """Synchronous JSONL writer helper for asyncio.to_thread."""
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with file_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(obj, default=str) + "\n")
-
-    async def _dump_state_for_revert(
-        path_id: int,
-        solve_block: int,
-        path_type: str,
-        revert_info: str,
-        calldata: str,
-    ) -> None:
-        """Write a JSONL engine/on-chain state dump after a simulation revert.
-
-        Deduplicated by (path_id, solve_block) so the same failing path only
-        produces one dump per block.
-
-        Deprecated (LAV44W): the always-on ``[sim-diag]`` log line
-        (``_emit_sim_diag``) now carries the structured snapshot — including
-        ``onchain_state`` / ``drift`` / ``field_drift`` / ``recompute`` — per
-        reverted candidate, which the analyzer parses directly from the log.
-        This side JSONL dump is retained only as an opt-in extra behind
-        ``STATE_DUMP_ON_REVERT`` for offline repro with the full failed
-        calldata field.
-        """
-        key = (path_id, solve_block)
-        if key in _state_dump_keys:
-            return
-        _state_dump_keys.add(key)
-
-        try:
-            snapshot = await asyncio.to_thread(
-                engine_registry.engine.diagnostic_inspect_path,
-                path_id,
-            )
-        except Exception as exc:
-            bot_logger.debug(f"[state-dump] engine dump failed for path={path_id}: {exc}")
-            return
-
-        snapshot["failed_calldata"] = calldata
-        snapshot["revert_info"] = revert_info
-        snapshot["path_type"] = path_type
-
-        timestamp = datetime.datetime.now(datetime.UTC).isoformat()
-        dump_file = STATE_DUMP_DIR / f"{timestamp}.jsonl"
-        await asyncio.to_thread(_write_jsonl, dump_file, snapshot)
-        bot_logger.debug(f"[state-dump] wrote {dump_file} for path={path_id}")
-
-    async def _emit_sim_diag(
-        path_id: int,
-        solve_block: int,
-        path_type: str,
-        revert_info: str,
-        current_block: int,
-    ) -> None:
-        """Emit one always-on ``[sim-diag]`` JSON line per reverted candidate.
-
-        Unlike the deduped ``[v-state]`` verbose block and the gated JSONL
-        dump, this emits on EVERY revert (no dedup, no ``STATE_DUMP_ON_REVERT``
-        gate) so the analyzer can attribute every candidate from the log. The
-        on-chain fetch here IS the fetch the diff needs (``slot0``/``liquidity``
-        per hop via ``diagnostic_inspect_path``'s ``fetch_onchain``) — no extra
-        RPC beyond it.
-        """
-        try:
-            snapshot = await asyncio.to_thread(
-                engine_registry.engine.diagnostic_inspect_path,
-                path_id,
-                node_rpc_url,
-            )
-        except Exception as exc:
-            bot_logger.debug(f"[sim-diag] engine dump failed for path={path_id}: {exc}")
-            return
-        line = format_sim_diag_line(
-            snapshot,
-            path_id=path_id,
-            path_type=path_type,
-            solve_block=solve_block,
-            block=current_block,
-            age=current_block - solve_block,
-            revert_info=revert_info,
-        )
-        bot_logger.info(line)
-
-    async def simulate_one(
-        path_id: int,
-        optimal_input: int,
-        engine_profit: int,
-        hop_outputs: tuple[int, ...],
-        consumed_inputs: tuple[int, ...],
-        solve_block: int,
-    ) -> tuple[int, int, int, int, TxParams, Any] | None:
-        """Simulate a single path. Returns (path_id, gross_profit, net_profit, gas_used, tx_params, path_info) or None."""
-        path_info = engine_registry.paths.get(path_id)
-        if path_info is None:
-            bot_logger.debug(f"[sim-none] path={path_id}: path_info missing")
-            return None
-
-        # Guard: hop_outputs must match the number of hops
-        if len(hop_outputs) != len(path_info.hops):
-            bot_logger.debug(
-                f"[dispatch] skip path={path_id}: hop_outputs length "
-                f"({len(hop_outputs)}) != hops ({len(path_info.hops)})",
-            )
-            return None
-
-        # Slice 4: Mutual exclusivity with pending + committed pools \u2500\u2500
-        path_pools = {
-            h.pool_id_hex if isinstance(h, V4HopInfo) else h.pool_address for h in path_info.hops
-        }
-        if dispatcher.is_path_blocked(path_pools, committed_pools):
-            bot_logger.debug(f"[dispatch] skip path={path_id}: pools pending or committed")
-            return None
-
-        # ── int128 check: V4 BalanceDelta uses int128 per component ──
-        # For any V4 hop, amountSpecified and the swap's output delta
-        # must both fit int128. Reject early to avoid wasted encoding.
-        for i, hop in enumerate(path_info.hops):
-            if isinstance(hop, V4HopInfo):
-                amount_specified = optimal_input if i == 0 else hop_outputs[i - 1]
-                output_amount = hop_outputs[i]
-                if not fits_int128(amount_specified) or not fits_int128(output_amount):
-                    bot_logger.debug(
-                        f"[sim-fail] path={path_id} {path_info.path_type}: "
-                        f"int128 overflow at V4 hop[{i}] "
-                        f"amount_specified={amount_specified} output={output_amount}",
-                    )
-                    _tally_fail("int128-overflow")
-                    return None
-
-        # Encode as cmd_executor command stream
-        cmd_bytes = degenbot_rs.encode_cmd_stream(
-            path_info,
-            optimal_input,
-            hop_outputs,
-            executor_address,
-            UNISWAP_V4_POOL_MANAGER_ADDRESS,
-            WETH_ADDRESS,
-        )
-        if cmd_bytes is None:
-            msg = "Encoding command stream failed!"
-            raise ValueError(msg)
-
-        pool_addrs = "→".join(f"{_hop_display_addr(h)}(zfo={h.zfo})" for h in path_info.hops)
-        bot_logger.debug(
-            f"[sim-debug] path={path_id} {path_info.path_type}: "
-            f"{pool_addrs} input={optimal_input} outputs={hop_outputs}",
-        )
-
-        # Detailed dump for first occurrence of each path type
-        dump_type = path_info.path_type
-        if dump_type not in _dumped_path_types:
-            _dumped_path_types.add(dump_type)
-            if dump_type == "V4-V2":
-                hop_v4, hop_v2 = path_info.hops[0], path_info.hops[1]
-                if isinstance(hop_v4, V4HopInfo) and isinstance(hop_v2, (V2HopInfo, V3HopInfo)):
-                    bot_logger.info(
-                        f"[sim-dump] V4-V2 path={path_id} "
-                        f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
-                        f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
-                        f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                        f"cmd_len={len(cmd_bytes)}",
-                    )
-            elif dump_type == "V2-V4":
-                hop_v2, hop_v4 = path_info.hops[0], path_info.hops[1]
-                if isinstance(hop_v2, (V2HopInfo, V3HopInfo)) and isinstance(hop_v4, V4HopInfo):
-                    v4_in_native = degenbot_rs.v4_input_is_native(hop_v4)
-                    bot_logger.info(
-                        f"[sim-dump] V2-V4 path={path_id} "
-                        f"v4_c0={hop_v4.currency0_address} v4_c1={hop_v4.currency1_address} "
-                        f"v4_zfo={hop_v4.zfo} v2_zfo={hop_v2.zfo} v2_pool={hop_v2.pool_address} "
-                        f"v4_native_in={v4_in_native} input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                        f"cmd_len={len(cmd_bytes)}",
-                    )
-            elif dump_type == "V4-V4":
-                hop_a, hop_b = path_info.hops[0], path_info.hops[1]
-                if isinstance(hop_a, V4HopInfo) and isinstance(hop_b, V4HopInfo):
-                    bot_logger.info(
-                        f"[sim-dump] V4-V4 path={path_id} "
-                        f"a_c0={hop_a.currency0_address} a_c1={hop_a.currency1_address} "
-                        f"a_zfo={hop_a.zfo} a_fee={hop_a.fee} "
-                        f"b_c0={hop_b.currency0_address} b_c1={hop_b.currency1_address} "
-                        f"b_zfo={hop_b.zfo} b_fee={hop_b.fee} "
-                        f"input={optimal_input} fwd={hop_outputs[0]} out={hop_outputs[1]} "
-                        f"cmd_len={len(cmd_bytes)}",
-                    )
-            else:
-                # Generic dump for all other path types (V3-V3-V3 etc.)
-                _hop_parts = []
-                for _h in path_info.hops:
-                    _part = f"{_hop_display_addr(_h)}(zfo={_h.zfo}"
-                    if isinstance(_h, V2HopInfo):
-                        _part += f" t0={_h.token0_address} t1={_h.token1_address}"
-                    elif isinstance(_h, V3HopInfo):
-                        _part += f" t0={_h.token0_address} t1={_h.token1_address} fee={_h.fee}"
-                    elif isinstance(_h, V4HopInfo):
-                        _part += (
-                            f" c0={_h.currency0_address} c1={_h.currency1_address} fee={_h.fee}"
-                        )
-                    _part += ")"
-                    _hop_parts.append(_part)
-                _amounts_str = ",".join(str(a) for a in hop_outputs)
-                bot_logger.info(
-                    f"[sim-dump] {dump_type} path={path_id} "
-                    f"hops=[{' → '.join(_hop_parts)}] "
-                    f"input={optimal_input} outputs=[{_amounts_str}] "
-                    f"cmd_len={len(cmd_bytes)}",
-                )
-        # config=0 (check_mode=0, no bribe): skip on-chain profit check,
-        # operator verifies profitability off-chain via the pre/post balance reads.
-        # For bribes or on-chain checks, build config via pack_config().
-        config = degenbot_rs.pack_expected_balance(check_mode=0, expected_value=0)
-        selector = web3.Web3.keccak(text="execute(bytes,uint256)")[:4]
-        calldata = selector + eth_abi.abi.encode(
-            types=["bytes", "uint256"],
-            args=[cmd_bytes, config],
-        )
-        bot_logger.info(
-            f"[sim-dump] {dump_type} full_calldata_len={len(calldata)} cmd_stream_len={len(cmd_bytes)}",
-        )
-        tx_params = TxParams(
-            to=Web3.to_checksum_address(executor_address),
-            data=calldata,
-            chainId=1,
-            type=2,
-            value=cast("Wei", 0),
-            gas=5_000_000,  # Generous gas for V3 tick-crossing swaps
-            maxFeePerGas=cast("Wei", 0),
-            maxPriorityFeePerGas=cast("Wei", 0),
-            nonce=cast("Nonce", 0),
-        )
-        tx_params["from"] = get_checksum_address(EXECUTOR_OWNER)
-
-        # Compute EIP-2930 access list before simulation so gas_used
-        # reflects the savings from pre-warmed storage slots
-        try:
-            al_result = await async_w3.make_request(
-                "eth_createAccessList",
-                [tx_params, "pending"],
-            )
-        except Exception as al_exc:
-            # If AL computation fails (e.g. revert), simulate without it.
-            # The simulation itself will reject this path.
-            bot_logger.debug(f"[sim-debug] path={path_id} access list failed: {al_exc}")
-        else:
-            tx_params["accessList"] = al_result["accessList"]
-
-        # Simulate with 7-call pattern
-        try:
-            # All override fields (code, balance, nonce, state, stateDiff)
-            # go under stateOverrides per the Alloy AccountOverride spec.
-            # PAGQCK: the former ``async_w3.eth.simulate_v1(payload=SimulateV1Payload(...),
-            # block_identifier="pending")`` is routed via ``make_request`` —
-            # the ``SimulateV1Payload``/``BlockStateCallV1`` web3.py dataclasses
-            # serialize to exactly this raw JSON shape (``blockStateCalls`` with
-            # ``stateOverrides`` + ``calls``), and ``make_request`` converts the
-            # ``HexBytes`` call-data values to hex strings via ``python_to_json``.
-            # The typed PyO3 seam (alloy ``SimulatePayload`` conversion) is a
-            # follow-on sibling task — this routes off raw ``AsyncWeb3`` NOW.
-            sim_payload = {
-                "blockStateCalls": [
-                    {
-                        "stateOverrides": build_simulation_state_overrides(
-                            executor_owner=EXECUTOR_OWNER,
-                            inject_code=INJECT_EXECUTOR_CODE,
-                            injected_address=INJECTED_EXECUTOR_ADDRESS
-                            if INJECT_EXECUTOR_CODE
-                            else None,
-                        ),
-                        "calls": [
-                            weth_balance_call,  # [0] WETH balance before
-                            eth_balance_call,  # [1] ETH balance before
-                            erc6909_balance_call,  # [2] ERC-6909 WETH balance before
-                            tx_params,  # [3] execute(commands)
-                            weth_balance_call,  # [4] WETH balance after
-                            eth_balance_call,  # [5] ETH balance after
-                            erc6909_balance_call,  # [6] ERC-6909 WETH balance after
-                        ],
-                    },
-                ],
-            }
-            sim = await async_w3.make_request(
-                "eth_simulateV1",
-                [sim_payload, "pending"],
-            )
-        except Web3Exception as e:
-            _sim_log(
-                f"[sim-fail] path={path_id} {path_info.path_type}: simulation RPC failed ({e})",
-            )
-            _tally_fail("rpc-failed")
-            return None
-
-        calls = sim[0]["calls"]
-
-        # Check all calls succeeded — log which call failed + revert data
-        failed_call = None
-        for call_idx, c in enumerate(calls):  # noqa:PLR1702
-            if c.get("status", 0) != 1:
-                failed_call = c
-
-                # eth_simulateV1 returns revert reason in error.data when
-                # returnData is HexBytes(b'') (empty). The error field contains:
-                #   AttributeDict(code=3, message='execution reverted: IIA',
-                #                 data='0x08c379a0...')  (full ABI-encoded Error(string))
-                # Fall back to error.data when returnData is empty.
-                # Note: returnData may be HexBytes(b'') from web3.py's wrapper,
-                # or raw string "0x" from make_request — handle both.
-                revert_data = c.get("returnData", b"")
-                if isinstance(revert_data, str):
-                    # Raw RPC returns hex strings; normalize to bytes
-                    if revert_data == "0x" or not revert_data:
-                        revert_data = b""
-                    else:
-                        revert_data = bytes.fromhex(revert_data.removeprefix("0x"))
-                elif isinstance(revert_data, bytes):
-                    # HexBytes or regular bytes from web3.py wrapper
-                    # HexBytes(b'') has len=0, bool=False — already empty
-                    if revert_data == HexBytes("0x") or len(revert_data) == 0:
-                        revert_data = b""
-                else:
-                    revert_data = b""
-                _error_obj = c.get("error")
-                _error_msg_from_obj = ""  # from error.message as last resort
-                # web3.py wraps the error field as AttributeDict (Mapping, NOT
-                # a dict subclass) so isinstance(_error_obj, dict) is False.
-                # Use dict-style access which works for both dict and AttributeDict.
-                if not revert_data and _error_obj is not None:
-                    try:
-                        _error_data = _error_obj["data"]
-                    except (KeyError, TypeError, IndexError):
-                        _error_data = None
-                    if (
-                        _error_data
-                        and isinstance(_error_data, str)
-                        and _error_data.startswith("0x")
-                        and len(_error_data) > 2
-                    ):
-                        revert_data = bytes.fromhex(_error_data[2:])
-                    else:
-                        try:
-                            _error_msg_from_obj = _error_obj["message"]
-                        except (KeyError, TypeError, IndexError):
-                            pass
-                # revert_data is always bytes now (normalized above)
-                revert_hex = revert_data.hex()
-
-                # Log full call result for V4 empty reverts
-                if path_info.path_type in {"V4-V4", "V2-V4", "V4-V2"} and not revert_hex:
-                    bot_logger.debug(
-                        f"[sim-raw] path={path_id} {path_info.path_type}: call[{call_idx}] DUMP={c}",
-                    )
-                # Decode common revert patterns
-                revert_reason = ""
-                _V4_ERRORS = {
-                    "5212cba1": "CurrencyNotSettled()",
-                    "486aa307": "PoolNotInitialized()",
-                    "1e048e1d": "InvalidHookResponse()",
-                    "a3603d66": "SwapQuantityCannotBeZero()",
-                    "38606b01": "PriceLimitAlreadyExceeded()",
-                    "30d6072a": "PriceLimitOutOfBounds()",
-                    "a40afa38": "LockFailure()",
-                    "5090d6c6": "AlreadyUnlocked()",
-                    "54e3ca0d": "ManagerLocked()",
-                }
-                _EXECUTOR_ERRORS = {
-                    # Legacy (bare assert)
-                    "4b9dfc58": "!OWNER",
-                    "49494100": "IIA(insufficient-input-amount)",
-                    # Custom errors (Vyper 0.5.0a3+)
-                    "8e4a23d6": "Unauthorized(caller)",
-                    "b028a63a": "InvalidCallback(caller)",
-                    "cf479181": "InsufficientBalance(amount,available)",
-                    "4e88422a": "InsufficientProfit(actual,expected)",
-                    "83276224": "InvalidCommand(opcode)",
-                    "60ef0bb0": "BipsTooHigh(bips)",
-                    "a61be9f0": "InvalidMsgValue(value)",
-                    "e5b6bf32": "NotPlainEthTransfer()",
-                }
-                if len(revert_hex) >= 8:
-                    selector = revert_hex[:8]
-                    if selector == "4e487b71":  # Panic
-                        revert_reason = (
-                            f" PANIC(0x{revert_hex[8:]})" if len(revert_hex) > 8 else " PANIC"
-                        )
-                    elif selector == "08c379a0":  # Error(string)
-                        try:
-                            # ABI: [selector:8][offset:64][length:64][data:N]
-                            # offset is always 0x20 (32) for direct encoding
-                            str_len_bytes = int(revert_hex[8 + 64 : 8 + 128], 16)
-                            str_start = 8 + 64 + 64  # hex offset to string data
-                            str_len_hex = str_len_bytes * 2  # byte length → hex chars
-                            msg_bytes = bytes.fromhex(
-                                revert_hex[str_start : str_start + str_len_hex],
-                            )
-                            revert_reason = f" {msg_bytes.decode('utf-8', errors='replace')}"
-                        except Exception:
-                            pass
-                    elif selector in _V4_ERRORS:
-                        revert_reason = f" {_V4_ERRORS[selector]}"
-                    elif selector in _EXECUTOR_ERRORS:
-                        revert_reason = f" {_EXECUTOR_ERRORS[selector]}"
-                        # Decode ABI-encoded params for parameterized executor errors
-                        params_hex = revert_hex[8:]
-                        if (
-                            selector == "4e88422a" and len(params_hex) >= 128
-                        ):  # InsufficientProfit(uint256,uint256)
-                            try:
-                                actual = int(params_hex[0:64], 16)
-                                expected = int(params_hex[64:128], 16)
-                                revert_reason = (
-                                    f" InsufficientProfit(actual={actual},expected={expected})"
-                                )
-                            except (ValueError, IndexError):
-                                pass
-                        elif (
-                            selector == "cf479181" and len(params_hex) >= 128
-                        ):  # InsufficientBalance(uint256,uint256)
-                            try:
-                                amount = int(params_hex[0:64], 16)
-                                available = int(params_hex[64:128], 16)
-                                revert_reason = (
-                                    f" InsufficientBalance(amount={amount},available={available})"
-                                )
-                            except (ValueError, IndexError):
-                                pass
-                        elif (
-                            selector == "8e4a23d6" and len(params_hex) >= 64
-                        ):  # Unauthorized(address)
-                            try:
-                                addr = int(params_hex[0:64], 16)
-                                revert_reason = f" Unauthorized(caller=0x{addr:040x})"
-                            except (ValueError, IndexError):
-                                pass
-                        elif (
-                            selector == "b028a63a" and len(params_hex) >= 64
-                        ):  # InvalidCallback(address)
-                            try:
-                                addr = int(params_hex[0:64], 16)
-                                revert_reason = f" InvalidCallback(caller=0x{addr:040x})"
-                            except (ValueError, IndexError):
-                                pass
-                        elif (
-                            selector == "83276224" and len(params_hex) >= 64
-                        ):  # InvalidCommand(uint256)
-                            try:
-                                opcode = int(params_hex[0:64], 16)
-                                revert_reason = f" InvalidCommand(opcode={opcode}/0x{opcode:02x})"
-                            except (ValueError, IndexError):
-                                pass
-                        elif (
-                            selector == "60ef0bb0" and len(params_hex) >= 64
-                        ):  # BipsTooHigh(uint256)
-                            try:
-                                bips = int(params_hex[0:64], 16)
-                                revert_reason = f" BipsTooHigh(bips={bips})"
-                            except (ValueError, IndexError):
-                                pass
-                    elif revert_hex.startswith(
-                        "00000000000000000000000000000000000000000000000000000000",
-                    ):
-                        # Numeric revert
-                        revert_reason = f" num=0x{revert_hex[24:]}"
-                    else:
-                        revert_reason = f" sel=0x{selector}"
-                elif not revert_hex and _error_msg_from_obj:
-                    revert_reason = f" {_error_msg_from_obj}"
-                _sim_log(
-                    f"[sim-fail] path={path_id} {path_info.path_type}: "
-                    f"call[{call_idx}] failed (gasUsed={c.get('gasUsed', 0)}) "
-                    f"revert=0x{revert_hex}{revert_reason} "
-                    f"block={current_block} age={current_block - solve_block} "
-                    f"tokens=[{_hop_token_summary(path_info.hops)}]",
-                )
-
-                # ── Diagnostic: on-chain state for sim-fail paths ──
-                # Only check once per block+type to avoid log spam
-                _trace_key = (current_block, path_info.path_type)
-                if failed_call is not None and _trace_key not in _traced_reverts_local:
-                    # On-chain state at 'pending' — matches what the
-                    # simulation sees. hex(current_block) would give state
-                    # after block N-1, which differs when current-block txs
-                    # modify pool state.
-                    amounts_per_hop = [optimal_input] + list(hop_outputs)
-                    for hi, hop in enumerate(path_info.hops):
-                        hop_amount = amounts_per_hop[hi] if hi < len(amounts_per_hop) else "?"
-                        if isinstance(hop, V2HopInfo):
-                            pool_addr = hop.pool_address
-                            try:  # noqa: PLW0717
-                                # PAGQCK: ``eth_call`` via ``make_request`` — the
-                                # raw RPC returns a hex string; decode to bytes
-                                # for the ``[0:32]`` reserve slicing below.
-                                get_reserves_sel = web3.Web3.keccak(text="getReserves()")[:4].hex()
-                                reserves_hex = await async_w3.make_request(
-                                    "eth_call",
-                                    [
-                                        {
-                                            "to": Web3.to_checksum_address(pool_addr),
-                                            "data": "0x" + get_reserves_sel,
-                                        },
-                                        "pending",
-                                    ],
-                                )
-                                reserves = bytes.fromhex(reserves_hex.removeprefix("0x"))
-                                if len(reserves) >= 96:
-                                    r0 = int.from_bytes(reserves[0:32], "big")
-                                    r1 = int.from_bytes(reserves[32:64], "big")
-                                    bot_logger.info(
-                                        f"[v2-state] path={path_id} hop[{hi}] "
-                                        f"pool={pool_addr} "
-                                        f"reserve0={r0} reserve1={r1} "
-                                        f"token0={hop.token0_address} token1={hop.token1_address} "
-                                        f"zfo={hop.zfo} amount={hop_amount}",
-                                    )
-                            except Exception:
-                                pass
-                        elif isinstance(hop, V3HopInfo):
-                            pool_addr = hop.pool_address
-                            try:  # noqa: PLW0717
-                                # Check pool has code at pending. PAGQCK:
-                                # ``eth_getCode`` via ``make_request`` (raw hex
-                                # string); normalize the empty/zero cases.
-                                _code = await async_w3.make_request(
-                                    "eth_getCode",
-                                    [Web3.to_checksum_address(pool_addr), "pending"],
-                                )
-                                if (
-                                    not _code
-                                    or _code == b"\x00"
-                                    or (isinstance(_code, str) and _code in ("0x", "0x00"))
-                                ):
-                                    bot_logger.info(
-                                        f"[v3-state] path={path_id} hop[{hi}] "
-                                        f"pool={pool_addr} NO CODE at block {current_block}",
-                                    )
-                                    continue
-                                slot0_sel = web3.Web3.keccak(text="slot0()")[:4].hex()
-                                slot0_hex = await async_w3.make_request(
-                                    "eth_call",
-                                    [
-                                        {
-                                            "to": Web3.to_checksum_address(pool_addr),
-                                            "data": "0x" + slot0_sel,
-                                        },
-                                        "pending",
-                                    ],
-                                )
-                                liq_sel = web3.Web3.keccak(text="liquidity()")[:4].hex()
-                                liq_hex = await async_w3.make_request(
-                                    "eth_call",
-                                    [
-                                        {
-                                            "to": Web3.to_checksum_address(pool_addr),
-                                            "data": "0x" + liq_sel,
-                                        },
-                                        "pending",
-                                    ],
-                                )
-                                slot0_data = bytes.fromhex(slot0_hex.removeprefix("0x"))
-                                liq_data = bytes.fromhex(liq_hex.removeprefix("0x"))
-                                if len(slot0_data) < 64:
-                                    bot_logger.info(
-                                        f"[v3-state] path={path_id} hop[{hi}] "
-                                        f"pool={pool_addr} slot0 returned {len(slot0_data)} bytes (expected 96+)",
-                                    )
-                                    continue
-                                sqrt_price = int.from_bytes(slot0_data[0:32], "big")
-                                tick = int.from_bytes(slot0_data[32:64], "big")
-                                if tick >= 2**255:
-                                    tick -= 2**256  # signed int24
-                                liq = (
-                                    int.from_bytes(liq_data[0:32], "big")
-                                    if len(liq_data) >= 32
-                                    else 0
-                                )
-                                bot_logger.info(
-                                    f"[v3-state] path={path_id} hop[{hi}] "
-                                    f"pool={pool_addr} "
-                                    f"sqrtPriceX96={sqrt_price} tick={tick} "
-                                    f"liquidity={liq} fee={hop.fee} "
-                                    f"token0={hop.token0_address} token1={hop.token1_address} "
-                                    f"zfo={hop.zfo} amount={hop_amount}",
-                                )
-                            except Exception:
-                                pass
-                        elif isinstance(hop, V4HopInfo):
-                            # V4 pool state lives in PoolManager — we can't
-                            # easily query slot0 via eth_call on the PM.
-                            # Log what we have from the hop metadata.
-                            bot_logger.info(
-                                f"[v4-state] path={path_id} hop[{hi}] "
-                                f"pm={hop.pool_manager_address} pool_id={hop.pool_id_hex} "
-                                f"c0={hop.currency0_address} c1={hop.currency1_address} "
-                                f"fee={hop.fee} tick_spacing={hop.tick_spacing} "
-                                f"hook={hop.hook_address} "
-                                f"zfo={hop.zfo} amount={hop_amount}",
-                            )
-
-                    _traced_reverts_local.add(_trace_key)
-
-                # Log the revert calldata for manual debugging (always INFO)
-                # Always log full calldata for sim-failures so we can
-                # reproduce offline with debug_traceCall or cast call
-                _cd = tx_params.get("data", tx_params.get("input", b""))
-                if isinstance(_cd, bytes):
-                    _cd = "0x" + _cd.hex()
-                elif isinstance(_cd, str):
-                    _cd = _cd if _cd.startswith("0x") else "0x" + _cd
-
-                if STATE_DUMP_ON_REVERT:
-                    await _dump_state_for_revert(
-                        path_id=path_id,
-                        solve_block=solve_block,
-                        path_type=path_info.path_type,
-                        revert_info=f"0x{revert_hex}{revert_reason}",
-                        calldata=_cd,
-                    )
-
-                # Always-on structured per-revert line (LAV44W): one
-                # machine-parseable [sim-diag] JSON line per reverted
-                # candidate — no dedup, no env gate. Deprecates the side
-                # JSONL dump for analyzer attribution (the dump stays as an
-                # opt-in extra behind STATE_DUMP_ON_REVERT).
-                await _emit_sim_diag(
-                    path_id=path_id,
-                    solve_block=solve_block,
-                    path_type=path_info.path_type,
-                    revert_info=f"0x{revert_hex}{revert_reason}",
-                    current_block=current_block,
-                )
-
-                bot_logger.info(
-                    f"[sim-revert-data] path={path_id} {path_info.path_type} "
-                    f"revert=0x{revert_hex[:16]}{'...' if len(revert_hex) > 16 else ''}{revert_reason} "
-                    f"block={current_block} age={current_block - solve_block} "
-                    f"calldata={_cd}",
-                )
-                _tally_fail(classify_revert(revert_data))
-                return None
-        try:
-            weth_before = int.from_bytes(calls[0]["returnData"], byteorder="big")
-            eth_before = int.from_bytes(calls[1]["returnData"], byteorder="big")
-            erc6909_before = int.from_bytes(calls[2]["returnData"], byteorder="big")
-            weth_after = int.from_bytes(calls[4]["returnData"], byteorder="big")
-            eth_after = int.from_bytes(calls[5]["returnData"], byteorder="big")
-            erc6909_after = int.from_bytes(calls[6]["returnData"], byteorder="big")
-        except (IndexError, ValueError):
-            _sim_log(f"[sim-fail] path={path_id} {path_info.path_type}: balance decode failed")
-            _tally_fail("balance-decode")
-            return None
-
-        combined_before = weth_before + eth_before + erc6909_before
-        combined_after = weth_after + eth_after + erc6909_after
-        gross_profit = combined_after - combined_before
-        if gross_profit <= 0:
-            _sim_log(
-                f"[sim-fail] path={path_id} {path_info.path_type}: no profit (gross={gross_profit}) "
-                f"weth_before={weth_before} weth_after={weth_after} "
-                f"eth_before={eth_before} eth_after={eth_after} "
-                f"erc6909_before={erc6909_before} erc6909_after={erc6909_after}",
-            )
-            _tally_fail("no-profit")
-            return None
-
-        # ── Slice 5: Gas estimation from simulation ──────────────────
-        # Use the simulation's actual gasUsed with a 1.5x safety margin.
-        gas_used = calls[3]["gasUsed"]
-        tx_params["gas"] = int(gas_used * 1.5)
-
-        # ── Slice 3: Market-aware priority fee with age decay ────────────
-        priority_fee = _compute_priority_fee(
-            gross_profit=gross_profit,
-            gas_used=gas_used,
-            base_fee_next=base_fee_next,
-            solve_block=solve_block,
-            current_block=current_block,
-            block_priority_fees=dispatcher.block_priority_fees,
-        )
-
-        gas_fee = gas_used * (base_fee_next + priority_fee)
-        net_profit = gross_profit - gas_fee
-
-        # Return all gross-profitable results — the caller separates
-        # gas-profitable from gas-unprofitable but onchain-valid.
-        return (path_id, gross_profit, net_profit, gas_used, tx_params, path_info)
-
-    # ── Fan out parallel simulation (Slice 1) ──────────────────────────
-    # Pre-filter: remove suppressed paths before simulation
-    pre_filter_count = len(results)
-    results = [
-        (pid, inp, pft, ho, ci, sb)
-        for pid, inp, pft, ho, ci, sb in results
-        if not dispatcher.is_suppressed(pid, current_block)
-    ]
-    suppressed_count = pre_filter_count - len(results)
-    if suppressed_count > 0:
-        bot_logger.info(
-            f"[dispatch] {suppressed_count}/{pre_filter_count} results filtered by suppression",
-        )
-
-    # T3 (GTOD23-IKJRGO): drop razor-thin arb that can't survive 1-block drift.
-    # S1 found the dominant IIA reverts are sub-0.2-bps-margin arb the chain
-    # has already arbitraged away. Filter pre-sim to save RPC + revert budget.
-    # 0 disables (backwards-compatible default).
-    results, thin_dropped = filter_thin_margin_results(results, MIN_PROFIT_MARGIN_BPS)
-    if thin_dropped > 0:
-        bot_logger.info(
-            f"[filter] dropped {thin_dropped} thin-margin (<{MIN_PROFIT_MARGIN_BPS} bps) candidates",
-        )
-
-    candidates = results[:MAX_SIMULATE_CONCURRENT]
-    # Log candidate summary for observability
-    cand_types = {}
-    for pid, _inp, _pft, _ho, _ci, _sb in candidates:
-        pi = engine_registry.paths.get(pid)
-        pt = pi.path_type if pi else "?"
-        cand_types[pt] = cand_types.get(pt, 0) + 1
-    cand_types_str = " ".join(f"{k}={v}" for k, v in sorted(cand_types.items()))
-    bot_logger.info(
-        f"[dispatch] simulating {len(candidates)}/{len(results)} candidates: {cand_types_str}",
-    )
-    # Track simulation outcomes for path suppression
-    _sim_outcomes: dict[int, bool] = {}  # path_id -> succeeded
-
-    sim_tasks = list(itertools.starmap(simulate_one, candidates))
-    sim_results = await asyncio.gather(*sim_tasks, return_exceptions=True)
-
-    # ── Categorize simulation results ────────────────────────────────
-    # Separate into gas-profitable (net >= MIN_PROFIT_NET) and
-    # onchain-valid but gas-unprofitable (gross > 0, net below threshold).
-    gas_profitable: list[tuple[int, int, int, int, TxParams, Any]] = []
-    gas_unprofitable: list[tuple[int, int, int, int, TxParams, Any]] = []
-    exception_count = 0
-    _exc_log_limit = 5
-    for result in sim_results:
-        if isinstance(result, Exception):
-            exception_count += 1
-            if _exc_log_limit > 0:
-                _exc_log_limit -= 1
-                bot_logger.info(
-                    f"[sim-exc] simulation exception: {result}\n"
-                    + "".join(
-                        traceback.format_exception(type(result), result, result.__traceback__),
-                    ),
-                )
-            else:
-                bot_logger.debug(
-                    f"[sim-fail] simulation exception: {result}\n"
-                    + "".join(
-                        traceback.format_exception(type(result), result, result.__traceback__),
-                    ),
-                )
+    candidates: list[DispatchCandidate] = []
+    for pid, inp, prof, ho, _ci, sb in results:
+        # NXM2BF: the candidate resolves its `composers::PathInfo` from
+        # `path_id` via `PyArbitrageEngine.path_info_for_core` (Rust-side, over
+        # the shared `BotState`) — no Python `PathInfo` dataclass round-trip.
+        # The `hop_outputs` length-vs-hops guard moved Rust-side too
+        # (`PyDispatchCandidate.__new__` raises `ValueError` on mismatch); skip
+        # a path with no hop_outputs defensively (mirrors the pre-flatten
+        # `any(x <= 0 ...)` guard the encode seam keeps).
+        if not ho:
+            bot_logger.debug(f"[sim-none] path={pid}: empty hop_outputs")
             continue
-        if result is None:
-            continue
-        path_id, gross_profit, net_profit, gas_used, tx_params, path_info = cast(
-            "tuple[int, int, int, int, TxParams, Any]", result
-        )
-        sim_result = cast("tuple[int, int, int, int, TxParams, Any]", result)
-        if net_profit >= MIN_PROFIT_NET:
-            gas_profitable.append(sim_result)
-        else:
-            gas_unprofitable.append(sim_result)
-
-    # ── Summary log ──────────────────────────────────────────────────
-    sim_ok_count = len(gas_profitable) + len(gas_unprofitable)
-    sim_fail_count = len(candidates) - sim_ok_count - exception_count
-    best_net = max((r[2] for r in gas_profitable), default=0)
-    _breakdown = format_failure_breakdown(_fail_buckets)
-    bot_logger.info(
-        f"[sim] {len(candidates)} candidates: "
-        f"{sim_ok_count} ok ({len(gas_profitable)} profitable, "
-        f"{len(gas_unprofitable)} below threshold), "
-        f"{sim_fail_count} failed, {exception_count} exceptions"
-        f"{f' — best net={best_net // 10**9}gwei' if gas_profitable else ''}"
-        f"{f' — by reason: {_breakdown}' if _breakdown else ''}",
-    )
-
-    # ── Record simulation outcomes for path suppression ──────────
-    # Successful paths reset their failure counter; failed paths increment it.
-    succeeded_path_ids: set[int] = set()
-    succeeded_path_ids.update(result[0] for result in gas_profitable + gas_unprofitable)
-    failed_count = len(candidates) - len(succeeded_path_ids)
-    if failed_count > 0:
-        bot_logger.debug(
-            f"[suppress] {failed_count}/{len(candidates)} candidates failed, {dispatcher.total_suppressed} total suppressed",
-        )
-    for pid, _inp, _pft, _ho, _ci, _sb in candidates:
-        if pid in succeeded_path_ids:
-            dispatcher.record_success(pid)
-        else:
-            dispatcher.record_failure(pid)
-
-    # Sort both categories by net profit descending
-    gas_profitable.sort(key=operator.itemgetter(2), reverse=True)
-    gas_unprofitable.sort(key=operator.itemgetter(2), reverse=True)
-
-    # ── Log gas-profitable results (rare, verbose for offline inspection) ──
-    for path_id, gross_profit, net_profit, gas_used, _tx_params, path_info in gas_profitable:
-        hop_details = []
-        for i, h in enumerate(path_info.hops):
-            if isinstance(h, V2HopInfo):
-                hop_details.append(
-                    f"  hop[{i}] V2 addr={h.pool_address} "
-                    f"t0={h.token0_address} t1={h.token1_address} "
-                    f"fee={h.fee} zfo={h.zfo}",
-                )
-            elif isinstance(h, V3HopInfo):
-                hop_details.append(
-                    f"  hop[{i}] V3 addr={h.pool_address} "
-                    f"t0={h.token0_address} t1={h.token1_address} "
-                    f"fee={h.fee} zfo={h.zfo}",
-                )
-            elif isinstance(h, V4HopInfo):
-                hop_details.append(
-                    f"  hop[{i}] V4 pm={h.pool_manager_address} "
-                    f"pid={h.pool_id_hex} "
-                    f"c0={h.currency0_address} c1={h.currency1_address} "
-                    f"fee={h.fee} ts={h.tick_spacing} zfo={h.zfo}",
-                )
-        hops_str = "\n".join(hop_details)
-        bot_logger.info(
-            f"[profit] path={path_id} {path_info.path_type} "
-            f"gross={gross_profit / 1e18:.6f}ETH ({gross_profit // 10**9}gwei) "
-            f"net={net_profit / 1e18:.6f}ETH ({net_profit // 10**9}gwei) "
-            f"gas={gas_used}\n{hops_str}",
-        )
-
-    # Log gas-unprofitable but onchain-valid results at debug level
-    for path_id, gross_profit, net_profit, gas_used, _tx_params, path_info in gas_unprofitable:
-        bot_logger.debug(
-            f"[sim-ok] path={path_id} {path_info.path_type} "
-            f"gross={gross_profit / 1e18:.6f}ETH "
-            f"net={net_profit / 1e18:.6f}ETH "
-            f"gas={gas_used} "
-            f"gross_gwei={gross_profit // 10**9}gwei "
-            f"net_gwei={net_profit // 10**9}gwei",
-        )
-
-    # ── Submit gas-profitable via the Rust submit leaf (7UIYJ6) ────
-    # The mutual-excl guard / claim_nonce / access-list re-compute / sign /
-    # eth_sendRawTransaction / reserve_pools / monitor-spawn now happen in
-    # Rust (degenbot-submission dispatch_and_submit). Python builds the
-    # PySubmitCandidate list (priority_fee computed here — S3 stay-Python —
-    # + passed IN), hands the batch + coordination args, then renders the
-    # [dispatch] summary from the SubmitOutcome records.
-    async_alloy = async_w3.as_async_alloy()
-    if async_alloy is None:
-        bot_logger.error("[dispatch] async_w3 is not an Alloy-backed adapter; cannot submit")
-        return
-    signer = PyTxSigner(key=operator_private_key, chain_id=1)
-
-    candidates: list[PySubmitCandidate] = []
-    for path_id, gross_profit, _net_in, gas_used, tx_params, path_info in gas_profitable:
-        path_pools = {
-            h.pool_id_hex if isinstance(h, V4HopInfo) else h.pool_address for h in path_info.hops
-        }
-        # Compute final priority fee (re-evaluate with current state — S3)
-        priority_fee = _compute_priority_fee(
-            gross_profit=gross_profit,
-            gas_used=gas_used,
-            base_fee_next=base_fee_next,
-            solve_block=0,  # Already passed staleness check; no age decay at submission
-            current_block=current_block,
-            block_priority_fees=dispatcher.block_priority_fees,
-        )
-        net_profit = gross_profit - gas_used * (base_fee_next + priority_fee)
-
-        bot_logger.info(
-            f"[dispatch] path={path_id} "
-            f"gross={gross_profit // 10**9}gwei "
-            f"net={net_profit // 10**9}gwei "
-            f"gas={gas_used} "
-            f"prio={priority_fee // 10**9}gwei",
-        )
-
         candidates.append(
-            PySubmitCandidate(
-                path_id=path_id,
-                gross_profit=gross_profit,
-                net_profit=net_profit,
-                gas_used=gas_used,
-                priority_fee=priority_fee,
-                base_fee_next=base_fee_next,
-                execute_calldata=cast("bytes", tx_params["data"]),
-                executor_address=cast("str", tx_params["to"]),
-                access_list=cast("list[Any]", tx_params.get("accessList")),
-                path_pools=path_pools,
+            DispatchCandidate(
+                engine=engine_registry.engine,
+                path_id=pid,
+                optimal_input=inp,
+                engine_profit=prof,
+                hop_outputs=list(ho),
+                solve_block=sb,
             ),
         )
 
-    records = await dispatch_and_submit_py(
+    if not candidates:
+        return
+
+    outcome = await dispatch_profitable(
         candidates=candidates,
+        context=sim_ctx,
+        dispatcher=dispatcher,
+        base_fee_next=base_fee_next,
+        current_block=current_block,
+        min_profit_net=MIN_PROFIT_NET,
+        min_profit_margin_bps=MIN_PROFIT_MARGIN_BPS,
+    )
+    _render_sim_summary(outcome)
+    _render_sim_failures(outcome)
+    _render_profit_logs(outcome)
+
+    # ── Submit gas-profitable via the Rust submit leaf ───
+    async_alloy = async_w3.as_async_alloy()
+    if async_alloy is None:
+        bot_logger.error("[dispatch] async_w3 is not an Alloy-backed provider; cannot submit")
+        return
+    signer = TxSigner(key=operator_private_key, chain_id=1)
+    records = await dispatch_and_submit(
+        candidates=outcome.gas_profitable,
         dispatcher=dispatcher,
         provider=async_alloy,
         signer=signer,
@@ -2507,13 +1460,127 @@ async def dispatch_profitable_results(
             bot_logger.debug(f"Send failed: {record.get('detail', '')}")
 
 
+def _render_sim_summary(outcome: DispatchOutcome) -> None:
+    """Render the ``[sim]`` line from ``DispatchOutcome`` fields (D4 stay-Python).
+
+    Ports the prior ``[sim] N candidates: X ok (Y profitable, Z below
+    threshold), W failed, V exceptions …`` summary (the only rendering the A5
+    acceptance criterion requires). Appends the suppressed/thin drops when
+    non-zero (more informative than the prior line, which folded them in
+    opaquely). The ``[profit]``/``[sim-ok]`` per-path logs are rendered by
+    :func:`_render_profit_logs`.
+    """
+    profitable = outcome.gas_profitable
+    best_net = max((c.net_profit for c in profitable), default=0)
+    breakdown = format_failure_breakdown(outcome.fail_buckets)
+    sim_ok = len(profitable) + outcome.gas_unprofitable_count
+    extra = ""
+    if outcome.suppressed_count or outcome.thin_dropped:
+        extra = f" — suppressed={outcome.suppressed_count}, thin={outcome.thin_dropped}"
+    bot_logger.info(
+        f"[sim] {outcome.candidate_count} candidates: "
+        f"{sim_ok} ok ({len(profitable)} profitable, "
+        f"{outcome.gas_unprofitable_count} below threshold), "
+        f"{outcome.fail_count} failed, {outcome.exception_count} exceptions"
+        f"{f' — best net={best_net // 10**9}gwei' if profitable else ''}"
+        f"{f' — by reason: {breakdown}' if breakdown else ''}"
+        f"{extra}",
+    )
+
+
+def _render_profit_logs(outcome: DispatchOutcome) -> None:
+    """Render the ``[profit]`` per-path hop-detail log (D4 stay-Python).
+
+    The prior ``[sim-ok]`` gas-unprofitable per-path log is NOT reproduced:
+    ``DispatchOutcome`` collapses gas-unprofitable to a count by design (A2 —
+    the cockpit only logs these as a tally; they're valid sims below the net
+    threshold, not submitted). The ``[profit]`` log iterates the survivors +
+    looks up each path's ``PathInfo`` via ``outcome.path_infos`` (Decision 1=B).
+    """
+    for cand in outcome.gas_profitable:
+        path_info = outcome.path_infos.get(cand.path_id)
+        hop_details = []
+        if path_info is not None:
+            for i, h in enumerate(path_info["hops"]):
+                family = h["family"]
+                if family == "V2":
+                    hop_details.append(
+                        f"  hop[{i}] V2 addr={h['pool_address']} "
+                        f"t0={h['token0_address']} t1={h['token1_address']} "
+                        f"fee={h['fee']} zfo={h['zfo']}",
+                    )
+                elif family == "V3":
+                    hop_details.append(
+                        f"  hop[{i}] V3 addr={h['pool_address']} "
+                        f"t0={h['token0_address']} t1={h['token1_address']} "
+                        f"fee={h['fee']} zfo={h['zfo']}",
+                    )
+                elif family == "V4":
+                    hop_details.append(
+                        f"  hop[{i}] V4 pm={h['pool_manager_address']} "
+                        f"pid={h['pool_id_hex']} "
+                        f"c0={h['currency0_address']} c1={h['currency1_address']} "
+                        f"fee={h['fee']} ts={h['tick_spacing']} zfo={h['zfo']}",
+                    )
+        hops_str = "\n".join(hop_details)
+        bot_logger.info(
+            f"[profit] path={cand.path_id} "
+            f"{path_info['path_type'] if path_info else '?'} "
+            f"gross={cand.gross_profit / 1e18:.6f}ETH ({cand.gross_profit // 10**9}gwei) "
+            f"net={cand.net_profit / 1e18:.6f}ETH ({cand.net_profit // 10**9}gwei) "
+            f"gas={cand.gas_used} prio={cand.priority_fee // 10**9}gwei\n{hops_str}",
+        )
+
+
+def _render_sim_failures(outcome: DispatchOutcome) -> None:
+    """Render one ``[sim-fail]`` line per reverted / failed candidate (D3).
+
+    Counterpart to :func:`_render_profit_logs` — operates on the FAILURES
+    rather than the survivors. Each record carries the per-candidate detail the
+    Rust core surfaced across the FFI (``path_id`` + bucket + ``fail_index``
+    + raw revert bytes); this renderer joins it to the path's hop token
+    summary (via :func:`_hop_token_summary`), looked up from
+    ``outcome.path_infos`` — the same map :func:`_render_profit_logs` uses —
+    so the operator can identify WHICH path reverted against WHICH pools
+    without lifting a session.
+
+    The ``[sim]`` aggregate summary still leads; this only emits when the
+    Rust outcome reports ``N > 0`` failures. Capped at
+    :data:`_SIM_FAIL_RENDER_CAP` records per batch with a ``… (+M more)``
+    trailing line so a thin-margin revert storm doesn't flood the log.
+    """
+    failures = outcome.failures
+    if not failures:
+        return
+    cap = _SIM_FAIL_RENDER_CAP
+    path_infos = outcome.path_infos
+    for rec in failures[:cap]:
+        path_id = rec["path_id"]
+        bucket = rec["bucket"]
+        fail_idx = rec["fail_index"]
+        revert_hex = rec["revert_data"]
+        path_info = path_infos.get(path_id)
+        path_type = path_info["path_type"] if path_info is not None else "?"
+        hops = (
+            _hop_token_summary(path_info["hops"]) if path_info is not None else "(path_info missing)"
+        )
+        bot_logger.info(
+            f"[sim-fail] path={path_id} type={path_type} bucket={bucket} "
+            f"fail_idx={fail_idx} revert={revert_hex} hops={hops}",
+        )
+    overflow = len(failures) - cap
+    if overflow > 0:
+        bot_logger.info(f"[sim-fail] … (+{overflow} more)")
+
+
 async def consume_result_batches(
     engine_registry: EngineRegistry,
-    async_w3: AsyncProviderAdapter,
+    async_w3: AsyncAlloyProvider,
+    sim_ctx: SimulateContext,
     executor_address: str,
     operator_address: str,
     operator_private_key: str,
-    dispatcher: PyDispatcher,
+    dispatcher: Dispatcher,
     dry_run: bool,
     *,
     block_stream: AsyncIterator[dict[str, int]] | None = None,
@@ -2531,9 +1598,10 @@ async def consume_result_batches(
     Two async streams are awaited concurrently via ``asyncio.wait``:
       * block stream  → ``dispatcher.advance_block``, ``record_block_time``,
         ``fee_history``, the ``[block:]`` log, and ``base_fee_next``.
-      * result batch  → ``dispatch_profitable_results`` keyed off
-        ``dispatcher.current_block`` (the block clock), with the per-result
-        solve_block recorded for age/staleness.
+      * result batch  → ``_dispatch_profitable`` (the Rust
+        ``dispatch_profitable`` → ``dispatch_and_submit`` chain) keyed
+        off ``dispatcher.current_block`` (the block clock), with the
+        per-result solve_block recorded for age/staleness.
 
     Both streams are injectable for testing; production pulls them from the
     engine.
@@ -2575,6 +1643,7 @@ async def consume_result_batches(
                     dispatcher,
                     engine_registry,
                     async_w3,
+                    sim_ctx,
                     executor_address,
                     operator_address,
                     operator_private_key,
@@ -2654,8 +1723,8 @@ def _reprime(
 
 async def _apply_block_if_ready(
     fut: asyncio.Task[dict[str, int]],
-    dispatcher: PyDispatcher,
-    async_w3: AsyncProviderAdapter,
+    dispatcher: Dispatcher,
+    async_w3: AsyncAlloyProvider,
 ) -> None:
     """Drive the block clock from a forwarded ``newHeads`` tick if fut resolved.
 
@@ -2683,13 +1752,13 @@ async def _apply_block_if_ready(
     )
 
     # 7UIYJ6: ``eth_feeHistory`` + hex-decode + ``record_priority_fees`` now
-    # happen in the Rust submit leaf (``fetch_fee_history_py`` extracts the
+    # happen in the Rust submit leaf (``fetch_fee_history`` extracts the
     # AsyncAlloyProvider, calls eth_feeHistory, records into the dispatcher's
     # ring internally, no-ops on RPC failure — matching the prior
     # ``except Web3Exception: pass``).
     async_alloy = async_w3.as_async_alloy()
     if async_alloy is not None:
-        await fetch_fee_history_py(
+        await fetch_fee_history(
             provider=async_alloy,
             dispatcher=dispatcher,
             block_count=1,
@@ -2713,9 +1782,10 @@ async def _apply_block_if_ready(
 
 async def _apply_result_if_ready(
     fut: asyncio.Task[dict[str, object]],
-    dispatcher: PyDispatcher,
+    dispatcher: Dispatcher,
     engine_registry: EngineRegistry,
-    async_w3: AsyncProviderAdapter,
+    async_w3: AsyncAlloyProvider,
+    sim_ctx: SimulateContext,
     executor_address: str,
     operator_address: str,
     operator_private_key: str,
@@ -2764,21 +1834,20 @@ async def _apply_result_if_ready(
         dispatcher.discard_path(int(path_id))
 
     if results:
-        await dispatch_profitable_results(
+        await _dispatch_profitable(
             results=results,
             engine_registry=engine_registry,
             async_w3=async_w3,
-            executor_address=executor_address,
-            operator_address=operator_address,
+            sim_ctx=sim_ctx,
             operator_private_key=operator_private_key,
+            operator_nonce=operator_nonce,
+            dispatcher=dispatcher,
+            current_block=current_block,
             base_fee_next=next_base_fee(
                 parent_base_fee=int(cast("Any", batch.get("base_fee_per_gas") or 0)),
                 parent_gas_used=int(cast("Any", batch["gas_used"])),
                 parent_gas_limit=int(cast("Any", batch["gas_limit"])),
             ),
-            current_block=current_block,
-            operator_nonce=operator_nonce,
-            dispatcher=dispatcher,
             dry_run=dry_run,
         )
 

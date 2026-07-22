@@ -1,19 +1,19 @@
 //! Bot-owned pump / lifecycle state (ADR-006 D4).
 //!
 //! D4 relocates the pump lifecycle (`subscribe`, `backfill_from_snapshot`,
-//! `resume`) onto `PyBot`. Today these live on `PyUniswapArbEngine` and touch
+//! `resume`) onto `PyBot`. Today these live on `PyArbitrageEngine` and touch
 //! a cluster of fields also accessed by `snapshot.rs` (phase) and `solve.rs`
 //! (coordinator). Rather than move every fieldsite in one go, this module
-//! defines a shared [`PumpState`] that BOTH `PyBot` and `PyUniswapArbEngine`
+//! defines a shared [`PumpState`] that BOTH `PyBot` and `PyArbitrageEngine`
 //! hold — so the three pump methods can move to `PyBot` (owning the pump, per
 //! D4) while the engine's snapshot/solve slices keep reading the same shared
 //! state through their own `Arc<PumpState>` handle.
 //!
 //! `PumpState` is the lifecycle layer: engine phase, the pump handle, the
 //! subscribe state held between `subscribe` and `resume`, the solve coordinator
-//! + reorg coordinator + shutdown flag. The pure solve core (`Arc<Mutex<UniswapEngine>>`,
+//! + reorg coordinator + shutdown flag. The pure solve core (`Arc<Mutex<ArbitrageEngine>>`,
 //!   `BotState`, v3/v4 snapshot stores, verify config) stays on
-//!   `PyUniswapArbEngine`.
+//!   `PyArbitrageEngine`.
 
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use degenbot_bot::bot_core::block_pump::{BlockPump, WsEvent};
 use degenbot_bot::bot_core::reorg_coordinator::ReorgCoordinator;
 use degenbot_bot::bot_core::solve_coordinator::SolveCoordinator;
 use degenbot_bot::bot_core::{drain_sink::DrainSink, Bot};
-use degenbot_bot::solvers::uniswap_engine::{EnginePhase, UniswapEngine};
+use degenbot_bot::solvers::arb_engine::{ArbitrageEngine, EnginePhase};
 use parking_lot::Mutex;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -39,7 +39,7 @@ pub(crate) struct PySubscribeState {
 
 /// Shared lifecycle state for the pump (ADR-006 D4).
 ///
-/// Held by both `PyBot` (the D4 pump owner) and `PyUniswapArbEngine` (whose
+/// Held by both `PyBot` (the D4 pump owner) and `PyArbitrageEngine` (whose
 /// snapshot/solve slices still read `phase` / `coordinator`). One allocation
 /// per chain — both wrappers carry `Arc<PumpState>` to the same instance.
 ///
@@ -51,7 +51,7 @@ pub(crate) struct PySubscribeState {
 /// + the `verify_*_block` fields; T6 re-stashes the blocks on the registry.)
 pub(crate) struct PumpState {
     /// Shared engine state (for `process_backfill_logs` / `last_processed_block`).
-    pub(crate) engine: Arc<parking_lot::Mutex<UniswapEngine>>,
+    pub(crate) engine: Arc<parking_lot::Mutex<ArbitrageEngine>>,
     /// The drain-point solve coordinator (ADR-006 D4, slice 6). Holds the
     /// engine as `Arc<dyn Engine>` (via `EngineHandle`) and fans drain-tick /
     /// send / finalize / reorg calls to it under a `drain_lock`.
@@ -78,17 +78,13 @@ pub(crate) struct PumpState {
     pub(crate) verify_provider: Mutex<Option<degenbot_rpc::provider::AlloyProvider>>,
     /// Optional `StateView` contract address for V4 verification.
     pub(crate) verify_state_view: Mutex<Option<alloy::primitives::Address>>,
-    /// The snapshot block — set by `backfill_from_snapshot`.
-    pub(crate) verify_snapshot_block: Mutex<Option<u64>>,
-    /// The backfill block — set by `backfill_from_snapshot`.
-    pub(crate) verify_backfill_block: Mutex<Option<u64>>,
 }
 
 impl PumpState {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub(crate) fn new(
-        engine: Arc<parking_lot::Mutex<UniswapEngine>>,
+        engine: Arc<parking_lot::Mutex<ArbitrageEngine>>,
         coordinator: Arc<SolveCoordinator>,
         reorg_coordinator: Arc<ReorgCoordinator>,
         bot: Arc<Bot>,
@@ -105,8 +101,6 @@ impl PumpState {
             verify_rpc_url: Mutex::new(None),
             verify_provider: Mutex::new(None),
             verify_state_view: Mutex::new(None),
-            verify_snapshot_block: Mutex::new(None),
-            verify_backfill_block: Mutex::new(None),
         }
     }
 
@@ -136,7 +130,7 @@ impl PumpState {
     pub(crate) fn subscribe(&self, rpc_url: &str) -> PyResult<u64> {
         let phase = self.current_phase();
         phase
-            .require(EnginePhase::Created, "subscribe")
+            .allow_subscribe("subscribe")
             .map_err(PyRuntimeError::new_err)?;
         if self.pump_handle.lock().is_some() {
             return Err(PyRuntimeError::new_err(
@@ -166,99 +160,21 @@ impl PumpState {
                 .combined_stream
                 .expect("subscribe() always returns a stream"),
         });
-        self.set_phase(EnginePhase::Subscribed);
+        // J3FMDO regression fix: reflect whether the core already has a
+        // snapshot loaded (the construction-time-load path —
+        // `Bot::load_snapshot_from_db` at `Bot` construction writes the
+        // snapshot into the shared core `BotState` but never advances the
+        // engine phase). An unconditional `set_phase(Subscribed)` left the
+        // phase at `Subscribed` (1) and `resume()`'s `require(SnapshotLoaded)`
+        // guard crashed the production backrun bot:
+        //   RuntimeError: Cannot call resume: engine is in phase Subscribed,
+        //                 but requires SnapshotLoaded
+        // `after_subscribe` lands at `SnapshotLoaded` when the core has a
+        // snapshot (so `resume()` is reachable) and `Subscribed` otherwise
+        // (the legacy path that loads the snapshot after subscribe).
+        let core_has_snapshot = self.bot.state_arc().read().snapshot_seed_block().is_some();
+        self.set_phase(EnginePhase::after_subscribe(phase, core_has_snapshot));
         Ok(state.first_block)
-    }
-
-    /// Backfill Mint/Burn/ModifyLiquidity events from the DB snapshot block to
-    /// the first WS block (ADR-006 D4 T3 — relocated onto the shared pump state
-    /// so `PyBot::backfill_from_snapshot` delegates here).
-    ///
-    /// # Errors
-    /// `PyRuntimeError` if the phase is wrong, subscribe wasn't called, or an
-    /// `eth_getLogs` request fails.
-    pub(crate) fn backfill_from_snapshot(
-        &self,
-        rpc_url: &str,
-        snapshot_block: u64,
-        chunk_size: u64,
-    ) -> PyResult<u64> {
-        let phase = self.current_phase();
-        phase
-            .require(EnginePhase::SnapshotLoaded, "backfill_from_snapshot")
-            .map_err(PyRuntimeError::new_err)?;
-        phase
-            .require_before(EnginePhase::Backfilled, "backfill_from_snapshot")
-            .map_err(PyRuntimeError::new_err)?;
-        let first_ws_block = {
-            let state_lock = self.subscribe_state.lock();
-            if let Some(s) = state_lock.as_ref() {
-                s.first_block
-            } else {
-                return Err(PyRuntimeError::new_err(
-                    "Cannot backfill: subscribe() has not been called. Call subscribe() first.",
-                ));
-            }
-        };
-        if snapshot_block == 0 {
-            log::warn!("backfill_from_snapshot: snapshot_block is 0, skipping");
-            return Ok(0);
-        }
-        if snapshot_block >= first_ws_block {
-            log::info!(
-                "backfill_from_snapshot: snapshot at {snapshot_block} >= WS block {first_ws_block}, nothing to backfill"
-            );
-            return Ok(0);
-        }
-        let from_block = snapshot_block + 1;
-        let to_block = first_ws_block - 1;
-        let total_blocks = to_block - from_block + 1;
-        log::info!(
-            "backfill_from_snapshot: fetching events from block {from_block} to {to_block} ({total_blocks} blocks, chunk_size={chunk_size})"
-        );
-        let runtime = degenbot_core::runtime::get_runtime();
-        let provider = runtime.block_on(async {
-            degenbot_rpc::provider::AlloyProvider::new(rpc_url, 3)
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to create provider: {e}")))
-        })?;
-        let provider_arc = provider.provider_arc();
-        let mut total_logs = 0usize;
-        let mut chunk_start = from_block;
-        while chunk_start <= to_block {
-            let chunk_end = (chunk_start + chunk_size - 1).min(to_block);
-            let filter =
-                degenbot_bot::bot_core::block_pump::build_backfill_filter(chunk_start, chunk_end);
-            let logs = runtime.block_on(async {
-                provider_arc.get_logs(&filter).await.map_err(|e| {
-                    PyRuntimeError::new_err(format!(
-                        "eth_getLogs failed for blocks {chunk_start}-{chunk_end}: {e}"
-                    ))
-                })
-            })?;
-            let chunk_log_count = logs.len();
-            total_logs += chunk_log_count;
-            {
-                let mut engine = self.engine.lock();
-                engine.process_backfill_logs(&logs, chunk_end);
-            }
-            log::info!(
-                "backfill_from_snapshot: blocks {chunk_start}-{chunk_end}: {chunk_log_count} logs applied"
-            );
-            chunk_start = chunk_end + 1;
-        }
-        log::info!(
-            "backfill_from_snapshot: complete — {total_logs} total logs applied across {total_blocks} blocks"
-        );
-        *self.verify_snapshot_block.lock() = Some(snapshot_block);
-        let backfill_block = self
-            .engine
-            .lock()
-            .last_processed_block()
-            .unwrap_or(to_block);
-        *self.verify_backfill_block.lock() = Some(backfill_block);
-        self.set_phase(EnginePhase::Backfilled);
-        Ok(total_blocks)
     }
 
     /// Resume the pump — begin normal WS processing (ADR-006 D4 T3).
@@ -285,13 +201,25 @@ impl PumpState {
         let first_block = state.first_block;
         let combined_stream = state.combined_stream;
         self.coordinator.start();
+        // J3FMDO race fix: run the snapshot→WS backfill SYNCHRONOUSLY before
+        // spawning the live loop, so Python's `build_paths` (which drains the
+        // per-pool backfill buffer via `apply_backfill_buffer_v3`) cannot race
+        // the backfill. Pre-fix the backfill ran inside the spawned
+        // `resume_from_subscribe` task and `resume` returned immediately — an
+        // active pool's burn was not yet buffered when `build_paths` drained,
+        // so the post-drain verify mismatched on-chain and crashed the backrun
+        // bot (`VerificationMismatchError`, 2026-07-12). `block_on` on the
+        // shared runtime mirrors `subscribe`'s sync discipline.
+        let pump_ref = &pump;
+        degenbot_core::runtime::get_runtime().block_on(async {
+            if let Err(e) = pump_ref.backfill_to_ws_block(first_block).await {
+                log::error!(
+                    "BlockPump: auto-backfill failed — starting live loop from {first_block} (gap not closed): {e}"
+                );
+            }
+        });
         let handle = degenbot_core::runtime::get_runtime().spawn(async move {
-            let inner_state = degenbot_bot::bot_core::block_pump::SubscribeState {
-                first_block,
-                first_timestamp: 0,
-                combined_stream: Some(combined_stream),
-            };
-            pump.resume_from_subscribe(inner_state).await;
+            pump.run_with_stream(combined_stream, first_block).await;
         });
         *self.pump_handle.lock() = Some(handle);
         self.set_phase(EnginePhase::Resumed);
@@ -866,7 +794,7 @@ mod tests {
     // unblocks immediately), and be idempotent (a second call is a no-op
     // `Ok(())` because the handle is `take()`n on the first). Building a
     // real `PumpState` mirrors the standalone (no-`py_bot`) path of
-    // `PyUniswapArbEngine::new` — a fresh `Bot`/`BotState`/`UniswapEngine`/
+    // `PyArbitrageEngine::new` — a fresh `Bot`/`BotState`/`ArbitrageEngine`/
     // `SolveCoordinator`/`ReorgCoordinator`. No WS connection is opened;
     // the running-handle test installs a never-completing dummy task so
     // `stop()`'s abort path is exercised without the real pump.
@@ -875,15 +803,15 @@ mod tests {
     use degenbot_bot::bot_core::reorg_coordinator::ReorgCoordinator;
     use degenbot_bot::bot_core::solve_coordinator::SolveCoordinator;
     use degenbot_bot::bot_core::{Bot, BotState};
-    use degenbot_bot::solvers::uniswap_engine::engine_handle::EngineHandle;
-    use degenbot_bot::solvers::uniswap_engine::UniswapEngine;
+    use degenbot_bot::solvers::arb_engine::engine_handle::EngineHandle;
+    use degenbot_bot::solvers::arb_engine::ArbitrageEngine;
     use parking_lot::RwLock;
     use tokio::sync::mpsc;
 
     fn pump_state_for_test() -> std::sync::Arc<PumpState> {
         let core = std::sync::Arc::new(RwLock::new(BotState::new()));
         let bot = std::sync::Arc::new(Bot::with_core(std::sync::Arc::clone(&core)));
-        let mut engine = UniswapEngine::with_core(core);
+        let mut engine = ArbitrageEngine::with_core(core);
         let (result_tx, _result_rx) = mpsc::unbounded_channel();
         let (block_tx, _block_rx) = mpsc::unbounded_channel();
         engine.set_result_channel(result_tx);

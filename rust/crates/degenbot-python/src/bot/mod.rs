@@ -27,16 +27,29 @@ use std::sync::Arc;
 
 use alloy::primitives::Address;
 
-use crate::bot::engine::{hex_string_to_pool_id, map_register_v4_err};
+use crate::bot::engine::{
+    hex_string_to_pool_id, map_register_v2_err, map_register_v3_err, map_register_v4_err,
+    SpecViolationError,
+};
+
+/// Narrow a Python-supplied `U256` reserve to `U112` (the on-chain `uint112`
+/// width), raising `SpecViolationError` if bits ≥ 112 are set.
+fn narrow_reserve(
+    value: alloy::primitives::U256,
+    field: &'static str,
+) -> PyResult<alloy::primitives::aliases::U112> {
+    degenbot_pools::spec_bounds::narrow_v2_reserve(value, field)
+        .map_err(|sv| SpecViolationError::new_err(format!("{sv}")))
+}
 use crate::bot::pool::PyLiquidityPool;
 use crate::bot::token::PyErc20Token;
-use degenbot_bot::bot_core::state_history::JournalError;
 use degenbot_bot::bot_core::PoolTickCoverage;
 use degenbot_bot::bot_core::{
     Bot, RegisterAerodromeV2PoolParams, RegisterBalancerStablePoolParams,
     RegisterBalancerWeightedPoolParams, RegisterCurvePoolParams, RegisterV2PoolParams,
     RegisterV3PoolParams, RegisterV4PoolParams, V4PoolKey,
 };
+use degenbot_pools::state_history::JournalError;
 use degenbot_uniswap::dex_identity::DexVariant;
 use pyo3::types::{PyDict, PyList};
 use pyo3::Bound;
@@ -106,21 +119,33 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 /// Python constructs a `PyBot` (or receives a shared handle), registers
 /// pools/tokens, then reads results. `PyBot` owns a [`Bot`] via `Arc` and hands
 /// out clones of its shared `Arc<RwLock<BotState>>` (`state_arc`) so
-/// `PyLiquidityPool` / `PyErc20Token` / `UniswapEngine` all reach ONE
+/// `PyLiquidityPool` / `PyErc20Token` / `ArbitrageEngine` all reach ONE
 /// Rust-owned `BotState`; `BlockPump` clones the same `Arc<Bot>` so its
 /// `dispatch_log` writes flow through to the engine's reads (N handles → one
 /// state — the Polars three-layer invariant, preserved + generalized by D4).
-#[pyclass(skip_from_py_object)]
+#[pyclass(skip_from_py_object, module = "degenbot._ffi")]
 pub struct PyBot {
     bot: Arc<Bot>,
     /// ADR-006 D4 (T3): the pump lifecycle state, shared with the
-    /// `PyUniswapArbEngine` this bot owns. `None` until an engine is
+    /// `PyArbitrageEngine` this bot owns. `None` until an engine is
     /// constructed against this bot (the engine attaches its `Arc<PumpState>`
     /// back here during `new()`). Once attached, the three pump methods —
     /// `subscribe`, `backfill_from_snapshot`, `resume` — are drivable from
     /// `PyBot` (the D4 owner) and read/write the SAME `PumpState` the
     /// engine's snapshot/solve slices read.
     pump: parking_lot::Mutex<Option<Arc<crate::bot::pump::PumpState>>>,
+    /// Cached read-only `SnapshotDb` handle armed at `load_snapshot_from_db`
+    /// time (Decisions 5 (B) + 9 (A); epic `XEANMB`). `None` for cold-start
+    /// (no DB) or before the snapshot load is attempted. The registration-path
+    /// `PyO3` functions clone this Arc to feed `&dyn TickMapDb` to the tick-map
+    /// assembly helper's Db arm (`bot_core::tick_assembly`).
+    ///
+    /// One connection, opened by `load_snapshot_from_db` with a held deferred
+    /// read transaction + **retained**. The snapshot load + the per-pool Db
+    /// probe share the SAME `Mutex<Connection>` + its open tx — every read
+    /// shares one frozen DB snapshot across `build_paths` (WAL MVCC).
+    /// `close_snapshot_tx()` commits the tx at end of `build_paths`.
+    db: parking_lot::Mutex<Option<Arc<degenbot_db::snapshot_db::SnapshotDb>>>,
 }
 
 /// Crate-internal Rust surface on `PyBot` (not Python-visible).
@@ -133,9 +158,24 @@ impl PyBot {
         Arc::clone(&self.bot)
     }
 
+    /// The cached read-only `SnapshotDb` handle armed by
+    /// `load_snapshot_from_db` (Decision 5 (B) / task A6J5HG + epic `XEANMB`),
+    /// or `None` on the cold-start path (no DB configured, or the snapshot
+    /// load hasn't run, or `close_snapshot_tx()` dropped it). The registration-
+    /// path `PyO3` functions (`assemble_v3_tick_map` / `assemble_v4_tick_map`)
+    /// clone this Arc and pass `&*arc as &dyn TickMapDb` to
+    /// `bot_core::tick_assembly::assemble_*`'s `db` param. Returns a fresh
+    /// `Arc` clone — the caller owns the lifetime of the borrow; `PyBot`
+    /// retains its own Arc so subsequent callers still get `Some`.
+    #[must_use]
+    #[allow(dead_code)] // wired by the assemble_*_tick_map PyO3 wrappers.
+    pub(crate) fn db_handle(&self) -> Option<Arc<degenbot_db::snapshot_db::SnapshotDb>> {
+        self.db.lock().clone()
+    }
+
     /// ADR-006 D4 (T3): attach the pump lifecycle state owned by a
-    /// `PyUniswapArbEngine` constructed against this bot. Called from
-    /// `PyUniswapArbEngine::new` when `py_bot` is supplied. After this, the
+    /// `PyArbitrageEngine` constructed against this bot. Called from
+    /// `PyArbitrageEngine::new` when `py_bot` is supplied. After this, the
     /// pump methods on `PyBot` drive the same `PumpState` the engine reads.
     pub(crate) fn attach_pump_state(&self, pump: Arc<crate::bot::pump::PumpState>) {
         *self.pump.lock() = Some(pump);
@@ -148,7 +188,7 @@ impl PyBot {
     fn pump_state(&self) -> PyResult<Arc<crate::bot::pump::PumpState>> {
         self.pump.lock().clone().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err(
-                "No engine attached to this Bot. Construct a UniswapArbEngine(py_bot=...) \
+                "No engine attached to this Bot. Construct a ArbitrageEngine(py_bot=...) \
                  before calling pump lifecycle methods on Bot.",
             )
         })
@@ -168,13 +208,197 @@ impl PyBot {
         Self {
             bot: Arc::new(Bot::new(chain_id)),
             pump: parking_lot::Mutex::new(None),
+            db: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Load the V3 + V4 DB snapshot into the core `BotState` (B3OROH, JUCFCB).
+    ///
+    /// Called at Python `Bot.__init__` time when a DB path is configured
+    /// (Shape 2: eager construction-time load). Opens a read-only
+    /// `DegenbotDb` handle from `db_path`, then calls the core
+    /// `Bot::load_snapshot_from_db` — the single Rust entry point that
+    /// `stream_liquidity_maps`-loads V3+V4 pools into the core `SnapshotStore`s
+    /// + records `S = min(fetch_newest_update_block(V3), V4)`. After this,
+    /// pool registration consumes the store via `take()` (RUQ637) — the
+    /// Python builder passes `tick_data=None, coverage=Tracked` and lets the
+    /// store decide Tracked-vs-Sparse per pool.
+    ///
+    /// `None`/cold-start (no pools) is NOT an error — the pump anchors on
+    /// `first_observed_block` at resume. Idempotent across the two families,
+    /// but a second call after a successful load will `begin_load` a store
+    /// that's already loaded (panics) — call exactly once at construction.
+    ///
+    /// # Errors
+    /// `PyRuntimeError` on a DB open/read failure or a liquidity value
+    /// out of range.
+    #[pyo3(signature = (db_path, chain_id))]
+    fn load_snapshot_from_db(&self, db_path: &str, chain_id: u64) -> PyResult<()> {
+        // Epic XEANMB: open a `SnapshotDb` — a read-only handle with a held
+        // deferred read transaction. `Bot::load_snapshot_from_db` reads `S =
+        // min(fetch_newest_update_block(V3), V4)` INSIDE the held tx so `S`
+        // and every per-pool `fetch_liquidity_map` read share one frozen DB
+        // snapshot across `build_paths` (the consistency replacement for the
+        // retired `SnapshotStore`). `PyBot.close_snapshot_tx()` commits the
+        // tx at end of `build_paths` to release the WAL snapshot.
+        let snap = degenbot_db::snapshot_db::SnapshotDb::open(&std::path::PathBuf::from(db_path))
+            .map_err(|e| crate::db::db_err_to_py(&e))?
+            .0;
+        self.bot
+            .load_snapshot_from_db(&snap, chain_id)
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "load_snapshot_from_db failed: {e}"
+                ))
+            })?;
+        // Retain the `SnapshotDb` as a long-lived `Arc` so the registration-
+        // path PyO3 functions (`assemble_v3_tick_map` etc.) clone it to feed
+        // `&dyn TickMapDb` to the tick-map assembly helper's Db arm. Stored
+        // AFTER the snapshot load succeeded, so a failure leaves `db` as
+        // `None` (cold-start).
+        *self.db.lock() = Some(Arc::new(snap));
+        Ok(())
+    }
+
+    /// Commit + drop the held snapshot read transaction (epic `XEANMB`).
+    /// Call after `build_paths` finishes so the WAL snapshot is released + the
+    /// updater's checkpoint can reclaim `-wal` space. After this, `db_handle()`
+    /// returns `None` (the `assemble_*` Db arm goes through the held tx — once
+    /// it's closed, there's no Db arm for late registrations; they'd need a
+    /// fresh handle). Idempotent on a not-loaded bot (no-op).
+    ///
+    /// # Errors
+    /// `PyRuntimeError` if the `COMMIT` fails.
+    fn close_snapshot_tx(&self) -> PyResult<()> {
+        // Canary (epic XEANMB task 5.7): capture S_snapshot (read inside the
+        // held tx) before committing, then re-read S_live after COMMIT on the
+        // same connection (now seeing the live DB). If S_live > S_snapshot the
+        // pool_updater committed concurrently with startup — a discipline
+        // violation. Correctness was already preserved by the held tx; the
+        // canary only surfaces it.
+        let s_snapshot = self.bot.state_arc().read().snapshot_seed_block();
+        let chain_id = self.bot.chain_id();
+        let snap = self.db.lock().take();
+        if let Some(snap) = snap {
+            // `Arc::try_unwrap` succeeds only if `assemble_*` calls released
+            // their clones. During `build_paths` the Db arm clones per-call +
+            // drops before `close_snapshot_tx` runs, so at this point the only
+            // remaining `Arc` is this one. A failure (clones remain) surfaces
+            // as a `RuntimeError` rather than silently leaking the tx.
+            match std::sync::Arc::try_unwrap(snap) {
+                Ok(snap) => {
+                    let chain = i64::try_from(chain_id).unwrap_or(0);
+                    let report = snap
+                        .close_with_canary(s_snapshot, chain)
+                        .map_err(|e| crate::db::db_err_to_py(&e))?;
+                    if report.advanced {
+                        log::warn!(
+                            "DB advanced during startup (S_snapshot={} → S_live={}) — \
+                             operator discipline violation (correctness preserved by \
+                             held snapshot tx); the pool_updater committed \
+                             concurrently with `build_paths`",
+                            report.s_snapshot.unwrap_or(0),
+                            report.s_live.unwrap_or(0),
+                        );
+                    }
+                }
+                Err(_) => {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "close_snapshot_tx: SnapshotDb Arc still held (clone leak — \
+                         a caller didn't drop its handle)",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Attach a construction-I/O handle built from a Python provider + an
+    /// optional `database_path` (architecture review 2025-07-18 / candidate 1).
+    /// The Python `Bot.__init__` calls this after constructing `PyBot` so the
+    /// 7 generic RPC + 12 DB atomic methods on `PyBotIo` can delegate through
+    /// the core trait objects. Alloy-only — a non-alloy provider raises
+    /// `RuntimeError` (Q6-narrow; the 27 choreography wrappers keep their
+    /// Python-delegation fallback this slice, deleted with the builder-
+    /// choreography port).
+    ///
+    /// `database_path = None` → the DB half is `NoDb` (every read returns
+    /// `None`/empty, the no-DB path). `Some(path)` → a held `DegenbotDb` is
+    /// opened (WAL permits the concurrent connection) + wrapped in
+    /// `DegenbotDbConstruction`; construction DB reads route through this held
+    /// connection (no per-call `DegenbotDb::open`).
+    #[pyo3(signature = (provider, database_path=None))]
+    #[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
+    fn attach_construction_io(
+        &self,
+        py: Python<'_>,
+        provider: Bound<'_, PyAny>,
+        database_path: Option<&str>,
+    ) -> PyResult<()> {
+        use crate::bot::py_bot_io::extract_native_alloy;
+        use degenbot_bot::bot_core::construction_io::{
+            AlloyRpcConstruction, ConstructionIo, DegenbotDbConstruction, NoDb,
+        };
+
+        // Q6-narrow: the trait is alloy-only. A non-alloy provider (legacy
+        // test doubles that exercise the choreography fallback) yields `None`
+        // here — we skip attaching, leaving `construction_io = None`. The 7
+        // RPC + 12 DB methods on `PyBotIo` then fall back to the `self.alloy` /
+        // Python path (the `None` branch in each). This preserves the
+        // choreography-test path; a production driver MUST supply an alloy
+        // provider to get the trait delegation (the migration note documents
+        // this; the fallback is deleted with the builder-choreography port).
+        let Some(alloy) = extract_native_alloy(&provider) else {
+            return Ok(());
+        };
+        let rpc = std::sync::Arc::new(AlloyRpcConstruction::new((*alloy).clone()));
+
+        let db: std::sync::Arc<
+            dyn degenbot_bot::bot_core::construction_io::DbConstruction + Send + Sync,
+        > = match database_path {
+            Some(path) => {
+                let path_buf = std::path::PathBuf::from(path);
+                // `open_for_writes` — the construction executor does reads
+                // AND the `update_erc20_token_metadata` write-back, so the
+                // held connection must be write-capable. A missing file
+                // (SQLAlchemy creates the DB lazily on first write) → fall
+                // back to `NoDb` so the DB methods return the no-DB shape
+                // (matching the original `database_path` cold-start skip);
+                // a `Bot` restart after the file exists picks it up.
+                match py.detach(|| degenbot_db::DegenbotDb::open_for_writes(&path_buf)) {
+                    Ok((db, _state)) => std::sync::Arc::new(DegenbotDbConstruction::new(db)),
+                    Err(e) => {
+                        log::debug!(
+                            "Construction-I/O DB open failed for {path}: {e}; \
+                                 falling back to NoDb (DB methods return None)"
+                        );
+                        std::sync::Arc::new(NoDb)
+                    }
+                }
+            }
+            None => std::sync::Arc::new(NoDb),
+        };
+
+        let io = ConstructionIo::new(db, rpc);
+        // Attach to the shared `Bot` (interior-mutable `construction_io` field);
+        // `Bot` is held as `Arc` by `PyBot`, so we mutate through the `RwLock`
+        // rather than adopting the `Arc` out.
+        self.bot.set_construction_io(io);
+        Ok(())
+    }
+
+    /// The snapshot seed block `S` (or `None` when no DB snapshot was loaded —
+    /// the cold-start path). Python reads this in `engine_registry.start()`
+    /// to stash `_verify_snapshot_block` for the per-pool two-step verify.
+    #[getter]
+    fn snapshot_seed_block(&self) -> Option<u64> {
+        self.bot.state_arc().read().snapshot_seed_block()
     }
 
     /// Subscribe to the WS `newHeads` + logs streams (ADR-006 D4 T3).
     ///
     /// The Bot-owned pump entry point — delegates to the shared `PumpState`
-    /// attached when a `UniswapArbEngine` was constructed against this bot.
+    /// attached when a `ArbitrageEngine` was constructed against this bot.
     /// Blocks (sync, via the shared tokio runtime) until the first block is
     /// observed, then returns the first WS block number (the backfill target).
     ///
@@ -186,21 +410,12 @@ impl PyBot {
         self.pump_state()?.subscribe(rpc_url)
     }
 
-    /// Backfill Mint/Burn/ModifyLiquidity events from the snapshot block to the
-    /// first WS block (ADR-006 D4 T3). Delegates to the shared `PumpState`.
-    #[pyo3(signature = (rpc_url, snapshot_block, chunk_size=2000))]
-    fn backfill_from_snapshot(
-        &self,
-        rpc_url: &str,
-        snapshot_block: u64,
-        chunk_size: u64,
-    ) -> PyResult<u64> {
-        self.pump_state()?
-            .backfill_from_snapshot(rpc_url, snapshot_block, chunk_size)
-    }
-
     /// Resume the pump — begin normal WS processing (ADR-006 D4 T3).
-    /// Delegates to the shared `PumpState`.
+    ///
+    /// The snapshot→WS gap is closed automatically inside the core
+    /// `BlockPump::resume_from_subscribe` (J3FMDO); the pyo3
+    /// `backfill_from_snapshot` method is retired (2SM4Y7). Delegates to the
+    /// shared `PumpState`.
     fn resume(&self, _py: Python<'_>) -> PyResult<()> {
         self.pump_state()?.resume()
     }
@@ -387,8 +602,14 @@ impl PyBot {
         let t0 = parse_address(token0)?;
         let t1 = parse_address(token1)?;
         let fac = parse_address(factory)?;
-        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
-        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let r0 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )?;
+        let r1 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )?;
         let variant_enum = DexVariant::from_kebab(variant).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!("unknown variant: {variant}"))
         })?;
@@ -407,8 +628,7 @@ impl PyBot {
         let deployer = degenbot_uniswap::deployments::resolve_deployer(chain_id, fac);
         let init_hash_b256 = degenbot_uniswap::deployments::resolve_v2_init_hash(chain_id, fac);
 
-        Ok(self
-            .bot
+        self.bot
             .state_arc()
             .write()
             .register_v2_pool(&RegisterV2PoolParams {
@@ -426,7 +646,66 @@ impl PyBot {
                 variant: variant_enum,
                 stable_swap,
                 fee_denominator,
-            }))
+            })
+            .map_err(map_register_v2_err)
+    }
+
+    /// Prototype test-only V2 registration that bypasses CREATE2 verification.
+    /// Wire to a new method on Python so tests can build a synthetic V2 pool.
+    #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_v2_pool_test_only(
+        &self,
+        address: &str,
+        token0: &str,
+        token1: &str,
+        reserve0: &Bound<'_, PyAny>,
+        reserve1: &Bound<'_, PyAny>,
+        gamma_numer0: u64,
+        fee_denom0: u64,
+        gamma_numer1: u64,
+        fee_denom1: u64,
+        factory: &str,
+        update_block: u64,
+        variant: &str,
+        stable_swap: bool,
+        fee_denominator: Option<u64>,
+    ) -> PyResult<u64> {
+        let addr = parse_address(address)?;
+        let t0 = parse_address(token0)?;
+        let t1 = parse_address(token1)?;
+        let fac = parse_address(factory)?;
+        let r0 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )?;
+        let r1 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )?;
+        let variant_enum = DexVariant::from_kebab(variant).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("unknown variant: {variant}"))
+        })?;
+        self.bot
+            .state_arc()
+            .write()
+            .register_v2_pool(&RegisterV2PoolParams {
+                address: addr,
+                token0: t0,
+                token1: t1,
+                reserve0: r0,
+                reserve1: r1,
+                fee_token0: (gamma_numer0, fee_denom0),
+                fee_token1: (gamma_numer1, fee_denom1),
+                factory: fac,
+                deployer: fac,
+                init_hash: alloy::primitives::B256::default(),
+                update_block,
+                variant: variant_enum,
+                stable_swap,
+                fee_denominator,
+            })
+            .map_err(map_register_v2_err)
     }
 
     /// Update a V2 pool's reserves from a Sync event.
@@ -439,8 +718,14 @@ impl PyBot {
         block_number: u64,
     ) -> PyResult<()> {
         let addr = parse_address(address)?;
-        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
-        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let r0 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )?;
+        let r1 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )?;
 
         self.bot
             .state_arc()
@@ -563,6 +848,15 @@ impl PyBot {
         }
     }
 
+    /// Prototype structural pool handle (V2 slice).
+    fn py_pool(&self, pool_id: u64) -> Option<crate::bot::pool::PyPool> {
+        if self.bot.state_arc().read().has_pool(pool_id) {
+            Some(crate::bot::pool::PyPool::new(self.bot.state_arc(), pool_id))
+        } else {
+            None
+        }
+    }
+
     /// Unregister a V2/V3 pool by its contract address.
     ///
     /// ADR-007 U3. Drops the `PoolEntry`, its reorg journal, its index entry,
@@ -572,7 +866,7 @@ impl PyBot {
     /// handles aliasing to a different pool on recreate.
     ///
     /// V2/V3 path only — `PyBot` exposes `register_v2/v3_pool` (no V4;
-    /// V4 registration lives on `UniswapArbEngine`, and its symmetric
+    /// V4 registration lives on `ArbitrageEngine`, and its symmetric
     /// unregister belongs there too — see ADR-007 Consequences).
     ///
     /// Returns `True` if a pool was found and removed; `False` if the address
@@ -593,7 +887,7 @@ impl PyBot {
     fn unregister_pool(&self, address: &str, pool_id: Option<Vec<u8>>) -> PyResult<bool> {
         let addr = parse_address(address)?;
         // V4 on PyBot is intentionally not exposed: registration for V4 lives
-        // on UniswapArbEngine (bot::engine), so the symmetric V4 unregister
+        // on ArbitrageEngine (bot::engine), so the symmetric V4 unregister
         // belongs there too (ADR-007 Consequences / Deferred). A `Some` here
         // would be a caller bug — surface it rather than silently no-op.
         if pool_id.is_some() {
@@ -603,6 +897,168 @@ impl PyBot {
             ));
         }
         Ok(self.bot.state_arc().write().unregister_pool(addr, None))
+    }
+
+    /// Assemble a V3 pool's tick map from the stored DB snapshot (`Store → Db`
+    /// precedence — epic UHPXSD / Decision 6 (B)). Returns
+    /// `(tick_data, coverage)` on a hit, `None` on a miss (caller runs Branch 3
+    /// sparse RPC and registers inline). Raises `RuntimeError` on a Db read
+    /// failure — Decision 8 (A): loud error over silent degrade.
+    ///
+    /// `tick_data` has the same `{tick: (liquidity_gross, liquidity_net, block)}`
+    /// shape as `register_v3_pool`'s `tick_data` arg, so the builder can pass
+    /// the returned dict straight back into `register_v3_pool`. Coverage is
+    /// `"tracked"` on a hit (Store or Db).
+    ///
+    /// **Two-phase lock protocol**: `BotState`'s read guard is held only for
+    /// the `SnapshotStore::take` (brief `Mutex` lock); the Db read inside the
+    /// core helper runs with NO `BotState` lock held (the live pump's
+    /// `state.write()` is not blocked). The GIL is released across the Db read.
+    ///
+    /// Args:
+    ///   address: the V3 pool's contract address (checksummed or lowercase hex).
+    ///   tick: the pool's current tick (drives the Chain arm's word computation).
+    ///   `tick_spacing`: the pool's tick spacing (drives active-tick computation).
+    ///   block: the snapshot block for the Chain arm's RPC reads.
+    ///   io: optional `PyBotIo` whose native alloy provider backs the Chain arm.
+    ///     `None` (or a non-alloy provider) → no Chain arm (Store + Db only).
+    #[pyo3(signature = (address, tick=0, tick_spacing=0, block=0, io=None))]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "PyO3 passes the pyclass Bound by value; borrow is internal"
+    )]
+    fn assemble_v3_tick_map<'py>(
+        &self,
+        py: Python<'py>,
+        address: &str,
+        tick: i64,
+        tick_spacing: i64,
+        block: u64,
+        io: Option<pyo3::Bound<'_, crate::bot::py_bot_io::PyBotIo>>,
+    ) -> PyResult<Option<(Bound<'py, PyDict>, String)>> {
+        let addr = parse_address(address)?;
+        let tick_i32 = i32::try_from(tick)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("tick out of int24 range"))?;
+        let spacing_i32 = i32::try_from(tick_spacing)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("tick_spacing out of range"))?;
+        let db = self.db_handle();
+        // NOD4PS: extract the native alloy provider from `io` + construct an
+        // `AlloyTickBootstrapRpc` (Option B — pure-Rust choreography, no GIL
+        // re-entry per RPC). `None` when `io=None` or the provider isn't
+        // alloy-backed → Chain arm short-circuits (current behavior).
+        let chain: Option<std::sync::Arc<dyn degenbot_pools::tick_fetch::TickBootstrapRpc>> =
+            io.as_ref().and_then(|io_bound| {
+                io_bound
+                    .try_borrow()
+                    .ok()
+                    .and_then(|borrowed| crate::bot::pool::make_tick_bootstrap_rpc(&borrowed))
+            });
+        let result = py.detach(|| {
+            degenbot_bot::bot_core::tick_assembly::assemble_v3_tick_map(
+                db.as_deref()
+                    .map(|d| d as &dyn degenbot_db::snapshot::TickMapDb),
+                addr,
+                tick_i32,
+                spacing_i32,
+                block,
+                chain.as_deref(),
+            )
+        });
+        let Some((ticks, coverage)) = result.map_err(|e| crate::db::assembly_err_to_py(&e))? else {
+            return Ok(None);
+        };
+        let dict = build_tick_rows_py(py, &ticks)?;
+        let cov_str = match coverage {
+            degenbot_bot::bot_core::PoolTickCoverage::Tracked => "tracked",
+            degenbot_bot::bot_core::PoolTickCoverage::Sparse => "sparse",
+        };
+        Ok(Some((dict, cov_str.to_string())))
+    }
+
+    /// Assemble a V4 pool's tick map from the stored DB snapshot — V4 twin of
+    /// [`Self::assemble_v3_tick_map`]. Same precedence, miss, and error
+    /// semantics; returns `(tick_data, coverage)` on a hit, `None` on miss,
+    /// `RuntimeError` on Db error.
+    ///
+    /// Args:
+    ///   `pool_manager`: the V4 `PoolManager` contract address (Db key).
+    ///   `pool_id`: the V4 pool id as a 32-byte hex `str` (`0x...`) or `bytes`.
+    ///   `state_view`: the V4 `StateView` contract address (Chain-arm RPC target).
+    ///   `tick`/`tick_spacing`/`block`/`io`: see [`Self::assemble_v3_tick_map`].
+    #[pyo3(signature = (pool_manager, pool_id, state_view, tick=0, tick_spacing=0, block=0, io=None))]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::needless_pass_by_value,
+        reason = "PyO3 wrapper over the precedence helper; signature mirrors Python surface"
+    )]
+    fn assemble_v4_tick_map<'py>(
+        &self,
+        py: Python<'py>,
+        pool_manager: &str,
+        pool_id: &Bound<'_, PyAny>,
+        state_view: &str,
+        tick: i64,
+        tick_spacing: i64,
+        block: u64,
+        io: Option<pyo3::Bound<'_, crate::bot::py_bot_io::PyBotIo>>,
+    ) -> PyResult<Option<(Bound<'py, PyDict>, String)>> {
+        let mgr = parse_address(pool_manager)?;
+        let state_view_addr = parse_address(state_view)?;
+        let tick_i32 = i32::try_from(tick)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("tick out of int24 range"))?;
+        let spacing_i32 = i32::try_from(tick_spacing)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("tick_spacing out of range"))?;
+        // V4 pool id is `B256` ([u8; 32]); accept either a 0x-hex str or 32
+        // bytes (mirror `db/snapshot.rs::get_liquidity_map_v4`'s arg accept).
+        let pool_id_hash = if let Ok(s) = pool_id.extract::<String>() {
+            <alloy::primitives::B256 as std::str::FromStr>::from_str(&s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bad pool_id: {e}")))?
+        } else if let Ok(bytes) = pool_id.extract::<&[u8]>() {
+            if bytes.len() != 32 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "V4 pool_id bytes must be exactly 32 long, got {}",
+                    bytes.len()
+                )));
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(bytes);
+            alloy::primitives::B256::from(arr)
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "pool_id must be a 0x-hex str or 32-byte bytes",
+            ));
+        };
+        let db = self.db_handle();
+        let pool_id_inner: degenbot_decoders::v4_swap_decoder::V4PoolId = pool_id_hash.0; // B256 = FixedBytes<32>; .0 is [u8; 32]
+        let chain: Option<std::sync::Arc<dyn degenbot_pools::tick_fetch::TickBootstrapRpc>> =
+            io.as_ref().and_then(|io_bound| {
+                io_bound
+                    .try_borrow()
+                    .ok()
+                    .and_then(|borrowed| crate::bot::pool::make_tick_bootstrap_rpc(&borrowed))
+            });
+        let result = py.detach(|| {
+            degenbot_bot::bot_core::tick_assembly::assemble_v4_tick_map(
+                db.as_deref()
+                    .map(|d| d as &dyn degenbot_db::snapshot::TickMapDb),
+                mgr,
+                state_view_addr,
+                pool_id_inner,
+                tick_i32,
+                spacing_i32,
+                block,
+                chain.as_deref(),
+            )
+        });
+        let Some((ticks, coverage)) = result.map_err(|e| crate::db::assembly_err_to_py(&e))? else {
+            return Ok(None);
+        };
+        let dict = build_tick_rows_py(py, &ticks)?;
+        let cov_str = match coverage {
+            degenbot_bot::bot_core::PoolTickCoverage::Tracked => "tracked",
+            degenbot_bot::bot_core::PoolTickCoverage::Sparse => "sparse",
+        };
+        Ok(Some((dict, cov_str.to_string())))
     }
 
     /// Register a V3 pool by contract address.
@@ -702,8 +1158,7 @@ impl PyBot {
         let deployer = degenbot_uniswap::deployments::resolve_deployer(chain_id, fac);
         let init_hash_b256 = degenbot_uniswap::deployments::resolve_v3_init_hash(chain_id, fac);
 
-        Ok(self
-            .bot
+        self.bot
             .state_arc()
             .write()
             .register_v3_pool(&RegisterV3PoolParams {
@@ -724,7 +1179,8 @@ impl PyBot {
                 fetcher: tick_data_fetcher
                     .filter(|f| !f.is_none())
                     .map(|f| crate::bot::pool::make_tick_fetcher(f.clone().unbind())),
-            }))
+            })
+            .map_err(map_register_v3_err)
     }
 
     /// Register a V4 pool by `(pool_manager, pool_id)`.
@@ -1161,11 +1617,32 @@ impl PyBot {
         let t0 = parse_address(token0)?;
         let t1 = parse_address(token1)?;
         let fac = parse_address(factory)?;
-        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
-        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let r0 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )?;
+        let r1 = narrow_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )?;
         let variant_enum = DexVariant::from_kebab(variant).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!("unknown variant: {variant}"))
         })?;
+
+        // Verify the pool address against the JSON-sourced EIP-1167 deployer
+        // + implementation address (Fork A follow-on, S5SJXF/WLJD2Y — the
+        // Aerodrome parity gap of JC6OFG). Skipped if (chain, factory) is
+        // not in the shipped JSON or the row has no implementation address —
+        // preserves the manual/ad-hoc registration path.
+        crate::bot::deployments::verify_aerodrome_v2(
+            self.bot.chain_id(),
+            fac,
+            addr,
+            t0,
+            t1,
+            stable,
+        )?;
+
         Ok(self
             .bot
             .state_arc()
@@ -1211,7 +1688,14 @@ impl PyBot {
     ///
     /// Returns 0 if the pool ID is not registered or is not a V3 pool.
     fn v3_journal_len(&self, pool_id: u64) -> usize {
-        self.bot.state_arc().read().v3_journal_len(pool_id)
+        let state = self.bot.state_arc();
+        let core = state.read();
+        // Family guard: 0 for non-V3/V4 (preserves the per-family contract).
+        if core.get_v3_or_v4_pool(pool_id).is_none() {
+            0
+        } else {
+            core.pool_journal_len(pool_id).unwrap_or(0)
+        }
     }
 
     /// Discard V3 reorg journal deltas earlier than the given block.
@@ -1221,10 +1705,14 @@ impl PyBot {
     /// is past the newest delta. Raises `ValueError` on error (ADR-005 slice 4).
     #[pyo3(signature = (pool_id, block))]
     fn v3_discard_before_block(&self, pool_id: u64, block: u64) -> PyResult<()> {
-        self.bot
-            .state_arc()
-            .write()
-            .v3_discard_before_block(pool_id, block)
+        let state = self.bot.state_arc();
+        let mut core = state.write();
+        // Family guard: no-op for non-V3/V4 (V3's contract).
+        if core.get_v3_or_v4_pool(pool_id).is_none() {
+            return Ok(());
+        }
+        core.discard_pool_before_block(pool_id, block)
+            .unwrap_or(Ok(()))
             .map_err(journal_err_to_py)
     }
 
@@ -1239,38 +1727,42 @@ impl PyBot {
         pool_id: u64,
         block: u64,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let result = {
+        // Read-after-restore (ADR-016 D4): the trait `restore_pool_before_block`
+        // returns `()`; the post-restore scalar fields ARE the before-values
+        // the `V3RestoreResult.scalar_priors` previously carried. Copy out
+        // under the write guard, then marshal after release.
+        let (sqrt_p, liq, tick, blk) = {
             let state = self.bot.state_arc();
             let mut core = state.write();
-            core.v3_restore_before_block(pool_id, block)
-        };
-        match result {
-            Some(restore) => {
-                // `restore.scalar_priors` is always `Some` post-restore: the
-                // core `v3_restore_before_block` populates it with the current
-                // state scalars when the rolled-back range was tick-only
-                // (None internally — the scalars were never changed by the
-                // rolled-back events, so the current scalars ARE the restored
-                // scalars). See ADR-004.
-                let p = restore
-                    .scalar_priors
-                    .as_ref()
-                    .expect("post-restore scalar_priors must be Some");
-                let liq_u128 = p.liquidity_before;
-                let tuple = pyo3::types::PyTuple::new(
-                    py,
-                    [
-                        crate::conversion::alloy::u256_to_py(py, &p.sqrt_price_x96_before)?
-                            .unbind(),
-                        liq_u128.into_pyobject(py)?.into_any().unbind(),
-                        p.tick_before.into_pyobject(py)?.into_any().unbind(),
-                        restore.block.into_pyobject(py)?.into_any().unbind(),
-                    ],
-                )?;
-                Ok(Some(tuple.into_any().unbind()))
+            if core.get_v3_or_v4_pool(pool_id).is_none() {
+                return Ok(None);
             }
-            None => Ok(None),
-        }
+            match core.restore_pool_before_block(pool_id, block) {
+                None => return Ok(None),
+                Some(Err(e)) => return Err(journal_err_to_py(e)),
+                Some(Ok(())) => {
+                    let state = core
+                        .get_v3_or_v4_pool(pool_id)
+                        .expect("V3/V4 pool confirmed above");
+                    (
+                        state.sqrt_price_x96(),
+                        state.liquidity(),
+                        state.tick(),
+                        state.update_block(),
+                    )
+                }
+            }
+        };
+        let tuple = pyo3::types::PyTuple::new(
+            py,
+            [
+                crate::conversion::alloy::u256_to_py(py, &sqrt_p)?.unbind(),
+                liq.into_pyobject(py)?.into_any().unbind(),
+                tick.into_pyobject(py)?.into_any().unbind(),
+                blk.into_pyobject(py)?.into_any().unbind(),
+            ],
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 
     /// Register a token.
@@ -1355,7 +1847,14 @@ impl PyBot {
     ///
     /// Returns 0 if the pool ID is not registered.
     fn v2_journal_len(&self, pool_id: u64) -> usize {
-        self.bot.state_arc().read().v2_journal_len(pool_id)
+        let state = self.bot.state_arc();
+        let core = state.read();
+        // Family guard: 0 for non-V2 (preserves the per-family contract).
+        if core.get_v2_pool_state(pool_id).is_none() {
+            0
+        } else {
+            core.pool_journal_len(pool_id).unwrap_or(0)
+        }
     }
 
     /// Discard V2 reorg journal deltas earlier than the given block.
@@ -1367,10 +1866,14 @@ impl PyBot {
     ///     `ValueError`: If the target is past the newest delta.
     #[pyo3(signature = (pool_id, block))]
     fn v2_discard_before_block(&self, pool_id: u64, block: u64) -> PyResult<()> {
-        self.bot
-            .state_arc()
-            .write()
-            .v2_discard_before_block(pool_id, block)
+        let state = self.bot.state_arc();
+        let mut core = state.write();
+        // Family guard: no-op for non-V2 (V2's contract).
+        if core.get_v2_pool_state(pool_id).is_none() {
+            return Ok(());
+        }
+        core.discard_pool_before_block(pool_id, block)
+            .unwrap_or(Ok(()))
             .map_err(journal_err_to_py)
     }
 
@@ -1393,26 +1896,39 @@ impl PyBot {
         pool_id: u64,
         block: u64,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let result = {
+        // Read-after-restore (ADR-016): the trait returns `()`; the
+        // post-restore reserves ARE the before-values the per-family tuple
+        // previously carried. Copy out under the guard, marshal after release.
+        let (r0, r1, blk) = {
             let state = self.bot.state_arc();
             let mut core = state.write();
-            core.v2_restore_before_block(pool_id, block)
-        };
-        match result {
-            None => Ok(None),
-            Some(Err(e)) => Err(journal_err_to_py(e)),
-            Some(Ok((r0, r1, blk))) => {
-                let tuple = pyo3::types::PyTuple::new(
-                    py,
-                    [
-                        crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
-                        crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
-                        blk.into_pyobject(py)?.into_any().unbind(),
-                    ],
-                )?;
-                Ok(Some(tuple.into_any().unbind()))
+            if core.get_v2_pool_state(pool_id).is_none() {
+                return Ok(None);
             }
-        }
+            match core.restore_pool_before_block(pool_id, block) {
+                None => return Ok(None),
+                Some(Err(e)) => return Err(journal_err_to_py(e)),
+                Some(Ok(())) => {
+                    let state = core
+                        .get_v2_pool_state(pool_id)
+                        .expect("V2 pool confirmed above");
+                    (
+                        state.reserve0.to::<alloy::primitives::U256>(),
+                        state.reserve1.to::<alloy::primitives::U256>(),
+                        state.update_block,
+                    )
+                }
+            }
+        };
+        let tuple = pyo3::types::PyTuple::new(
+            py,
+            [
+                crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
+                crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
+                blk.into_pyobject(py)?.into_any().unbind(),
+            ],
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 }
 
@@ -1423,6 +1939,33 @@ impl PyBot {
 fn parse_address(s: &str) -> PyResult<Address> {
     s.parse()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid address '{s}': {e}")))
+}
+
+/// Build a Python `{tick: (liquidity_gross, liquidity_net, block)}` dict from
+/// the helper's `HashMap<i32, TickInfo>`. Symmetric with the `tick_data` arg
+/// shape on `register_v3_pool` / `register_v4_pool`, so the builder can pass
+/// the returned dict straight back into `register_*_pool(tick_data=..., ...)`
+/// without reshaping. `liquidity_gross` narrows `U128 → u128` (infallible for
+/// valid on-chain values — Uniswap's `type(uint128).max` cap); `liquidity_net`
+/// passes through `i256_to_py`; `block` is `u64` (pyo3 maps to a Python int).
+fn build_tick_rows_py<'py>(
+    py: Python<'py>,
+    ticks: &std::collections::HashMap<i32, degenbot_bot::bot_core::TickInfo>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (&tick, info) in ticks {
+        // `u128` / `u64` → Python int via pyo3 (arbitrary-precision — no overflow).
+        let py_gross: Bound<'py, PyAny> = info
+            .liquidity_gross
+            .to::<u128>()
+            .into_pyobject(py)?
+            .into_any();
+        let py_net = crate::conversion::alloy::i256_to_py(py, &info.liquidity_net)?;
+        let py_block: Bound<'py, PyAny> = info.block.into_pyobject(py)?.into_any();
+        let tup = pyo3::types::PyTuple::new(py, [py_gross, py_net, py_block])?;
+        dict.set_item(tick, tup)?;
+    }
+    Ok(dict)
 }
 
 /// Parse a Python list of address strings into `Vec<Address>`.
@@ -1456,5 +1999,383 @@ pub(crate) fn journal_err_to_py(e: JournalError) -> PyErr {
         JournalError::NoStateAtOrAfterBlock { block } => pyo3::exceptions::PyValueError::new_err(
             format!("No pool state known at or after block {block}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    /// Lowercase hex encode (no `0x` prefix) — for `OfflineProvider` call keys.
+    fn hex_encode(bytes: &[u8]) -> String {
+        const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for &b in bytes {
+            s.push(HEX_CHARS[(b >> 4) as usize] as char);
+            s.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+        }
+        s
+    }
+
+    /// 32-byte big-endian `uint256` word (hex, no `0x`).
+    fn word_u256(v: &alloy::primitives::U256) -> String {
+        let mut buf = [0u8; 32];
+        v.to_be_bytes::<32>()
+            .iter()
+            .enumerate()
+            .for_each(|(i, &b)| {
+                buf[i] = b;
+            });
+        hex_encode(&buf)
+    }
+
+    /// 32-byte right-aligned `uint128` word (hex).
+    fn word_u128(v: u128) -> String {
+        let mut buf = [0u8; 32];
+        buf[16..].copy_from_slice(&v.to_be_bytes());
+        hex_encode(&buf)
+    }
+
+    /// 32-byte sign-extended `int128` word (hex).
+    fn word_i128(v: i128) -> String {
+        let mut buf = [0u8; 32];
+        let be = v.to_be_bytes();
+        if v < 0 {
+            buf[..16].fill(0xff);
+        }
+        buf[16..].copy_from_slice(&be);
+        hex_encode(&buf)
+    }
+
+    /// The parity fixture DB (shared with `degenbot-bot`'s
+    /// `load_snapshot_from_db_populates_store_and_seed_block` test).
+    fn parity_fixture() -> Option<std::path::PathBuf> {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../degenbot-db/tests/fixtures/parity.db");
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// A fresh `PyBot` has `db_handle() == None` (cold-start path — no
+    /// `load_snapshot_from_db` call yet). Acceptance criterion: "Cold-start
+    /// path (no `load_snapshot_from_db` call) leaves `db` as None".
+    #[test]
+    fn cold_start_pybot_has_no_db_handle() {
+        let py_bot = PyBot::new(1);
+        assert!(
+            py_bot.db_handle().is_none(),
+            "a fresh PyBot must not hold a DegenbotDb handle (cold-start)"
+        );
+    }
+
+    /// `assemble_v3_tick_map` on a fresh `PyBot` (cold-start, no DB loaded, empty
+    /// store) returns `Ok(None)` — the miss path. Ac A4YUYJ: "Returns None on
+    /// miss".
+    #[test]
+    fn assemble_v3_tick_map_cold_start_returns_none() {
+        pyo3::Python::attach(|py| {
+            let py_bot = PyBot::new(1);
+            let result = py_bot
+                .assemble_v3_tick_map(
+                    py,
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    0,
+                    10,
+                    0,
+                    None,
+                )
+                .expect("cold-start assemble should not error");
+            assert!(result.is_none(), "cold-start (no store, no Db) → miss");
+        });
+    }
+
+    /// `assemble_v4_tick_map` cold-start miss — V4 twin of the V3 cold-start test.
+    #[test]
+    fn assemble_v4_tick_map_cold_start_returns_none() {
+        pyo3::Python::attach(|py| {
+            let py_bot = PyBot::new(1);
+            // 32-byte V4 pool id as 0x-hex (64 hex chars + 0x prefix).
+            let pool_id_py = ("0x".to_string() + &"cc".repeat(32))
+                .into_pyobject(py)
+                .expect("str into pyobject")
+                .into_any();
+            let result = py_bot
+                .assemble_v4_tick_map(
+                    py,
+                    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    &pool_id_py,
+                    "0x7fffffffffffffffffffffffffffffffffffffff", // StateView address (dummy)
+                    0,
+                    10,
+                    0,
+                    None,
+                )
+                .expect("cold-start assemble should not error");
+            assert!(result.is_none(), "cold-start (no store, no Db) → miss");
+        });
+    }
+
+    /// NOD4PS: Chain-arm end-to-end — a cold-start `PyBot` (empty Store, no Db)
+    /// with an `io=Some(PyBotIo)` backed by an `OfflineProvider`-recorded alloy
+    /// provider routes through the Chain arm + returns `Some((ticks, "sparse"))`
+    /// with the recorded tick liquidity. Verifies wiring: `io=Some` → Chain arm
+    /// fires → `AlloyTickBootstrapRpc` choreography runs pure-Rust under
+    /// `py.detach`.
+    #[test]
+    fn assemble_v3_tick_map_chain_arm_fires_with_offline_io() {
+        use alloy::primitives::U256;
+        use degenbot_rpc::offline::OfflineProvider;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        pyo3::Python::attach(|py| {
+            // 1. Build an `OfflineProvider` recording the V3 tick-bitmap +
+            //    tick-data responses for a known word + 2 active ticks.
+            //    tick=10, tick_spacing=1 → word=0, bit_pos=10.
+            //    Set bits 10 + 20 → bitmap = (1<<10) | (1<<20).
+            let pool_addr = alloy::primitives::Address::from([0xaa; 20]);
+            let bitmap = U256::from(1u128 << 10) | U256::from(1u128 << 20);
+            let addr_lower = pool_addr.to_checksum(None).to_lowercase();
+
+            let mut calls: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
+
+            // tickBitmap(int16) → uint256
+            let bitmap_calldata = degenbot_rpc::abi::encode_tick_bitmap(0);
+            calls.insert(
+                format!("{}:0x{}", addr_lower, hex_encode(&bitmap_calldata)),
+                Some(word_u256(&bitmap)),
+            );
+            // ticks(int24) → (uint128 gross, int128 net)
+            for &(tick, gross, net) in &[(10_i32, 1_000u128, -500i128), (20, 2_000, 750)] {
+                let td_calldata = degenbot_rpc::abi::encode_tick_data(tick);
+                let mut response = String::new();
+                response.push_str(&word_u128(gross));
+                response.push_str(&word_i128(net));
+                calls.insert(
+                    format!("{}:0x{}", addr_lower, hex_encode(&td_calldata)),
+                    Some(response),
+                );
+            }
+
+            let json_str = json!({
+                "chain_id": 1u64,
+                "block_number": 100u64,
+                "timestamp": 0u64,
+                "calls": calls,
+                "code": {},
+            })
+            .to_string();
+            let alloy = OfflineProvider::from_json_str(&json_str)
+                .expect("valid offline JSON")
+                .as_alloy_provider();
+
+            // 2. Wrap the alloy provider in a `PyAlloyProvider` + `PyBotIo`.
+            let pyalloy = pyo3::Bound::new(
+                py,
+                crate::rpc::provider::PyAlloyProvider {
+                    provider: Arc::new(alloy),
+                    max_blocks_per_request: 5000,
+                },
+            )
+            .expect("PyAlloyProvider construction");
+            let provider_any: pyo3::Py<pyo3::PyAny> = pyalloy.into_any().unbind();
+            let io_struct = crate::bot::py_bot_io::PyBotIo::new(py, provider_any, None, None);
+            let io_bound = pyo3::Bound::new(py, io_struct).expect("wrap PyBotIo as Bound");
+
+            // 3. Cold-start PyBot + assemble_v3_tick_map with `io=Some`.
+            let py_bot = PyBot::new(1);
+            let assembled = py_bot
+                .assemble_v3_tick_map(py, &pool_addr.to_checksum(None), 10, 1, 100, Some(io_bound))
+                .expect("Chain arm must not error")
+                .expect("Chain hit → Some((ticks, sparse))");
+            let (ticks, coverage) = assembled;
+            assert_eq!(coverage, "sparse", "Chain-arm hit → Sparse coverage");
+            assert_eq!(ticks.len(), 2, "both active ticks seeded");
+
+            let tick_10 = ticks
+                .get_item(10)
+                .expect("get_item Ref")
+                .expect("tick 10 present");
+            let (gross10_val, _net10, _block10): (u128, i128, u64) =
+                tick_10.extract().expect("tick 10 as (u128,i128,u64)");
+            assert_eq!(gross10_val, 1_000);
+
+            let tick_20 = ticks
+                .get_item(20)
+                .expect("get_item Ref")
+                .expect("tick 20 present");
+            let (gross20_val, _net20, _block20): (u128, i128, u64) =
+                tick_20.extract().expect("tick 20 as (u128,i128,u64)");
+            assert_eq!(gross20_val, 2_000);
+        });
+    }
+
+    /// snapshot via `load_snapshot_from_db`, then `assemble_v3_tick_map(addr)`
+    /// must return the seeded ticks with coverage `"tracked"`.
+    #[test]
+    fn assemble_v3_tick_map_returns_tracked_after_snapshot_load() {
+        use alloy::primitives::{aliases::U128, Address, I256, U256};
+        use degenbot_db::discovery::V3PoolRowInput;
+        use degenbot_db::{ApplyBitmapAtWord, ApplyLiquidityAtTick};
+        use std::collections::HashMap;
+
+        // Create a temp-file path for the test DB (unique via PID + counter).
+        let temp_path = std::env::temp_dir().join(format!(
+            "degenbot_assemble_test_{}_{:x}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        // (Scope-guarded cleanup below; assert at end.)
+
+        // 1. Open writable, seed exchange + V3 pool + init-map + liquidity-pos.
+        {
+            let (db, _state) = degenbot_db::connection::DegenbotDb::open_for_writes(&temp_path)
+                .expect("open_for_writes on temp");
+            let factory = Address::from([
+                0x1F, 0x98, 0x43, 0x1c, 0x8a, 0xD9, 0x85, 0x23, 0x63, 0x1A, 0xE4, 0xa5, 0x9f, 0x26,
+                0x73, 0x46, 0xea, 0x31, 0xF9, 0x84,
+            ]);
+            db.upsert_exchange(1, "uniswap_v3", factory, None).unwrap();
+            let pool_address = Address::from([0xaa; 20]);
+            db.upsert_v3_pools(
+                1,
+                "uniswap_v3",
+                1,
+                1_000_000,
+                &[V3PoolRowInput {
+                    address: pool_address,
+                    token0_address: Address::from([0x11; 20]),
+                    token1_address: Address::from([0x22; 20]),
+                    fee: 0,
+                    tick_spacing: 10,
+                }],
+            )
+            .unwrap();
+            let pool_id: i64 = db
+                .lock()
+                .query_row(
+                    "SELECT id FROM pools WHERE address = ?1 LIMIT 1",
+                    [&pool_address.to_checksum(None)],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let mut tick_data: HashMap<i32, ApplyLiquidityAtTick> = HashMap::new();
+            let mut tick_bitmap: HashMap<i32, ApplyBitmapAtWord> = HashMap::new();
+            tick_data.insert(
+                10,
+                ApplyLiquidityAtTick {
+                    liquidity_gross: U128::from(1_000_000u64),
+                    liquidity_net: I256::try_from(500i64).unwrap(),
+                    block: 0,
+                },
+            );
+            tick_bitmap.insert(
+                0,
+                ApplyBitmapAtWord {
+                    bitmap: U256::from(1u64),
+                    block: 0,
+                },
+            );
+            db.upsert_v3_liquidity_positions(pool_id, &tick_data)
+                .unwrap();
+            db.upsert_v3_initialization_maps(pool_id, &tick_bitmap)
+                .unwrap();
+        }
+        // The writable connection is dropped here; the file persists.
+
+        // 2. Construct PyBot + load the snapshot from the temp file.
+        pyo3::Python::attach(|py| {
+            let py_bot = PyBot::new(1);
+            py_bot
+                .load_snapshot_from_db(&temp_path.to_string_lossy(), 1)
+                .expect("snapshot load must succeed against the seeded temp DB");
+
+            // 3. assemble against the seeded pool — expect a hit.
+            let (ticks, coverage) = py_bot
+                .assemble_v3_tick_map(
+                    py,
+                    "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa",
+                    0,
+                    10,
+                    0,
+                    None,
+                )
+                .expect("assemble hit must not error")
+                .expect("store hit against the seeded V3 pool must return Some");
+            assert_eq!(coverage, "tracked");
+            assert_eq!(ticks.len(), 1, "one tick seeded at index 10");
+            let val = ticks
+                .get_item(10)
+                .expect("get_item must not error")
+                .expect("tick 10 must be present");
+            let (gross, _net, _block) = val
+                .extract::<(u128, i128, u64)>()
+                .expect("tick value is (gross, net, block)");
+            assert_eq!(gross, 1_000_000);
+        });
+
+        // 4. Cleanup.
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    /// Calling `load_snapshot_from_db` against a missing DB fails cleanly and
+    /// leaves `db_handle() == None` (the snapshot load failed → the cached
+    /// handle is NOT armed). Acceptance criterion: "On failure, `self.db`
+    /// stays `None`".
+    #[test]
+    fn snapshot_load_failure_leaves_db_handle_none() {
+        pyo3::Python::attach(|_| {
+            let py_bot = PyBot::new(1);
+            let result = py_bot.load_snapshot_from_db("/nonexistent/path/to/db.sqlite", 1);
+            assert!(
+                result.is_err(),
+                "opening a nonexistent DB path must surface a PyRuntimeError"
+            );
+            assert!(
+                py_bot.db_handle().is_none(),
+                "on snapshot-load failure the cached handle must stay None"
+            );
+        });
+    }
+
+    /// A successful `load_snapshot_from_db` arms `db_handle()` with the
+    /// read-only `DegenbotDb` used for the snapshot stream. Acceptance
+    /// criterion: "After successful load, `db_handle()` returns `Some`."
+    /// Skipped if the parity fixture isn't reachable from this crate layout.
+    #[test]
+    fn snapshot_load_success_arms_db_handle() {
+        let Some(fixture) = parity_fixture() else {
+            eprintln!("skipping: parity fixture not reachable");
+            return;
+        };
+        pyo3::Python::attach(|_| {
+            let py_bot = PyBot::new(8453);
+            let path_str = fixture.to_string_lossy().to_string();
+            py_bot
+                .load_snapshot_from_db(&path_str, 8453)
+                .expect("snapshot load against the parity fixture must succeed");
+            let handle = py_bot
+                .db_handle()
+                .expect("a successful snapshot load must arm the cached DegenbotDb handle");
+            // Sanity: the cached handle is usable for a read — the snapshot
+            // seed block computed at load time is readable via the cached
+            // connection (proving the `Mutex<Connection>` isn't dropped).
+            assert!(
+                py_bot.snapshot_seed_block().is_some(),
+                "parity fixture must record a non-cold-start snapshot seed block"
+            );
+            // Two clones don't interfere — PyBot retains its own Arc.
+            let _second = py_bot.db_handle();
+            assert!(py_bot.db_handle().is_some());
+            drop(handle);
+        });
     }
 }

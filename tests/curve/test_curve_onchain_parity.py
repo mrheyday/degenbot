@@ -42,9 +42,9 @@ from typing import TYPE_CHECKING, Any, Self
 
 import eth_abi.abi
 import pytest
-from web3 import Web3
 
-from degenbot.anvil_fork import AnvilFork
+from degenbot.bot import PyBot
+from degenbot.crypto import function_selector, keccak256
 from degenbot.curve.strategies import (
     DVariant,
     LendingRateStyle,
@@ -55,7 +55,7 @@ from degenbot.curve.strategies import (
     YDVariant,
     YVariant,
 )
-from degenbot.degenbot_rs import PyBot
+from degenbot.fork import AnvilFork
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.fakes.curve_data_provider import FakeCurveDataProvider
 from tests.helpers.curve_pool_factory import make_curve_pool
@@ -247,7 +247,7 @@ class _RecordFork(AbstractContextManager):
 
     def raw_call(self, to: str, data: bytes) -> bytes:
         assert self.fork is not None
-        return self.fork.w3.eth.call(transaction={"to": to, "data": data.hex()})
+        return self.fork.provider.call(to, data)
 
 
 def _get_dy_standard_callable(
@@ -260,7 +260,7 @@ def _get_dy_standard_callable(
     """Standard ``get_dy(int128,int128,uint256)`` quoter (plain stableswap)."""
 
     def _call() -> int:
-        data = Web3.keccak(text="get_dy(int128,int128,uint256)")[:4] + (
+        data = function_selector("get_dy(int128,int128,uint256)") + (
             eth_abi.abi.encode(
                 types=["int128", "int128", "uint256"],
                 args=[i, j, amount],
@@ -283,7 +283,7 @@ def _get_dy_uint256_callable(
     """Crypto-pool ``get_dy(uint256,uint256,uint256)`` (Tricrypto)."""
 
     def _call() -> int:
-        data = Web3.keccak(text="get_dy(uint256,uint256,uint256)")[:4] + (
+        data = function_selector("get_dy(uint256,uint256,uint256)") + (
             eth_abi.abi.encode(
                 types=["uint256", "uint256", "uint256"],
                 args=[i, j, amount],
@@ -306,7 +306,7 @@ def _get_dy_underlying_callable(
     """Metapool ``get_dy_underlying(int128,int128,uint256)`` oracle call."""
 
     def _call() -> int:
-        data = Web3.keccak(text="get_dy_underlying(int128,int128,uint256)")[:4] + (
+        data = function_selector("get_dy_underlying(int128,int128,uint256)") + (
             eth_abi.abi.encode(
                 types=["int128", "int128", "uint256"],
                 args=[i, j, amount],
@@ -490,7 +490,7 @@ def _calc_withdraw_one_coin_callable(
     n_tokens: int,
 ) -> Any:
     def _call() -> int:
-        data = Web3.keccak(text="calc_withdraw_one_coin(uint256,int128)")[:4] + (
+        data = function_selector("calc_withdraw_one_coin(uint256,int128)") + (
             eth_abi.abi.encode(types=["uint256", "int128"], args=[amount, i])
         )
         res = fork.raw_call(pool_addr, data)
@@ -507,7 +507,7 @@ def _calc_token_amount_callable(
     n_tokens: int,
 ) -> Any:
     def _call() -> int:
-        data = Web3.keccak(
+        data = keccak256(
             text=f"calc_token_amount(uint256[{n_tokens}],bool)",
         )[:4] + eth_abi.abi.encode(
             types=[f"uint256[{n_tokens}]", "bool"],

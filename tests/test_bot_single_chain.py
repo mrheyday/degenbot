@@ -8,15 +8,13 @@ independent (separate ``PyBot``s, separate providers, no shared registry).
 """
 
 import pathlib
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from degenbot.async_bot import AsyncBot
 from degenbot.bot import Bot
 from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.exceptions import DegenbotValueError
-from degenbot.provider import ProviderAdapter
+from degenbot.provider import AlloyProvider, OfflineProvider
 
 
 def _make_test_config(tmp_path: pathlib.Path, chain_id: int = 1) -> DegenbotConfig:
@@ -27,28 +25,18 @@ def _make_test_config(tmp_path: pathlib.Path, chain_id: int = 1) -> DegenbotConf
     )
 
 
-def _fake_provider(chain_id: int = 1) -> ProviderAdapter:
-    """A minimal fake provider exposing only ``chain_id`` (no network).
+def _fake_provider(chain_id: int = 1) -> OfflineProvider:
+    """A real offline provider (recorded JSON, no RPC) with the given chain_id.
 
-    The Bot's chain-enforcement only reads ``provider.chain_id`` at
-    construction, so a MagicMock suffices to exercise the match/mismatch
-    branches without spinning up an OfflineProvider.
+    `Bot.__init__` reads `provider.chain_id` (the recorded chain_id) to enforce
+    config/chain alignment; no RPC is issued at construction, so an offline
+    provider over an in-memory Rust transport suffices — no MagicMock double
+    (see O3).
     """
-    provider = MagicMock(spec=ProviderAdapter)
-    provider.chain_id = chain_id
-    return provider
-
-
-def _fake_async_provider(chain_id: int = 1) -> MagicMock:
-    """A minimal fake async provider exposing ``get_chain_id`` (no network).
-
-    Async providers can't read ``chain_id`` synchronously (their sync property
-    raises NotImplementedError); the seam awaits ``get_chain_id()``.
-    """
-
-    provider = MagicMock()
-    provider.get_chain_id = AsyncMock(return_value=chain_id)
-    return provider
+    return OfflineProvider(
+        chain_id=chain_id,
+        blocks={"1": {"timestamp": 1, "calls": {}, "code": {}}},
+    )
 
 
 class TestSingleChainBot:
@@ -70,7 +58,7 @@ class TestSingleChainBot:
         config = _make_test_config(tmp_path, chain_id=1)
         bot = Bot(config, provider=_fake_provider(1))
         assert bot.chain_id == 1
-        assert isinstance(bot.provider, ProviderAdapter)
+        assert isinstance(bot.provider, (AlloyProvider, OfflineProvider))
 
 
 class TestTwoBotsAreIndependent:
@@ -85,27 +73,3 @@ class TestTwoBotsAreIndependent:
         assert bot1.pools is not bot2.pools
         assert bot1.tokens is not bot2.tokens
         assert bot1._py_bot is not bot2._py_bot
-
-
-class TestAsyncBotSingleChain:
-    """AsyncBot.from_provider enforces chain via an awaited get_chain_id()."""
-
-    @pytest.mark.asyncio
-    async def test_from_provider_accepts_matching_chain(self, tmp_path: pathlib.Path) -> None:
-        config = _make_test_config(tmp_path, chain_id=1)
-        bot = await AsyncBot.from_provider(config, provider=_fake_async_provider(1))
-        assert bot.chain_id == 1
-
-    @pytest.mark.asyncio
-    async def test_from_provider_rejects_chain_mismatch(self, tmp_path: pathlib.Path) -> None:
-        # config says chain 1, the async provider reports chain 137 → fail fast.
-        config = _make_test_config(tmp_path, chain_id=1)
-        with pytest.raises(DegenbotValueError, match="chain"):
-            await AsyncBot.from_provider(config, provider=_fake_async_provider(137))
-
-    @pytest.mark.asyncio
-    async def test_from_provider_requires_chain_id_in_config(self, tmp_path: pathlib.Path) -> None:
-        config = _make_test_config(tmp_path)
-        config.default_chain_id = None
-        with pytest.raises(DegenbotValueError):
-            await AsyncBot.from_provider(config, provider=_fake_async_provider(1))

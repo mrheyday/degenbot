@@ -14,11 +14,10 @@ instead of calling ``engine.register_v2_pool``).
 from __future__ import annotations
 
 import asyncio
-
 import dataclasses
 
-from degenbot.arbitrage.engine_registry import EngineRegistry
-from degenbot.degenbot_rs import PyBot, UniswapArbEngine
+from degenbot.arbitrage.engine_registry import EngineRegistry, ArbitrageEngine
+from degenbot.bot import PyBot
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v3_pool_factory import make_v3_pool
 
@@ -98,7 +97,7 @@ def test_register_v3_pool_drains_backfill_buffer_onto_snapshot_seed() -> None:
     (the tick's liquidity_net reflects the burn).
     """
     py_bot = PyBot()
-    engine = UniswapArbEngine(py_bot=py_bot)
+    engine = ArbitrageEngine(py_bot=py_bot)
     bot = _FakeBot(py_bot)
     registry = EngineRegistry(bot=bot, engine=engine)
 
@@ -126,7 +125,11 @@ def test_register_v3_pool_drains_backfill_buffer_onto_snapshot_seed() -> None:
     # tick is absent, not zero — this is what the verify reproduces). So the
     # drain's observable effect is the tick's disappearance from tick_data.
     engine.debug_buffer_v3_liquidity_update(
-        address, tick_lower=-201000, tick_upper=-200990, liquidity_delta=-100, block_number=18_000_005
+        address,
+        tick_lower=-201000,
+        tick_upper=-200990,
+        liquidity_delta=-100,
+        block_number=18_000_005,
     )
     # The buffered event is pending (pool not in BotState yet).
     assert engine.debug_v3_buffer_count(address) == 1

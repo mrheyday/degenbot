@@ -20,8 +20,16 @@ version:
 
 # ========== Rust Development ==========
 
+# Run the standalone-Rust-consumer smoke (ADR-005 standalone claim). Proves a
+# `cargo add degenbot` consumer reaches BotState/DexIdentity/calc math with no
+# Python in the build graph. `examples/standalone_consumer.rs` panic!s on any
+# check failure, so this is the standalone-consumer gate. The example is a
+# `cargo add degenbot` showcase binary AND a CI-runnable assertion.
+test-standalone:
+    cargo run --manifest-path rust/Cargo.toml -p degenbot --example standalone_consumer
+
 # Run Rust tests
-test-rust:
+test-rust: test-standalone
     #!/usr/bin/env bash
     python_libdir="$(.venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
     # Linux's loader reads LD_LIBRARY_PATH; macOS's dyld ignores it and reads DYLD_LIBRARY_PATH.
@@ -29,6 +37,21 @@ test-rust:
     export LD_LIBRARY_PATH="${python_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export DYLD_LIBRARY_PATH="${python_libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
     cargo test --manifest-path rust/Cargo.toml --workspace
+
+# Run Rust tests via cargo-nextest (dev only; CI uses `test-rust` above because
+# the CI runner does not install nextest). ~20% faster build+run than cargo test
+# via execution parallelism (see rust/PERF_RESULTS.md lever #3). Falls back to
+# cargo test if cargo-nextest is not installed (e.g. outside the devcontainer).
+test-rust-nextest: test-standalone
+    #!/usr/bin/env bash
+    python_libdir="$(.venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+    export LD_LIBRARY_PATH="${python_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if cargo nextest --version >/dev/null 2>&1; then
+        cargo nextest run --manifest-path rust/Cargo.toml --workspace
+    else
+        echo "cargo-nextest not installed; falling back to cargo test" >&2
+        cargo test --manifest-path rust/Cargo.toml --workspace
+    fi
 
 # Run wrapped Rust Python tests
 test-rust-python:
@@ -53,7 +76,7 @@ fmt-check:
 check-no-pyo3-in-cores:
     #!/usr/bin/env bash
     set -euo pipefail
-    for crate in degenbot-core degenbot-cl-math degenbot-abi degenbot-rpc degenbot-bot degenbot-decoders degenbot-uniswap degenbot-pathfinding degenbot degenbot-solidly-math degenbot-evm-math degenbot-price degenbot-db degenbot-pool-updater degenbot-aave-updater degenbot-executor degenbot-submission degenbot-simulation; do
+    for crate in degenbot-core degenbot-cl-math degenbot-v2-math degenbot-curve-math degenbot-balancer-math degenbot-abi degenbot-rpc degenbot-bot degenbot-decoders degenbot-uniswap degenbot-pathfinding degenbot degenbot-solidly-math degenbot-evm-math degenbot-price degenbot-db degenbot-pool-updater degenbot-aave degenbot-executor degenbot-submission degenbot-simulation degenbot-pools degenbot-solvers; do
         if cargo tree --manifest-path rust/Cargo.toml -p "$crate" 2>/dev/null | grep -qi 'pyo3 v'; then
             echo "ERROR: $crate pulls pyo3 under default features (must be feature-gated)." >&2
             exit 1
@@ -79,18 +102,14 @@ dev:
 build-wheels:
     uv run maturin build --release
 
-# Compile Solidity test contracts
-compile-test-contracts:
-    cd tests/aave/libraries/contracts && forge build --quiet
-
 # Run Python tests
-test-python: compile-test-contracts
+test-python:
     uv run pytest -x -q --no-header
 
 # Run only on-chain-oracle parity tests in REPLAY mode (offline, CI-safe, no RPC/secrets).
 # Replay is read-only (asserts against recorded ints), so xdist parallelism is
 # safe — the shared-golden-file race only affects record mode (see below).
-test-offline-parity: compile-test-contracts
+test-offline-parity:
     uv run pytest -m onchain_oracle -q --no-header
 
 # Re-populate golden files for on-chain-oracle parity tests. Requires a working
@@ -100,7 +119,7 @@ test-offline-parity: compile-test-contracts
 # test function and accumulate keys across params; xdist parallelism would race
 # the shared file (last-writer-wins, losing keys). Replay is read-only and safe
 # under xdist, but record accumulates writes.
-record-golden *args: compile-test-contracts
+record-golden *args:
     DEGENBOT_GOLDEN_MODE=record uv run pytest -m onchain_oracle -q --no-header -n0 {{ args }}
 
 # Verify every shipped deployment address is actually deployed on-chain (cast).
@@ -133,6 +152,26 @@ lint-python:
 lint-python-check:
     uv run ruff check src/
     uv run ty check --no-progress src/
+
+# Dead-code detector (off the gate — output is a triage list). Each hit
+# needs an `rg` call before deletion: vulture is static and can't see
+# FFI-seam callers (Rust core) or framework dispatch (pydantic validators,
+# SQLAlchemy TypeDecorator signatures, `__exit__`/Protocol params). 80%
+# confidence is the operating point; the 60% tier is mostly framework-
+# dispatched methods (validators, properties on models, enum members).
+# Complements ruff: ruff's F401 rule exempts `if TYPE_CHECKING:` imports
+# and there is no ruff unreachable-code rule, so vulture catches both.
+dead-code:
+    uv run vulture src/degenbot vulture_whitelist.py --min-confidence 80
+
+# Deeper dead-code sweep — catches unused functions/methods/classes too
+# (the 80% tier only catches unused variables, imports, unreachable code).
+# Output is much noisier (~hundreds of findings, mostly framework-dispatched
+# pydantic validators, @property on models, enum members). Use periodically
+# for intentional dead-code audits; not a routine gate. Generate whitelist
+# candidates with: vulture src/degenbot --min-confidence 60 --make-whitelist
+dead-code-deep:
+    uv run vulture src/degenbot --min-confidence 60 --make-whitelist
 
 # Check Python formatting (read-only; fails on drift). Run `just format` to fix.
 fmt-check-python:

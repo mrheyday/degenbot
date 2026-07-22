@@ -18,19 +18,19 @@ from fractions import Fraction
 
 import pytest
 from hexbytes import HexBytes
-from web3.exceptions import ContractLogicError
 
-from degenbot.anvil_fork import AnvilFork
 from degenbot.balancer.deployments import (
     BALANCER_V2_VAULT_ADDRESS,
     BALANCERQUERIES_CONTRACT_ADDRESS,
 )
 from degenbot.balancer.pools import BalancerV2Pool, detect_pow_version
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.exceptions import ContractLogicError
 from degenbot.exceptions.pool import EVMRevertError
-from degenbot.provider import ProviderAdapter
+from degenbot.fork import AnvilFork
 from tests.helpers.balancer_pool_factory import make_balancer_weighted_pool
 from tests.helpers.bot_factory import make_bot_with_provider
+from tests.helpers.w3_contract import make_contract
 
 pytestmark = pytest.mark.online_rpc
 
@@ -148,16 +148,12 @@ def _build_pool_from_chain(
     pool_id_hex: str,
 ) -> BalancerV2Pool:
     """Build a BalancerV2Pool by fetching on-chain data from an anvil fork."""
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork.w3))
+    bot = make_bot_with_provider(fork.provider)
 
-    pool_contract = fork.w3.eth.contract(
-        address=get_checksum_address(pool_address),
-        abi=WEIGHTED_POOL_ABI,
+    pool_contract = make_contract(
+        fork.http_url, get_checksum_address(pool_address), WEIGHTED_POOL_ABI
     )
-    vault_contract = fork.w3.eth.contract(
-        address=BALANCER_V2_VAULT_ADDRESS,
-        abi=BALANCER_V2_VAULT_ABI,
-    )
+    vault_contract = make_contract(fork.http_url, BALANCER_V2_VAULT_ADDRESS, BALANCER_V2_VAULT_ABI)
 
     pool_id = (
         bytes.fromhex(pool_id_hex[2:])
@@ -174,7 +170,7 @@ def _build_pool_from_chain(
     tokens = [bot.build_erc20token(addr) for addr in tokens_addresses]
 
     # Detect which FixedPoint pow implementation the deployed pool uses
-    bytecode = fork.w3.eth.get_code(get_checksum_address(pool_address)).hex()
+    bytecode = fork.provider.get_code(get_checksum_address(pool_address)).hex()
     pow_version = detect_pow_version(bytecode)
 
     return make_balancer_weighted_pool(
@@ -205,14 +201,10 @@ def _run_given_in_swaps(
                 if i != j:
                     swap_directions.append((i, j))
 
-    query_contract = fork.w3.eth.contract(
-        address=BALANCERQUERIES_CONTRACT_ADDRESS,
-        abi=BALANCERQUERIES_CONTRACT_ABI,
+    query_contract = make_contract(
+        fork.http_url, BALANCERQUERIES_CONTRACT_ADDRESS, BALANCERQUERIES_CONTRACT_ABI
     )
-    vault_contract = fork.w3.eth.contract(
-        address=BALANCER_V2_VAULT_ADDRESS,
-        abi=BALANCER_V2_VAULT_ABI,
-    )
+    vault_contract = make_contract(fork.http_url, BALANCER_V2_VAULT_ADDRESS, BALANCER_V2_VAULT_ABI)
 
     on_chain_balances = tuple(vault_contract.functions.getPoolTokens(lp.pool_id).call()[1])
     assert lp.balances == on_chain_balances, (
@@ -291,14 +283,10 @@ def _run_given_out_swaps(
                 if i != j:
                     swap_directions.append((i, j))
 
-    query_contract = fork.w3.eth.contract(
-        address=BALANCERQUERIES_CONTRACT_ADDRESS,
-        abi=BALANCERQUERIES_CONTRACT_ABI,
+    query_contract = make_contract(
+        fork.http_url, BALANCERQUERIES_CONTRACT_ADDRESS, BALANCERQUERIES_CONTRACT_ABI
     )
-    vault_contract = fork.w3.eth.contract(
-        address=BALANCER_V2_VAULT_ADDRESS,
-        abi=BALANCER_V2_VAULT_ABI,
-    )
+    vault_contract = make_contract(fork.http_url, BALANCER_V2_VAULT_ADDRESS, BALANCER_V2_VAULT_ABI)
 
     on_chain_balances = tuple(vault_contract.functions.getPoolTokens(lp.pool_id).call()[1])
     assert lp.balances == on_chain_balances, (

@@ -5,10 +5,9 @@ from unittest.mock import MagicMock
 
 import eth_abi.abi
 
-from degenbot.bot import Bot
+from degenbot.bot import Bot, PyBot
 from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.database.operations import create_new_sqlite_database
-from degenbot.degenbot_rs import PyBot
 from degenbot.erc20 import Erc20Token
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20, make_ether_placeholder
@@ -126,7 +125,7 @@ class TestBotBuildErc20Token:
         provider.get_code.return_value = b"\x01"  # contract exists
 
         # Mock batched RPC call to return name, symbol, decimals
-        def mock_call(*, to, data, block=None):
+        def mock_call(to, data, block=None):
             if data[:4] == b"\x06\xfd\xde\x03":  # name()
                 return eth_abi_encode(["string"], ["Wrapped Ether"])
             if data[:4] == b"\x95\xd8\x9b\x41":  # symbol()

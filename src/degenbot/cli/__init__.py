@@ -3,7 +3,7 @@
 import click
 
 from degenbot.bot import Bot
-from degenbot.degenbot_rs import DatabaseSchemaStale
+from degenbot.exceptions import DatabaseSchemaStale
 
 
 class DegenbotCLI(click.Group):

@@ -18,10 +18,10 @@ just "the result matches". Mirrors
 from __future__ import annotations
 
 import eth_abi.abi
-from web3 import Web3
 
+from degenbot.bot import PyBot
 from degenbot.constants import ZERO_ADDRESS
-from degenbot.degenbot_rs import PyBot
+from degenbot.crypto import keccak256
 from degenbot.uniswap.concentrated.types import LiquidityAtTick
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v4_pool_factory import make_v4_pool
@@ -48,7 +48,7 @@ def _compute_v4_pool_id(
     """Mirror UniswapV4Pool's pool-id derivation so the test pool validates."""
     return (
         "0x"
-        + Web3.keccak(
+        + keccak256(
             eth_abi.abi.encode(
                 types=["address", "address", "uint24", "int24", "address"],
                 args=[currency0, currency1, fee, tick_spacing, hooks],

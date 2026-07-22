@@ -2,17 +2,17 @@
 
 from fractions import Fraction
 
-from degenbot.degenbot_rs import camelot_f as f_camelot
-from degenbot.degenbot_rs import camelot_get_y_camelot as get_y_camelot
-from degenbot.degenbot_rs import camelot_k as k_camelot
-from degenbot.degenbot_rs import solidly_calc_d as calc_d
-from degenbot.degenbot_rs import (
-    solidly_calc_exact_in_stable_solidly as calc_exact_in_stable_solidly,
+from degenbot.aerodrome.math import (
+    calc_d,
+    calc_exact_in_stable_solidly,
+    calc_exact_in_volatile,
+    calc_f,
+    calc_k,
+    get_y_solidly,
 )
-from degenbot.degenbot_rs import solidly_calc_exact_in_volatile as calc_exact_in_volatile
-from degenbot.degenbot_rs import solidly_calc_f as calc_f
-from degenbot.degenbot_rs import solidly_calc_k as calc_k
-from degenbot.degenbot_rs import solidly_get_y_solidly as get_y_solidly
+from degenbot.aerodrome.math import camelot_f as f_camelot
+from degenbot.aerodrome.math import camelot_get_y_camelot as get_y_camelot
+from degenbot.aerodrome.math import camelot_k as k_camelot
 from degenbot.uniswap.v2_functions import constant_product_calc_exact_in
 
 # ── constant_product tests ──

@@ -2,7 +2,7 @@
 
 `PyBotIo` is the Rust `#[pyclass]` I/O façade that builders will receive in
 place of the Python `SyncPoolIO` adapter. It holds a Python provider (the
-`ProviderAdapter` the `Bot` was constructed with) + an optional DB handle, and
+`AlloyProvider` the `Bot` was constructed with) + an optional DB handle, and
 exposes the 7-method `PoolIO` surface (`get_block_number`, `get_block`,
 `get_block_timestamp`, `get_code`, `get_balance`, `call`, `call_raw`) by
 delegating to the held provider.
@@ -15,92 +15,42 @@ route a real builder through `PyBotIo`; that's the 14a follow-on (one builder's
 
 from __future__ import annotations
 
-from typing import Any
-
 import eth_abi.abi
 import pytest
 from hexbytes import HexBytes
-from web3 import Web3
-from web3.exceptions import Web3Exception
 
-from degenbot.builders.pool_io import SyncPoolIO
-from degenbot.builders.type_resolution import fetch_factory_from_chain
-from degenbot.degenbot_rs import PyBotIo
+from degenbot._ffi.provider import AlloyProvider as RustAlloyProvider
+from degenbot.bot import PyBotIo
+from degenbot.checksum_cache import get_checksum_address
+from degenbot.crypto import function_selector
+
+# A minimal real offline provider (recorded JSON, no RPC) for tests that need a
+# valid `PyBotIo` provider but don't exercise specific RPC responses (DB handle
+# round-trip, PoolIO protocol surface). A real `PyAlloyProvider`-backed
+# provider keeps the seam honest — no Python fake double (O3).
+_MIN_OFFLINE_JSON = '{"chain_id":1,"block_number":100,"timestamp":1700000000,"calls":{},"code":{}}'
 
 
-class _FakeProvider:
-    """A minimal ``ProviderAdapter``-shaped double for the tracer.
-
-    Only the 7 ``PoolIO`` methods are exercised; the rest of the
-    ``ProviderAdapter`` surface is irrelevant to ``PoolIO`` conformance.
-    """
-
-    def __init__(self, *, block_number: int = 18_000_000) -> None:
-        self._block_number = block_number
-        self.calls: list[tuple[str, str]] = []  # (to, data_hex) audit trail
-
-    def get_block_number(self) -> int:
-        return self._block_number
-
-    def get_block(self, block_identifier: int | str) -> dict[str, Any] | None:
-        return {"number": int(block_identifier), "timestamp": 1_700_000_000}
-
-    def get_block_timestamp(self, block: int | None = None) -> int:
-        return 1_700_000_000
-
-    def get_code(self, address: str, block: int | None = None) -> HexBytes:
-        return HexBytes(b"\x60\x80\x60\x40")  # plausible bytecode prefix
-
-    def get_balance(self, address: str, block: int | None = None) -> int:
-        return 10**18
-
-    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
-        self.calls.append((to, data.hex()))
-        return HexBytes(b"\x00" * 32)
-
-    def call_raw(self, tx: Any, block: int | None = None) -> HexBytes:
-        return self.call(tx["to"], tx["data"], block)
+def _min_offline_provider() -> RustAlloyProvider:
+    """A one-block `OfflineProvider`-backed `AlloyProvider` (no RPC)."""
+    return RustAlloyProvider.offline_from_json_string(_MIN_OFFLINE_JSON)
 
 
 class _FakeDb:
     """A ``DatabaseSessionManager``-shaped double (cannot be called; presence only)."""
 
 
-def test_pybot_io_delegates_get_block_number():
-    """get_block_number delegates to the held provider verbatim."""
-    provider = _FakeProvider(block_number=12_345_678)
-    io = PyBotIo(provider=provider)
-    assert io.get_block_number() == 12_345_678
-
-
-def test_pybot_io_delegates_call_records_on_provider():
-    """call(to, data, block) delegates to provider.call and returns its HexBytes."""
-    provider = _FakeProvider()
-    io = PyBotIo(provider=provider)
-    result = io.call(to="0x" + "ab" * 20, data=b"\x12\x34\x56\x78", block=None)
-    assert result == HexBytes(b"\x00" * 32)
-    assert provider.calls == [("0x" + "ab" * 20, "12345678")]
-
-
-def test_pybot_io_delegates_get_code():
-    """get_code delegates and returns HexBytes."""
-    provider = _FakeProvider()
-    io = PyBotIo(provider=provider)
-    code = io.get_code("0x" + "cd" * 20)
-    assert code == HexBytes(b"\x60\x80\x60\x40")
-
-
-def test_pybot_io_delegates_get_balance():
-    """get_balance delegates and returns int (not wrapped)."""
-    provider = _FakeProvider()
-    io = PyBotIo(provider=provider)
-    assert io.get_balance("0x" + "ee" * 20) == 10**18
+# The 7-method `PoolIO` delegation seam is exercised natively against a
+# recorded `OfflineProvider` in the "Native alloy path (B1)" tests below — the
+# former `_FakeProvider`-based delegation tests (get_block_number / call /
+# get_code / get_balance returning arbitrary canned values) are collapsed
+# there, per O3.
 
 
 def test_pybot_io_holds_optional_db_handle():
     """PyBotIo stores the DB handle and exposes it back (held, not called yet)."""
     db = _FakeDb()
-    io = PyBotIo(provider=_FakeProvider(), db=db)
+    io = PyBotIo(provider=_min_offline_provider(), db=db)
     # The held handle round-trips through the pyclass.
     assert io.db is db
 
@@ -123,7 +73,7 @@ def test_pybot_io_satisfies_pool_io_protocol(method: str):
     This is the acceptance criterion for 14a: every method a builder may call
     on its ``io: PoolIO`` parameter is reachable on ``PyBotIo``.
     """
-    io = PyBotIo(provider=_FakeProvider())
+    io = PyBotIo(provider=_min_offline_provider())
     assert hasattr(io, method), f"PyBotIo missing PoolIO method {method!r}"
 
 
@@ -142,7 +92,7 @@ def test_pybot_io_satisfies_pool_io_protocol(method: str):
 class _FactoryCallProvider:
     """Provider double that returns an ABI-encoded factory address for `factory()`.
 
-    Mirrors ``ProviderAdapter.call(*, to, data, block)`` (kw-only) so it stays
+    Mirrors ``AlloyProvider.call(*, to, data, block)`` (kw-only) so it stays
     compatible with ``PyBotIo``'s kw-only forward contract.
     """
 
@@ -153,7 +103,7 @@ class _FactoryCallProvider:
         self._encoded = eth_abi.abi.encode(types=["address"], args=[factory_raw])
         self.calls: list[tuple[str, bytes]] = []  # (to, data)
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append((to, data))
         return HexBytes(self._encoded)
 
@@ -181,38 +131,15 @@ def test_pybot_io_fetch_factory_address_decodes_and_checksums():
 
 def test_pybot_io_fetch_factory_address_returns_none_on_revert():
     """On a provider-side error (revert / call failure), return None -- mirrors
-    `fetch_factory_from_chain`'s `except (Web3Exception, DecodingError): return None`."""
+    `fetch_factory_from_chain`'s `except (RuntimeError, DecodingError): return None`."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
     io = PyBotIo(provider=_RevertingProvider())
     assert io.fetch_factory_address("0x" + "ab" * 20) is None
-
-
-def test_pybot_io_fetch_factory_parity_with_python_impl():
-    """`PyBotIo.fetch_factory_address` returns the exact same EIP-55 checksum
-    as the original Python `fetch_factory_from_chain` for the same provider
-    `call` result.
-
-    Two independent implementations (Rust on PyBotIo, Python on SyncPoolIO)
-    against identical backends must agree -- this is the parity gate that lets
-    `Bot.build_pool` route through `PyBotIo.fetch_factory_address` without
-    behavior change. The SyncPoolIO path exercises the original Python
-    decode/checksum; the PyBotIo path exercises the Rust impl."""
-    factory_raw = "66f9664f97f2b50f62d13ea064982f936de76657"
-    pool_address = "0x" + "ab" * 20
-
-    rust_result = PyBotIo(provider=_FactoryCallProvider(factory_raw)).fetch_factory_address(
-        pool_address
-    )
-    py_result = fetch_factory_from_chain(
-        pool_address, chain_id=1, io=SyncPoolIO(_FactoryCallProvider(factory_raw))
-    )
-
-    assert rust_result == py_result
 
 
 # === ERC20 metadata choreography (slice 14c) ===
@@ -223,7 +150,7 @@ def test_pybot_io_fetch_factory_parity_with_python_impl():
 # `Erc20Builder.build` caller's fallback contract is: if the batched call fails
 # (call raised, decode failed), try individual calls with `bytes32` alternate
 # prototypes. `PyBotIo.fetch_erc20_metadata` returns `None` on any such failure
-# (mirrors `except (Web3Exception, DecodingError): return None` style) so the
+# (mirrors `except (RuntimeError, DecodingError): return None` style) so the
 # caller's fallback kicks in identically.
 
 
@@ -241,7 +168,7 @@ class _Erc20MetadataProvider:
         }
         self.calls: list[bytes] = []  # data received
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         return HexBytes(self._responses[data[:4]])
 
@@ -266,7 +193,7 @@ def test_pybot_io_fetch_erc20_metadata_returns_none_on_decode_failure():
     Python batched impl's `except DecodingError` fallback contract."""
 
     class _MalformedProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             # selector = data[:4]; for any selector return 1 byte -- too short to decode.
             return HexBytes(b"\x00")
 
@@ -276,36 +203,15 @@ def test_pybot_io_fetch_erc20_metadata_returns_none_on_decode_failure():
 
 def test_pybot_io_fetch_erc20_metadata_returns_none_on_revert():
     """A provider.call() revert (any exception) yields None -- the batched
-    fallback kicks in identically to the Python `except Web3Exception` path."""
+    fallback kicks in identically to the Python `except RuntimeError` path."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
     io = PyBotIo(provider=_RevertingProvider())
     assert io.fetch_erc20_metadata("0x" + "ab" * 20) is None
-
-
-from degenbot.builders.erc20_builder import _fetch_name_symbol_decimals_batched
-
-
-def test_pybot_io_fetch_erc20_metadata_parity_with_python_batched():
-    """`PyBotIo.fetch_erc20_metadata` returns the exact same tuple as the Python
-    `_fetch_name_symbol_decimals_batched` for the same provider `call` results."""
-    name, symbol, decimals = "Wrapped Ether", "WETH", 18
-    address = "0x" + "cd" * 20
-
-    rust_result = PyBotIo(
-        provider=_Erc20MetadataProvider(name=name, symbol=symbol, decimals=decimals)
-    ).fetch_erc20_metadata(address)
-    py_result = _fetch_name_symbol_decimals_batched(
-        address=address,
-        io=SyncPoolIO(_Erc20MetadataProvider(name=name, symbol=symbol, decimals=decimals)),
-    )
-
-    assert rust_result is not None
-    assert rust_result == py_result
 
 
 # === ERC20 read methods (slice 14d) ===
@@ -325,7 +231,7 @@ class _AddressArgProvider:
         self._response = response
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         return HexBytes(self._response)
 
@@ -395,7 +301,7 @@ def test_pybot_io_fetch_token_balance_propagates_reverts_as_exception():
     failure surfaces untouched, the Python caller decides)."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
@@ -430,18 +336,17 @@ class _V2PoolProvider:
             bytes.fromhex("d21220a7"): eth_abi.abi.encode(types=["address"], args=[token1]),
             # keccak256("getReserves()")[..4] = 0x0902f1ac
             bytes.fromhex("0902f1ac"): eth_abi.abi.encode(
-                types=["uint256", "uint256"], args=[reserves0, reserves1]
+                types=["uint112", "uint112", "uint32"], args=[reserves0, reserves1, 0]
             ),
         }
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         return HexBytes(self._responses[data[:4]])
 
 
 def _eip55(addr: str) -> str:
-    from degenbot.checksum_cache import get_checksum_address
 
     return get_checksum_address(addr)
 
@@ -491,7 +396,7 @@ def test_pybot_io_fetch_v2_immutable_data_propagates_reverts_as_exception():
     `_fetch_v2_common_data`'s `except Exception: raise LiquidityPoolError contract."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
@@ -542,7 +447,7 @@ class _V3PoolProvider:
         }
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         return HexBytes(self._responses[data[:4]])
 
@@ -632,7 +537,7 @@ def test_pybot_io_fetch_v3_immutable_data_propagates_reverts_as_exception():
     `except Exception: raise LiquidityPoolError` contract."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
@@ -657,15 +562,15 @@ class _AerodromeProvider:
         self._fee_raw = fee_raw
         self.calls: list[tuple[str, bytes]] = []  # (to, data) audit trail
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append((to, data))
         sel = data[:4]
         # keccak256("stable()")[..4]
-        _stable_sel = Web3.keccak(text="stable()")[:4]
+        _stable_sel = function_selector("stable()")
         if sel == _stable_sel:
             return HexBytes(eth_abi.abi.encode(types=["bool"], args=[self._stable]))
         # keccak256("getFee(address,bool)")[..4]
-        _get_fee_sel = Web3.keccak(text="getFee(address,bool)")[:4]
+        _get_fee_sel = function_selector("getFee(address,bool)")
         if sel == _get_fee_sel:
             return HexBytes(eth_abi.abi.encode(types=["uint256"], args=[self._fee_raw]))
         msg = f"unexpected selector {sel.hex()}"
@@ -689,11 +594,11 @@ def test_pybot_io_fetch_aerodrome_stable_and_fee_returns_bool_and_uint256():
     assert got_fee == fee_raw
 
     # First call: stable() to the pool address.
-    assert io.provider.calls[0] == (pool, Web3.keccak(text="stable()")[:4])
+    assert io.provider.calls[0] == (pool, function_selector("stable()"))
     # Second call: getFee(address,bool) to the factory address.
     second_to, second_data = io.provider.calls[1]
     assert second_to == factory
-    assert second_data[:4] == Web3.keccak(text="getFee(address,bool)")[:4]
+    assert second_data[:4] == function_selector("getFee(address,bool)")
     # Verify the encoded args: pool address (right-padded in word 0),
     # stable bool (word 1).
     assert second_data[16:36] == bytes.fromhex("aa" * 20)  # pool address
@@ -718,7 +623,7 @@ def test_pybot_io_fetch_aerodrome_stable_and_fee_propagates_reverts():
     """A provider revert on either call surfaces as an exception (no swallowing)."""
 
     class _RevertingProvider:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "eth_call reverted"
             raise RuntimeError(msg)
 
@@ -741,7 +646,7 @@ class _StringFieldProvider:
     def __init__(self, response: bytes) -> None:
         self._response = response
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         return HexBytes(self._response)
 
 
@@ -792,7 +697,7 @@ def test_pybot_io_fetch_erc20_string_field_propagates_reverts():
     """Provider revert surfaces as exception."""
 
     class _RevProv:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "reverted"
             raise RuntimeError(msg)
 
@@ -832,15 +737,15 @@ class _ProbeProvider:
     def __init__(self, *, succeed: set[bytes]) -> None:
         self._succeed = succeed
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         if data[:4] in self._succeed:
             return HexBytes(b"\x00" * 32)  # dummy non-empty response
         msg = "execution reverted"
-        raise Web3Exception(msg)
+        raise RuntimeError(msg)
 
 
 def _sel(sig: str) -> bytes:
-    return Web3.keccak(text=sig)[:4]
+    return function_selector(sig)
 
 
 def test_pybot_io_probe_pool_type_returns_slot0_for_v3():
@@ -892,14 +797,14 @@ class _TickDataProvider:
         self._ln = liquidity_net
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
         # tickBitmap(int16) selector = 0x5339c296
-        if sel == Web3.keccak(text="tickBitmap(int16)")[:4]:
+        if sel == function_selector("tickBitmap(int16)"):
             return HexBytes(eth_abi.abi.encode(types=["uint256"], args=[self._bitmap]))
         # ticks(int24) selector = 0xf30dba93
-        if sel == Web3.keccak(text="ticks(int24)")[:4]:
+        if sel == function_selector("ticks(int24)"):
             return HexBytes(
                 eth_abi.abi.encode(types=["uint128", "int128"], args=[self._lg, self._ln])
             )
@@ -919,7 +824,7 @@ def test_pybot_io_fetch_tick_bitmap_encodes_int16_arg_and_decodes_uint256():
     assert result == bitmap
     # Verify the int16 arg is sign-extended in the 32-byte word.
     calldata = io.provider.calls[0]
-    assert calldata[:4] == Web3.keccak(text="tickBitmap(int16)")[:4]
+    assert calldata[:4] == function_selector("tickBitmap(int16)")
     # For -3, the 32-byte word should be all 0xFF except the last byte = 0xFD.
     assert calldata[4:36] == (b"\xff" * 31) + bytes([0xFD])
 
@@ -938,7 +843,7 @@ def test_pybot_io_fetch_tick_data_encodes_int24_arg_and_decodes_uint128_int128()
     assert result == (lg, ln)
     # Verify the int24 arg is sign-extended.
     calldata = io.provider.calls[0]
-    assert calldata[:4] == Web3.keccak(text="ticks(int24)")[:4]
+    assert calldata[:4] == function_selector("ticks(int24)")
 
 
 def test_pybot_io_fetch_tick_bitmap_returns_zero_on_revert():
@@ -947,7 +852,7 @@ def test_pybot_io_fetch_tick_bitmap_returns_zero_on_revert():
     caller's except clause handles it."""
 
     class _RevProv:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "reverted"
             raise RuntimeError(msg)
 
@@ -972,12 +877,12 @@ class _V4TickDataProvider:
         self._ln = liquidity_net
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
-        if sel == Web3.keccak(text="getTickBitmap(bytes32,int16)")[:4]:
+        if sel == function_selector("getTickBitmap(bytes32,int16)"):
             return HexBytes(eth_abi.abi.encode(types=["uint256"], args=[self._bitmap]))
-        if sel == Web3.keccak(text="getTickLiquidity(bytes32,int24)")[:4]:
+        if sel == function_selector("getTickLiquidity(bytes32,int24)"):
             return HexBytes(
                 eth_abi.abi.encode(types=["uint128", "int128"], args=[self._lg, self._ln])
             )
@@ -998,7 +903,7 @@ def test_pybot_io_fetch_v4_tick_bitmap_encodes_pool_id_and_int16_args():
 
     assert result == bitmap
     calldata = io.provider.calls[0]
-    assert calldata[:4] == Web3.keccak(text="getTickBitmap(bytes32,int16)")[:4]
+    assert calldata[:4] == function_selector("getTickBitmap(bytes32,int16)")
     # pool_id is bytes 4..36 (already 32 bytes, used as-is).
     assert calldata[4:36] == pool_id
     # word_position -1 sign-extended in word 1 (bytes 36..68).
@@ -1019,7 +924,7 @@ def test_pybot_io_fetch_v4_tick_data_encodes_pool_id_and_int24_args():
 
     assert result == (lg, ln)
     calldata = io.provider.calls[0]
-    assert calldata[:4] == Web3.keccak(text="getTickLiquidity(bytes32,int24)")[:4]
+    assert calldata[:4] == function_selector("getTickLiquidity(bytes32,int24)")
     assert calldata[4:36] == pool_id
     assert calldata[36:68] == (b"\xff" * 31) + b"\x9c"  # -100 sign-extended
 
@@ -1038,16 +943,16 @@ class _BalancerProvider:
 
     def __init__(self, **responses: bytes) -> None:
         # responses keyed by the 4-byte selector
-        self._responses = {Web3.keccak(text=sig)[:4]: data for sig, data in responses.items()}
+        self._responses = {function_selector(sig): data for sig, data in responses.items()}
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
         if sel in self._responses:
             return HexBytes(self._responses[sel])
         msg = f"unexpected selector {sel.hex()}"
-        raise Web3Exception(msg)
+        raise RuntimeError(msg)
 
 
 def test_pybot_io_fetch_balancer_pool_id_decodes_bytes32():
@@ -1148,12 +1053,12 @@ def test_pybot_io_fetch_balancer_rate_providers_returns_empty_on_revert():
     PyBotIo path, propagate so the Python helper's except catches it."""
 
     class _RevProv:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "execution reverted"
-            raise Web3Exception(msg)
+            raise RuntimeError(msg)
 
     io = PyBotIo(provider=_RevProv())
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_balancer_rate_providers("0x" + "aa" * 20)
 
 
@@ -1200,7 +1105,7 @@ def test_pybot_io_fetch_balancer_vault_tokens_encodes_pool_id_arg():
     io.fetch_balancer_vault_tokens(vault, pool_id)
 
     calldata = io.provider.calls[0]
-    assert calldata[:4] == Web3.keccak(text="getPoolTokens(bytes32)")[:4]
+    assert calldata[:4] == function_selector("getPoolTokens(bytes32)")
     assert calldata[4:36] == pool_id
 
 
@@ -1208,12 +1113,12 @@ def test_pybot_io_fetch_balancer_vault_tokens_propagates_reverts():
     """When getPoolTokens reverts, the exception propagates."""
 
     class _RevProv:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "execution reverted"
-            raise Web3Exception(msg)
+            raise RuntimeError(msg)
 
     io = PyBotIo(provider=_RevProv())
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_balancer_vault_tokens("0x" + "ba" * 20, bytes(32))
 
 
@@ -1243,7 +1148,7 @@ def test_pybot_io_fetch_balancer_rate_decodes_uint256():
 def test_pybot_io_fetch_balancer_rate_propagates_reverts():
     """When getRate() reverts, the exception propagates."""
     io = PyBotIo(provider=_BalancerProvider())  # no responses → raise
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_balancer_rate("0x" + "ee" * 20)
 
 
@@ -1292,12 +1197,12 @@ class _V4Slot0Provider:
         self._liq = liquidity
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
-        if sel == Web3.keccak(text="getSlot0(bytes32)")[:4]:
+        if sel == function_selector("getSlot0(bytes32)"):
             return HexBytes(self._slot0)
-        if sel == Web3.keccak(text="getLiquidity(bytes32)")[:4]:
+        if sel == function_selector("getLiquidity(bytes32)"):
             return HexBytes(eth_abi.abi.encode(types=["uint256"], args=[self._liq]))
         msg = f"unexpected selector {sel.hex()}"
         raise ValueError(msg)
@@ -1349,12 +1254,12 @@ def test_pybot_io_fetch_v4_slot0_liquidity_propagates_reverts():
     """When getSlot0 reverts, the exception propagates."""
 
     class _RevProv:
-        def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+        def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
             msg = "execution reverted"
-            raise Web3Exception(msg)
+            raise RuntimeError(msg)
 
     io = PyBotIo(provider=_RevProv())
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_v4_slot0_liquidity("0x" + "cc" * 20, bytes(32))
 
 
@@ -1374,12 +1279,12 @@ class _CamelotProvider:
         sigs = ["stableSwap()", "FEE_DENOMINATOR()", "token0FeePercent()", "token1FeePercent()"]
         types = ["bool", "uint256", "uint16", "uint16"]
         self._responses = {
-            Web3.keccak(text=sig)[:4]: eth_abi.abi.encode(types=[ty], args=[v])
+            function_selector(sig): eth_abi.abi.encode(types=[ty], args=[v])
             for sig, ty, v in zip(sigs, types, t, strict=True)
         }
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
         if sel in self._responses:
@@ -1408,10 +1313,10 @@ def test_pybot_io_fetch_camelot_state_decodes_four_fields():
     assert int(fee1) == 350
     # Verify each call used the correct selector in sequence.
     sels = [c[:4] for c in io.provider.calls]
-    assert sels[0] == Web3.keccak(text="stableSwap()")[:4]
-    assert sels[1] == Web3.keccak(text="FEE_DENOMINATOR()")[:4]
-    assert sels[2] == Web3.keccak(text="token0FeePercent()")[:4]
-    assert sels[3] == Web3.keccak(text="token1FeePercent()")[:4]
+    assert sels[0] == function_selector("stableSwap()")
+    assert sels[1] == function_selector("FEE_DENOMINATOR()")
+    assert sels[2] == function_selector("token0FeePercent()")
+    assert sels[3] == function_selector("token1FeePercent()")
 
 
 def test_pybot_io_fetch_camelot_state_unpacks_bool_with_zero_one_values():
@@ -1433,7 +1338,7 @@ def test_pybot_io_fetch_camelot_state_unpacks_bool_with_zero_one_values():
 def test_pybot_io_fetch_camelot_state_propagates_reverts():
     """When the first call (stableSwap) reverts, the exception propagates."""
     io = PyBotIo(provider=_BalancerProvider())  # no responses configured
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_camelot_state("0x" + "ca" * 20)
 
 
@@ -1451,15 +1356,15 @@ class _CurveProvider:
 
     def __init__(self, *, a: int, fee: int, admin_fee: int) -> None:
         self._r = {
-            Web3.keccak(text="A()")[:4]: eth_abi.abi.encode(types=["uint256"], args=[a]),
-            Web3.keccak(text="fee()")[:4]: eth_abi.abi.encode(types=["uint256"], args=[fee]),
-            Web3.keccak(text="admin_fee()")[:4]: eth_abi.abi.encode(
+            function_selector("A()"): eth_abi.abi.encode(types=["uint256"], args=[a]),
+            function_selector("fee()"): eth_abi.abi.encode(types=["uint256"], args=[fee]),
+            function_selector("admin_fee()"): eth_abi.abi.encode(
                 types=["uint256"], args=[admin_fee]
             ),
         }
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
         if sel in self._r:
@@ -1480,15 +1385,15 @@ def test_pybot_io_fetch_curve_pool_params_decodes_three_uint256():
     assert int(admin_fee) == 5_000_000
     # Verify the selectors in order.
     sels = [c[:4] for c in io.provider.calls]
-    assert sels[0] == Web3.keccak(text="A()")[:4]
-    assert sels[1] == Web3.keccak(text="fee()")[:4]
-    assert sels[2] == Web3.keccak(text="admin_fee()")[:4]
+    assert sels[0] == function_selector("A()")
+    assert sels[1] == function_selector("fee()")
+    assert sels[2] == function_selector("admin_fee()")
 
 
 def test_pybot_io_fetch_curve_pool_params_propagates_reverts():
     """When the first call reverts, the exception propagates."""
     io = PyBotIo(provider=_BalancerProvider())  # no responses configured
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_curve_pool_params("0x" + "cu" * 20)
 
 
@@ -1506,10 +1411,10 @@ class _CurveBalancesProvider:
         self._balances = balances
         self.calls: list[bytes] = []
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         self.calls.append(data)
         sel = data[:4]
-        if sel == Web3.keccak(text="balances(uint256)")[:4]:
+        if sel == function_selector("balances(uint256)"):
             # uint256 arg is in word 0 (bytes 4..36). Decode it as the index.
             idx = int.from_bytes(data[4:36], "big")
             return HexBytes(eth_abi.abi.encode(types=["uint256"], args=[self._balances[idx]]))
@@ -1529,7 +1434,7 @@ def test_pybot_io_fetch_curve_balances_encodes_uint256_args_and_decodes_results(
     assert [int(r) for r in result] == balances
     # Verify the indexes encode as uint256 in each call's word 0.
     for i, calldata in enumerate(io.provider.calls):
-        assert calldata[:4] == Web3.keccak(text="balances(uint256)")[:4]
+        assert calldata[:4] == function_selector("balances(uint256)")
         assert int.from_bytes(calldata[4:36], "big") == i
 
 
@@ -1546,5 +1451,121 @@ def test_pybot_io_fetch_curve_balances_zero_count_returns_empty_list():
 def test_pybot_io_fetch_curve_balances_propagates_reverts():
     """When any single balance call reverts, the exception propagates."""
     io = PyBotIo(provider=_BalancerProvider())  # no responses configured
-    with pytest.raises(Web3Exception):
+    with pytest.raises(RuntimeError):
         io.fetch_curve_balances("0x" + "cu" * 20, 3)
+
+
+# === Native alloy path (B1) ===
+#
+# `PyBotIo` extracts a native Rust `AlloyProvider` when the held provider is
+# `PyAlloyProvider`-backed (live alloy or the O2 `OfflineProvider` shell). The
+# `fetch_*` choreography methods + the `PoolIO` surface then run entirely in
+# Rust via that arc (no GIL round-trip). These tests exercise that native path
+# against a recorded-JSON `OfflineProvider` (real Rust transport, no fakes) to
+# confirm the native bodies behave identically to the Python-delegation path.
+
+
+def _recorded_factory_fixture() -> str:
+    """Build a single-block recorded-JSON fixture with a `factory()` call."""
+    import json
+
+    factory_raw = "66f9664f97f2b50f62d13ea064982f936de76657"  # 20-byte lowercase
+    pool_addr = "ab" * 20
+    # `factory()` selector = keccak256("factory()")[:4] = 0xc45a0155.
+    # Recorded result = ABI-encoded address (32 bytes, right-aligned), no 0x.
+    encoded = eth_abi.abi.encode(types=["address"], args=["0x" + factory_raw]).hex()
+    calls = {f"0x{pool_addr}:0xc45a0155": encoded}
+    code = {f"0x{pool_addr}": "60806040"}
+    return json.dumps({
+        "chain_id": 1,
+        "block_number": 100,
+        "timestamp": 1_700_000_000,
+        "calls": calls,
+        "code": code,
+    })
+
+
+def test_pybot_io_native_alloy_fetch_factory_address():
+    """Native alloy path: `fetch_factory_address` against a recorded
+    `OfflineProvider` (Rust transport) returns the EIP-55 checksum — no Python
+    provider round-trip (the offline shell holds the `PyAlloyProvider`)."""
+    from degenbot._ffi.provider import AlloyProvider as RustAlloyProvider
+
+    factory_raw = "66f9664f97f2b50f62d13ea064982f936de76657"
+    expected = "0x66f9664f97F2b50F62D13eA064982f936dE76657"
+    pool_address = "0x" + "ab" * 20
+
+    provider = RustAlloyProvider.offline_from_json_string(_recorded_factory_fixture())
+    io = PyBotIo(provider=provider)
+
+    assert io.fetch_factory_address(pool_address) == expected
+
+
+def test_pybot_io_native_alloy_poolio_surface():
+    """Native alloy path: the `PoolIO` surface (`get_block_number`,
+    `get_block`, `get_block_timestamp`, `get_code`, `call`) runs against the
+    Rust offline transport and returns the expected shapes."""
+    from degenbot._ffi.provider import AlloyProvider as RustAlloyProvider
+
+    provider = RustAlloyProvider.offline_from_json_string(_recorded_factory_fixture())
+    io = PyBotIo(provider=provider)
+
+    assert io.get_block_number() == 100
+    block = io.get_block(100)
+    assert block["number"] == 100
+    assert block["timestamp"] == 1_700_000_000
+    assert io.get_block_timestamp() == 1_700_000_000
+    assert io.get_block_timestamp(100) == 1_700_000_000
+
+    pool_address = "0x" + "ab" * 20
+    code = io.get_code(pool_address)
+    assert code == HexBytes(bytes.fromhex("60806040"))
+
+    # `call(factory())` returns the recorded ABI-encoded address word.
+    result = io.call(to=pool_address, data=bytes.fromhex("c45a0155"))
+    assert result == HexBytes(
+        eth_abi.abi.encode(types=["address"], args=["0x66f9664f97f2b50f62d13ea064982f936de76657"])
+    )
+
+
+def test_pybot_io_native_alloy_call_raw_routes_through_native_call():
+    """Native alloy path: `call_raw(tx)` extracts `to`/`data` from the tx dict
+    and routes through the native `call` body."""
+    from degenbot._ffi.provider import AlloyProvider as RustAlloyProvider
+
+    provider = RustAlloyProvider.offline_from_json_string(_recorded_factory_fixture())
+    io = PyBotIo(provider=provider)
+    pool_address = "0x" + "ab" * 20
+    result = io.call_raw({"to": pool_address, "data": bytes.fromhex("c45a0155")})
+    assert result == HexBytes(
+        eth_abi.abi.encode(types=["address"], args=["0x66f9664f97f2b50f62d13ea064982f936de76657"])
+    )
+
+
+def test_pybot_io_native_alloy_revert_surfaces_contract_logic_error():
+    """Native alloy path: a recorded revert (`null` result) surfaces as
+    `ContractLogicError` (the alloy revert path), not a generic RuntimeError."""
+    import json
+
+    from degenbot._ffi.provider import AlloyProvider as RustAlloyProvider
+    from degenbot.exceptions import ContractLogicError
+
+    factory_raw = "66f9664f97f2b50f62d13ea064982f936de76657"
+    pool_addr = "ab" * 20
+    encoded = eth_abi.abi.encode(types=["address"], args=["0x" + factory_raw]).hex()
+    data = {
+        "chain_id": 1,
+        "block_number": 100,
+        "timestamp": 1_700_000_000,
+        # A *different* selector reverted (null); factory() still succeeds.
+        "calls": {f"0x{pool_addr}:0xffffffff": None, f"0x{pool_addr}:0xc45a0155": encoded},
+        "code": {f"0x{pool_addr}": "60806040"},
+    }
+    provider = RustAlloyProvider.offline_from_json_string(json.dumps(data))
+    io = PyBotIo(provider=provider)
+    pool_address = "0x" + "ab" * 20
+
+    with pytest.raises(ContractLogicError):
+        io.call(to=pool_address, data=bytes.fromhex("ffffffff"))
+    # The factory() call still succeeds (not the reverted selector).
+    assert io.fetch_factory_address(pool_address) == "0x66f9664f97F2b50F62D13eA064982f936dE76657"

@@ -166,10 +166,10 @@ class _FakeEth:
 
 
 class _FakeAsyncW3:
-    """Fake ``AsyncProviderAdapter`` for BackrunSession tests (PAGQCK).
+    """Fake ``AsyncAlloyProvider`` for BackrunSession tests (PAGQCK).
 
     The dispatch hot loop was routed off raw ``AsyncWeb3`` onto
-    ``AsyncProviderAdapter`` — this fake exposes the SAME flat surface
+    ``AsyncAlloyProvider`` — this fake exposes the SAME flat surface
     (``get_block`` / ``get_transaction_count`` / ``make_request`` / ``rpc_url``)
     the example now drives, delegating to the inner ``_FakeEth``.
     """
@@ -193,6 +193,13 @@ class _FakeAsyncW3:
     def rpc_url(self) -> str:
         return "http://fake:8545"
 
+    def as_async_alloy(self) -> None:
+        # The session lifecycle tests don't drive dispatch (they inject a
+        # `_Recorder` consumer that ignores args), so the alloy provider is
+        # never used. `start()` tolerates `None` here (defers `_sim_ctx`);
+        # only a session that actually dispatches needs a real provider.
+        return None
+
 
 def _noop_coro():
     async def _n() -> None:
@@ -212,7 +219,7 @@ class _BlocksStream:
         self._blocks = list(blocks)
         self._i = 0
 
-    def __aiter__(self) -> "_BlocksStream":
+    def __aiter__(self) -> _BlocksStream:
         return self
 
     async def __anext__(self) -> dict[str, int]:
@@ -433,7 +440,7 @@ class TestBackrunSessionRunBlockStreamAcquiredOnce:
     Pre-fix `run()` called `engine.block_stream()` twice: once consumed inside
     the real `consume_result_batches` (which self-acquires when
     `block_stream=None`), and once at run() line 967 for the recurring-verify
-    ticker. The real `PyUniswapArbEngine.block_stream()` is once-only — the
+    ticker. The real `PyArbitrageEngine.block_stream()` is once-only — the
     second call raised `RuntimeError("block_stream() can only be called once")`
     entering the main loop, crashing every permutation run. This test uses an
     engine whose `block_stream()` raises on the second call (mimicking the real
@@ -485,7 +492,9 @@ class TestBackrunSessionRunBlockStreamAcquiredOnce:
             def __init__(self) -> None:
                 self.engine = _OnceOnlyEngine()
 
-            def start(self, node_http, node_ws, *, v3_snapshot, v4_snapshot, verify_state_view) -> int:
+            def start(
+                self, node_http, node_ws, *, v3_snapshot, v4_snapshot, verify_state_view
+            ) -> int:
                 # No backfill target beyond current_block (12_345) — main-loop entry.
                 return 0
 

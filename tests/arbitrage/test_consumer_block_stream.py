@@ -18,10 +18,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-
 import examples.eth_backrun_v2_v3_v4_rust as runner
-from examples.eth_backrun_v2_v3_v4_rust import PyDispatcher
+from examples.eth_backrun_v2_v3_v4_rust import Dispatcher
 
 
 class _Eth:
@@ -46,10 +44,10 @@ class _Eth:
 
 
 class _FakeW3:
-    """Fake ``AsyncProviderAdapter`` for the dispatch-path tests (PAGQCK).
+    """Fake ``AsyncAlloyProvider`` for the dispatch-path tests (PAGQCK).
 
     The dispatch hot loop was routed off raw ``AsyncWeb3`` onto
-    ``AsyncProviderAdapter`` — this fake exposes the SAME flat surface
+    ``AsyncAlloyProvider`` — this fake exposes the SAME flat surface
     (``get_transaction_count`` / ``make_request`` / ``rpc_url``) the example
     now drives, instead of the old ``async_w3.eth.<method>`` nesting. The
     ``make_request`` dispatcher mirrors the raw-RPC shapes the alloy backend
@@ -94,7 +92,7 @@ class _Blocks:
         self._blocks = list(blocks)
         self._i = 0
 
-    def __aiter__(self) -> "_Blocks":
+    def __aiter__(self) -> _Blocks:
         return self
 
     async def __anext__(self) -> dict[str, int]:
@@ -112,7 +110,7 @@ class _Results:
         self._batches = list(batches)
         self._i = 0
 
-    def __aiter__(self) -> "_Results":
+    def __aiter__(self) -> _Results:
         return self
 
     async def __anext__(self) -> dict[str, Any]:
@@ -152,35 +150,46 @@ async def _run(
     blocks: list[dict[str, int]],
     batches: list[dict[str, Any]],
     *,
-    dispatcher: PyDispatcher | None = None,
-) -> tuple[PyDispatcher, _FakeW3, list[int]]:
-    dispatcher = dispatcher or PyDispatcher.for_block(0)
+    dispatcher: Dispatcher | None = None,
+) -> tuple[Dispatcher, _FakeW3, list[int]]:
+    dispatcher = dispatcher or Dispatcher.for_block(0)
     w3 = _FakeW3()
-    # Monkeypatch dispatch_profitable_results so a non-empty batch records the
+    # Monkeypatch _dispatch_profitable so a non-empty batch records the
     # `current_block` it was dispatched with, proving it keys off the block
-    # stream (not solve_block).
+    # stream (not solve_block). The A5 cutover rewired the hot loop from
+    # the module-level ``dispatch_profitable_results`` to
+    # ``_dispatch_profitable`` (which drives ``dispatch_profitable_py`` →
+    # ``dispatch_and_submit_py``). ``sim_ctx=None`` is safe: empty batches
+    # return before dispatch; non-empty batches hit the monkeypatch (the real
+    # ``_dispatch_profitable`` — which would pass ``sim_ctx`` to the Rust
+    # ``dispatch_profitable_py`` leaf — never runs).
     dispatched: list[int] = []
 
     async def _fake_dispatch(**kwargs):
         dispatched.append(kwargs["current_block"])
-        return None
+        return
 
-    orig = runner.dispatch_profitable_results
-    runner.dispatch_profitable_results = _fake_dispatch  # type: ignore[assignment]
+    orig = runner._dispatch_profitable
+    runner._dispatch_profitable = _fake_dispatch  # type: ignore[assignment]
     try:
         await runner.consume_result_batches(
             engine_registry=object(),  # type: ignore[arg-type] — not read (streams injected)
             async_w3=w3,  # type: ignore[arg-type]
+            sim_ctx=None,  # type: ignore[arg-type] — see comment above
             executor_address="0x" + "0" * 40,
             operator_address="0x" + "0" * 40,
-            operator_private_key="0x" + "0" * 64,
+            # dry-run placeholder must be a valid secp256k1 scalar (the real
+            # `dispatch_profitable_results` would construct a `PyTxSigner` from
+            # it; all-zero is rejected by the curve). Here `dispatch_*` is
+            # stubbed so the value is cosmetic, but it mirrors the real config.
+            operator_private_key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
             dispatcher=dispatcher,
             dry_run=True,
             block_stream=_Blocks(blocks),
             result_iter=_Results(batches),
         )
     finally:
-        runner.dispatch_profitable_results = orig  # type: ignore[assignment]
+        runner._dispatch_profitable = orig  # type: ignore[assignment]
     return dispatcher, w3, dispatched
 
 
@@ -234,8 +243,7 @@ class TestBlockClockFromStream:
         # solve_block (999) as the current block — only the block-stream
         # clock (the seed 0 or a ticked 301/302, depending on race order).
         assert dispatched[0] != 999, (
-            "dispatch must key off the block-stream clock, never the batch's "
-            "stale solve_block"
+            "dispatch must key off the block-stream clock, never the batch's stale solve_block"
         )
 
 
@@ -248,7 +256,7 @@ class TestTeeBlockStream:
     `engine.block_stream()` twice (the real `consume_result_batches`
     self-acquires one when `block_stream=None`; `run()` line 967 acquired
     another for the recurring-verify ticker). The real
-    `PyUniswapArbEngine.block_stream()` is once-only (it moves the mpsc
+    `PyArbitrageEngine.block_stream()` is once-only (it moves the mpsc
     receiver out of a `Mutex<Option<rx>>`), so the second call raised
     `RuntimeError("block_stream() can only be called once")` entering the main
     loop — crashing every permutation run after `[startup] State trimmed …`.

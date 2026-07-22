@@ -16,7 +16,7 @@ from degenbot.database.operations import (
     inspect_schema_state,
     upgrade_existing_sqlite_database,
 )
-from degenbot.degenbot_rs import DatabaseSchemaStale
+from degenbot.exceptions import DatabaseSchemaStale
 from degenbot.exceptions.infrastructure import BackupExists
 from degenbot.version import __version__
 

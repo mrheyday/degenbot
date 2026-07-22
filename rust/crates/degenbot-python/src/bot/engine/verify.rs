@@ -1,42 +1,15 @@
-//! `PyO3` wrapper for the `UniswapEngine` — verify `#[pymethods]` slice.
+//! `PyO3` wrapper for the `ArbitrageEngine` — verify `#[pymethods]` slice.
 //!
 //! Split out of the former monolithic `py_binding.rs` (ergo UG6FKN task 74W2Z6),
-//! mirroring `crates/degenbot-bot/src/solvers/uniswap_engine/`'s per-concern
-//! layout. `PyO3` allows multiple `#[pymethods] impl PyUniswapArbEngine { … }`
+//! mirroring `crates/degenbot-bot/src/solvers/arb_engine/`'s per-concern
+//! layout. `PyO3` allows multiple `#[pymethods] impl PyArbitrageEngine { … }`
 //! blocks per type, so each concern file contributes one slice.
 
-use super::{
-    hex_string_to_pool_id, Address, PyUniswapArbEngine, VerificationMismatchError,
-    VerificationRpcError, VerifyError,
-};
+use super::{hex_string_to_pool_id, Address, PyArbitrageEngine};
 use crate::prelude::*;
 
-/// [`Result<(), VerifyError>`] → typed Python exception seam for the
-/// snapshot/verify module (ADR-006 slice 5b). Distinguishes failure
-/// categories by type:
-/// - `Snapshot` → [`VerificationMismatchError`] (genuine mismatch — fatal)
-/// - `Provider` → [`VerificationRpcError`] (transport/provider construction)
-/// - `Rpc` → [`VerificationRpcError`] (per-call RPC transport — retryable)
-/// - `NoSnapshotStream` → `PyRuntimeError` (programmer error)
-/// - `NotConfigured` → `PyRuntimeError` (programmer error)
-///
-/// ADR-006 D3 (T5): the verify-on-register path that drove this seam is
-/// deleted; the two-step verify (T6) routes through `PyBot`'s batch API. Kept
-/// because `SnapshotStore::insert` (snapshot.rs) still maps its
-/// `VerifyError` through this.
-pub(crate) fn map_verify_err(res: Result<(), VerifyError>) -> PyResult<()> {
-    res.map_err(|e| match e {
-        VerifyError::NoSnapshotStream => {
-            pyo3::exceptions::PyRuntimeError::new_err("No snapshot stream in progress.")
-        }
-        VerifyError::NotConfigured(msg) => pyo3::exceptions::PyRuntimeError::new_err(msg),
-        VerifyError::Snapshot(msg) => VerificationMismatchError::new_err(msg),
-        VerifyError::Provider(msg) | VerifyError::Rpc(msg) => VerificationRpcError::new_err(msg),
-    })
-}
-
 #[pymethods]
-impl PyUniswapArbEngine {
+impl PyArbitrageEngine {
     /// Verify all V3 and V4 pool liquidity maps against on-chain state.
     ///
     /// Calls `TickLens` for V3 pools and `StateView` for V4 pools. Compares

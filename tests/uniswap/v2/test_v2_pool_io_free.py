@@ -6,22 +6,20 @@ from unittest.mock import MagicMock
 
 import eth_abi.abi
 import pytest
-from web3.exceptions import Web3Exception
 
-from degenbot.bot import Bot
+from degenbot.bot import Bot, PyBot
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.config import DatabaseSettings, DegenbotConfig
-from degenbot.degenbot_rs import PyBot
 from degenbot.erc20.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.pool import InvalidSwapInputAmount, LiquidityPoolError
 from degenbot.provider.call_helpers import encode_function_calldata
-from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.trackers import UniswapV2PoolTracker
 from degenbot.uniswap.v2_functions import (
     constant_product_calc_exact_in,
     constant_product_calc_exact_out,
 )
+from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v2_types import UniswapV2PoolExternalUpdate, UniswapV2PoolState
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
@@ -170,7 +168,7 @@ class TestBotBuildV2Pool:
         bot = Bot(config, provider=provider)
 
         # Mock RPC responses for immutable values and reserves
-        def mock_call(*, to, data, block=None):
+        def mock_call(to, data, block=None):
             # We'll check the method selector from the calldata
             # factory() selector
             if data[:4] == b"\x1a\x1a\xb0\xa5":  # not real, just placeholder
@@ -213,8 +211,8 @@ class TestBotBuildV2Pool:
         token0_encoded = eth_abi.abi.encode(types=["address"], args=[weth_addr])
         token1_encoded = eth_abi.abi.encode(types=["address"], args=[usdc_addr])
         reserves_encoded = eth_abi.abi.encode(
-            types=["uint256", "uint256"],
-            args=[1000 * 10**18, 2_000_000 * 10**6],
+            types=["uint112", "uint112", "uint32"],
+            args=[1000 * 10**18, 2_000_000 * 10**6, 0],
         )
 
         # The bot's build_pool will call provider.call() 4 times for:
@@ -236,7 +234,7 @@ class TestBotBuildV2Pool:
             factory_calldata: factory_encoded,
             token0_calldata: token0_encoded,
             token1_calldata: token1_encoded,
-            slot0_calldata: None,  # marker: will raise Web3Exception
+            slot0_calldata: None,  # marker: will raise RuntimeError
         }
 
         def mock_get_reserves_call(*, to, data, block=None):
@@ -244,7 +242,7 @@ class TestBotBuildV2Pool:
                 if data == slot0_calldata:
                     # V3 slot0() reverts on a V2 pool
                     msg = "revert"
-                    raise Web3Exception(msg)
+                    raise RuntimeError(msg)
                 return call_responses[data]
             if data == reserves_calldata:
                 # getReserves returns (uint112, uint112, uint32)
@@ -353,16 +351,16 @@ class TestV2PoolTrackerWithBot:
             slot0_calldata: None,  # marker: slot0() reverts on V2 pools
         }
 
-        def mock_call(*, to, data, block=None):
+        def mock_call(to, data, block=None):
             if data in call_responses:
                 if data == slot0_calldata:
                     msg = "revert"
-                    raise Web3Exception(msg)
+                    raise RuntimeError(msg)
                 return call_responses[data]
             if data == reserves_calldata:
                 return eth_abi.abi.encode(
-                    types=["uint256", "uint256"],
-                    args=[1000 * 10**18, 2_000_000 * 10**6],
+                    types=["uint112", "uint112", "uint32"],
+                    args=[1000 * 10**18, 2_000_000 * 10**6, 0],
                 )
             msg = f"Unexpected call with data={data!r}"
             raise ValueError(msg)

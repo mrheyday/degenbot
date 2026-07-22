@@ -16,7 +16,7 @@ import inspect
 import pytest
 
 import degenbot.arbitrage.engine_registry as runner
-from degenbot.degenbot_rs import VerificationMismatchError
+from degenbot.exceptions import VerificationMismatchError
 
 
 class _RecordingVerifyEngine:
@@ -32,6 +32,17 @@ class _RecordingVerifyEngine:
         self.verify_calls: list[dict] = []
         self.fail_next: str | None = None
         self._last_processed_block: int | None = 18_000_042
+        # JUCFCB: the DB path reads `snapshot_seed_block` from the engine.
+        self._snapshot_seed_block: int | None = None
+
+    @property
+    def snapshot_seed_block(self) -> int | None:
+        return self._snapshot_seed_block
+
+    @snapshot_seed_block.setter
+    def snapshot_seed_block(self, value: int | None) -> None:
+        self.calls.append("set_snapshot_seed_block")
+        self._snapshot_seed_block = value
 
     # lifecycle (subscribe/backfill) — minimal, record-only
     def subscribe(self, ws: str) -> int:
@@ -41,6 +52,16 @@ class _RecordingVerifyEngine:
     def backfill_from_snapshot(self, rpc: str, snapshot_block: int) -> int:
         self.calls.append("backfill")
         return 0
+
+    # DADWUP: start() now calls load_*_from_py directly (the per-pool
+    # insert_*/begin_*/finish_* pyo3 surface retired). The non-DB dict is
+    # supplied by the patched _v3/_v4_snapshot_to_py_dict helpers; the engine
+    # stub records the call to keep start()'s orchestration observable.
+    def load_v3_snapshot_from_py(self, py_data: object) -> None:
+        self.calls.append("load_v3_snapshot_from_py")
+
+    def load_v4_snapshot_from_py(self, py_data: object) -> None:
+        self.calls.append("load_v4_snapshot_from_py")
 
     def set_verify_rpc_url(self, rpc: str) -> None:
         self.calls.append("set_verify_rpc_url")
@@ -77,9 +98,7 @@ class _RecordingVerifyEngine:
         if self.fail_next == "v3":
             raise VerificationMismatchError("synthetic V3 seed tick mismatch")
 
-    async def verify_v3_post_drain_snapshot(
-        self, address: str, rpc_url: str
-    ) -> None:
+    async def verify_v3_post_drain_snapshot(self, address: str, rpc_url: str) -> None:
         self.verify_calls.append({
             "phase": "v3",
             "block": None,
@@ -182,10 +201,9 @@ def _registry_started_with_snapshots(
 ) -> tuple[runner.EngineRegistry, _RecordingVerifyEngine]:
     fake = _RecordingVerifyEngine()
     registry = runner.EngineRegistry(bot=None, engine=fake)
-    # Stub the stream fns (same as the start tests) — they need a full DB-backed
-    # snapshot; here we only exercise start()'s orchestration + drain/verify.
-    monkeypatch.setattr(runner, "stream_v3_snapshot_to_engine", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "stream_v4_snapshot_to_engine", lambda *a, **k: None)
+    # XEANMB: `load_*_from_py` is retired; `start()` sets `snapshot_seed_block`
+    # from `min(newest_block)` directly (no dict ingestion). The stubs for the
+    # old `_v3_snapshot_to_py_dict` / `_v4_snapshot_to_py_dict` are gone.
     registry.start(
         "http://localhost:8545",
         "ws://localhost:8546",

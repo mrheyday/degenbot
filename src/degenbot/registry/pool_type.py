@@ -16,7 +16,7 @@ from degenbot.types.pool_type import PoolFamily, PoolTypeDescriptor, derive_kind
 if TYPE_CHECKING:
     from eth_typing import ChecksumAddress
 
-    from degenbot.degenbot_rs import PyDexIdentity
+    from degenbot.types import DexIdentity
     from degenbot.types.abstract.liquidity_pool import AbstractLiquidityPool
     from degenbot.types.aliases import ChainId
     from degenbot.types.pool_protocols import ConcentratedLiquidityPool, ConstantProductPool
@@ -29,6 +29,7 @@ class PoolDeploymentData:
     factory_address: ChecksumAddress
     deployer: str
     pool_init_hash: str | None
+    implementation_address: str | None = None
 
 
 def _derive_family(pool_class: type[AbstractLiquidityPool]) -> PoolFamily:
@@ -149,7 +150,8 @@ class PoolTypeRegistry:
         deployer: str | None = None,
         family: PoolFamily | None = None,
         variant: str | None = None,
-        dex_identity: PyDexIdentity | None = None,
+        dex_identity: DexIdentity | None = None,
+        implementation_address: str | None = None,
     ) -> None:
         """Register a pool class for a specific (chain_id, factory) deployment.
 
@@ -180,6 +182,10 @@ class PoolTypeRegistry:
                 canonical-chain factory/init-hash, + default fees. Optional —
                 Aerodrome V2 (deferred, TODO-e30504ed) + non-V2 families omit
                 it. Resolvable via ``get_v2_identity()``.
+            implementation_address: The EIP-1167 master implementation contract
+                Aerodrome factories clone (V2 stable/volatile + V3 Slipstream).
+                ``None`` for V2/V3 rows that use the standard init-hash CREATE2
+                path (ADR-005 Fork A follow-on, S5SJXF/D7VKQX).
 
 
         Raises:
@@ -206,6 +212,7 @@ class PoolTypeRegistry:
                 factory_address=checksummed_factory,
                 deployer=deployer if deployer is not None else factory_address,
                 pool_init_hash=pool_init_hash,
+                implementation_address=implementation_address,
             ),
             dex_identity=dex_identity,
         )
@@ -342,7 +349,7 @@ class PoolTypeRegistry:
             factory=entry.deployment.factory_address,
         )
 
-    def get_v2_identity(self, chain_id: ChainId, factory_address: str) -> PyDexIdentity | None:
+    def get_v2_identity(self, chain_id: ChainId, factory_address: str) -> DexIdentity | None:
         """Get the DexIdentity preset for (chain_id, factory), or None.
 
         Returns None if no registration exists OR if the registration was made
@@ -408,7 +415,7 @@ class _RegistryEntry:
     variant: str | None
     kind: str
     deployment: PoolDeploymentData
-    dex_identity: PyDexIdentity | None = None
+    dex_identity: DexIdentity | None = None
 
     @property
     def descriptor(self) -> PoolTypeDescriptor:

@@ -36,17 +36,16 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 from hexbytes import HexBytes
-from web3 import Web3
-from web3.exceptions import ContractLogicError
 
-from degenbot.anvil_fork import AnvilFork
 from degenbot.balancer.deployments import (
     BALANCERQUERIES_CONTRACT_ADDRESS,
 )
 from degenbot.balancer.libraries.constants import PowVersion
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot
+from degenbot.exceptions import ContractLogicError
 from degenbot.exceptions.pool import EVMRevertError
+from degenbot.fork import AnvilFork
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.balancer_pool_factory import make_balancer_weighted_pool
 from tests.helpers.erc20_factory import make_erc20
@@ -195,7 +194,7 @@ class _RecordFork(AbstractContextManager):
 
     def raw_call(self, to: str, data: bytes) -> bytes:
         assert self.fork is not None
-        return self.fork.w3.eth.call(transaction={"to": to, "data": data.hex()})
+        return self.fork.provider.call(to, data)
 
 
 def _query_swap_callable(
@@ -209,12 +208,12 @@ def _query_swap_callable(
     """BalancerQueries ``querySwap`` oracle call (GIVEN_IN or GIVEN_OUT)."""
 
     def _call() -> int:
-        query_contract = fork.fork.w3.eth.contract(  # type: ignore[union-attr]
+        query_contract = web3.Web3(web3.HTTPProvider(fork.fork.http_url)).eth.contract(  # type: ignore[union-attr]
             address=BALANCERQUERIES_CONTRACT_ADDRESS,
             abi=_BALANCERQUERIES_ABI,
         )
         return query_contract.functions.querySwap(
-            (Web3.to_bytes(hexstr=pool_id_hex), swap_kind, token_in, token_out, amount, b""),
+            (HexBytes(pool_id_hex), swap_kind, token_in, token_out, amount, b""),
             (VITALIK_ADDRESS, False, VITALIK_ADDRESS, False),
         ).call()
 

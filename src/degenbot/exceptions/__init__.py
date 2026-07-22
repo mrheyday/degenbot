@@ -1,5 +1,12 @@
 """Exception classes for degenbot."""
 
+from degenbot._ffi import (
+    DynamicFeePoolRejectedError,
+    HookedPoolRejectedError,
+    PoolAlreadyRegisteredError,
+    PoolRegistrationError,
+    SpecViolationError,
+)
 from degenbot.exceptions.arbitrage import (
     ArbCalculationError,
     ArbitrageError,
@@ -19,6 +26,7 @@ from degenbot.exceptions.arbitrage import (
     Unprofitable,
 )
 from degenbot.exceptions.base import DegenbotError, DegenbotTypeError, DegenbotValueError
+from degenbot.exceptions.database import DatabaseSchemaStale
 from degenbot.exceptions.infrastructure import (
     AnvilError,
     BackupExists,
@@ -61,6 +69,15 @@ from degenbot.exceptions.pool import (
     UnknownPool,
     UnknownPoolId,
 )
+from degenbot.exceptions.rpc import (
+    ContractLogicError,
+    RpcError,
+    TransactionNotFound,
+)
+from degenbot.exceptions.verification import (
+    VerificationMismatchError,
+    VerificationRpcError,
+)
 
 __all__ = (
     "AddressMismatch",
@@ -71,16 +88,20 @@ __all__ = (
     "BlockFetchingTimeout",
     "BrokenPool",
     "ConnectionTimeout",
+    "ContractLogicError",
     "CurveError",
+    "DatabaseSchemaStale",
     "DegenbotConnectionError",
     "DegenbotError",
     "DegenbotTypeError",
     "DegenbotValueError",
     "DuplicatePoolError",
+    "DynamicFeePoolRejectedError",
     "EVMRevertError",
     "Erc20TokenError",
     "ExternalUpdateError",
     "FetchingError",
+    "HookedPoolRejectedError",
     "HookedPoolResult",
     "HopCountExceededError",
     "HopCountInsufficientError",
@@ -103,12 +124,16 @@ __all__ = (
     "NoSolverSolution",
     "OptimizationError",
     "PathRejectedError",
+    "PoolAlreadyRegisteredError",
     "PoolCreationFailed",
     "PoolNotAssociated",
+    "PoolRegistrationError",
     "PossibleInaccurateResult",
     "RateOfExchangeBelowMinimum",
     "RegistryAlreadyInitialized",
     "RegistryError",
+    "RpcError",
+    "SpecViolationError",
     "StaleRateResult",
     "SubscriptionDisconnected",
     "SubscriptionError",
@@ -116,8 +141,11 @@ __all__ = (
     "TokenDenylistedError",
     "TrackerAlreadyInitialized",
     "TrackerError",
+    "TransactionNotFound",
     "UnknownPool",
     "UnknownPoolId",
     "Unprofitable",
+    "VerificationMismatchError",
+    "VerificationRpcError",
     "Web3ConnectionTimeout",
 )

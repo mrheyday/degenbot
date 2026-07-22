@@ -105,6 +105,16 @@ impl ReorgCoordinator {
         // `restore_pool_before_block` released the write guard internally;
         // notify subscribers (engine dirties + re-solves at the next drain
         // tick; no separate reorg path in the engine).
+        //
+        // Visible per-pool unwind signal: confirms the coordinator did work —
+        // without this the only observable symptom was a cancelled publish,
+        // which leaves "duplicate block" indistinguishable from a reorg vs.
+        // an unreliable-WS duplication. `warn!` (not `info!`) because a chain
+        // reorg is an operator-actionable event, not routine traffic.
+        log::warn!(
+            "ReorgCoordinator: restored pool {pool_id} to its pre-block-{block} \
+             state + notified subscribers"
+        );
         bot.notify_pool_state_updated(pool_id);
         Ok(())
     }
@@ -128,9 +138,9 @@ impl ReorgCoordinator {
 mod tests {
     use super::*;
     use crate::bot_core::log_dispatcher::PoolStateSubscriber;
-    use crate::bot_core::state_history::{ReorgJournal, V2BlockDelta};
     use crate::bot_core::{Bot, RegisterV2PoolParams};
-    use alloy::primitives::{Address, Bytes, I256, U128, U256};
+    use ::degenbot_pools::state_history::{ReorgJournal, V2BlockDelta};
+    use alloy::primitives::{aliases::U112, Address, Bytes, I256, U128, U256};
     use alloy::rpc::types::Log;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -143,10 +153,10 @@ mod tests {
     fn v2_genesis(block: u64, r0: u64, r1: u64) -> V2BlockDelta {
         V2BlockDelta {
             block,
-            reserve0_before: U256::from(r0),
-            reserve1_before: U256::from(r1),
-            reserve0_after: U256::from(r0),
-            reserve1_after: U256::from(r1),
+            reserve0_before: U112::from(r0),
+            reserve1_before: U112::from(r1),
+            reserve0_after: U112::from(r0),
+            reserve1_after: U112::from(r1),
         }
     }
     fn v2_transition(
@@ -158,10 +168,10 @@ mod tests {
     ) -> V2BlockDelta {
         V2BlockDelta {
             block,
-            reserve0_before: U256::from(r0_before),
-            reserve1_before: U256::from(r1_before),
-            reserve0_after: U256::from(r0_after),
-            reserve1_after: U256::from(r1_after),
+            reserve0_before: U112::from(r0_before),
+            reserve1_before: U112::from(r1_before),
+            reserve0_after: U112::from(r0_after),
+            reserve1_after: U112::from(r1_after),
         }
     }
 
@@ -177,7 +187,7 @@ mod tests {
 
         // First restore at block 7 → pops the block-7 delta, lands at genesis.
         let first = j.restore_before_block(7).expect("first restore ok");
-        assert_eq!(first, (U256::from(1_000), U256::from(2_000), 5));
+        assert_eq!(first, (U112::from(1_000), U112::from(2_000), 5));
 
         // Second restore at block 7 → newest delta (5) < target (7) → no-op.
         let second = j.restore_before_block(7).expect("second restore ok");
@@ -194,9 +204,9 @@ mod tests {
         j.push_delta(v2_transition(8, 1_500, 2_500, 1_900, 2_900));
 
         let (r0, _, _) = j.restore_before_block(8).expect("restore before 8");
-        assert_eq!(r0, U256::from(1_500), "land at block-6 after-state");
+        assert_eq!(r0, U112::from(1_500), "land at block-6 after-state");
         let (r0, _, _) = j.restore_before_block(6).expect("restore before 6");
-        assert_eq!(r0, U256::from(1_000), "land at genesis (pre-C)");
+        assert_eq!(r0, U112::from(1_000), "land at genesis (pre-C)");
     }
 
     /// ADR-006 slice 7: reverse-chronological rollback (C then D) — first call
@@ -210,11 +220,11 @@ mod tests {
 
         // Reverse: target C=6 first — pops both block-6 and block-8 deltas.
         let (r0, _, _) = j.restore_before_block(6).expect("restore before 6");
-        assert_eq!(r0, U256::from(1_000), "land at genesis");
+        assert_eq!(r0, U112::from(1_000), "land at genesis");
 
         // Then target D=8 — newest is now 5 < 8 → no-op, stays at genesis.
         let (r0_2, _, _) = j.restore_before_block(8).expect("restore before 8 (no-op)");
-        assert_eq!(r0_2, U256::from(1_000), "no-op: still at genesis");
+        assert_eq!(r0_2, U112::from(1_000), "no-op: still at genesis");
     }
 
     /// ADR-006 slice 7: a too-deep reorg (target at/below the journal's
@@ -227,12 +237,12 @@ mod tests {
         let err = j.restore_before_block(5).unwrap_err();
         assert!(matches!(
             err,
-            crate::bot_core::state_history::JournalError::NoStatePriorToBlock { block: 5 }
+            ::degenbot_pools::state_history::JournalError::NoStatePriorToBlock { block: 5 }
         ));
         let err = j.restore_before_block(3).unwrap_err();
         assert!(matches!(
             err,
-            crate::bot_core::state_history::JournalError::NoStatePriorToBlock { block: 3 }
+            ::degenbot_pools::state_history::JournalError::NoStatePriorToBlock { block: 3 }
         ));
     }
 
@@ -257,6 +267,10 @@ mod tests {
         block_number: u64,
         removed: bool,
     ) -> Log {
+        // Test helper: emits a raw V2 `Sync(uint112,uint112)` log as 64
+        // bytes of ABI data (two 32-byte left-padded words). The decoder
+        // narrows to `U112` on decode — this helper keeps the `U256` ABI
+        // word shape so the bytes match on-chain log data.
         let data = {
             let mut data = Vec::with_capacity(64);
             data.extend_from_slice(&reserve0.to_be_bytes::<32>());
@@ -299,21 +313,25 @@ mod tests {
         update_block: u64,
     ) -> (Arc<Bot>, u64, Arc<CountingSubscriber>) {
         let bot = Arc::new(Bot::new(1));
-        let pool_id = bot.state.write().register_v2_pool(&RegisterV2PoolParams {
-            address: pool_addr,
-            token0: Address::from([0xa0u8; 20]),
-            token1: Address::from([0xa1u8; 20]),
-            reserve0: U256::from(1_000),
-            reserve1: U256::from(2_000),
-            fee_token0: (997, 1000),
-            fee_token1: (997, 1000),
-            factory: Address::from([0xf0u8; 20]),
-            update_block,
-            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
-            stable_swap: false,
-            fee_denominator: None,
-            ..Default::default()
-        });
+        let pool_id = bot
+            .state
+            .write()
+            .register_v2_pool(&RegisterV2PoolParams {
+                address: pool_addr,
+                token0: Address::from([0xa0u8; 20]),
+                token1: Address::from([0xa1u8; 20]),
+                reserve0: U112::from(1_000),
+                reserve1: U112::from(2_000),
+                fee_token0: (997, 1000),
+                fee_token1: (997, 1000),
+                factory: Address::from([0xf0u8; 20]),
+                update_block,
+                variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+                stable_swap: false,
+                fee_denominator: None,
+                ..Default::default()
+            })
+            .expect("test setup: V2 registration");
         let counting = Arc::new(CountingSubscriber {
             notifies: Mutex::new(0),
         });
@@ -421,22 +439,26 @@ mod tests {
     ) -> (Arc<Bot>, u64, Arc<CountingSubscriber>) {
         use crate::bot_core::{PoolTickCoverage, RegisterV3PoolParams};
         let bot = Arc::new(Bot::new(1));
-        let pool_id = bot.state.write().register_v3_pool(&RegisterV3PoolParams {
-            address: pool_addr,
-            token0: Address::from([0xa0u8; 20]),
-            token1: Address::from([0xa1u8; 20]),
-            fee: 3_000,
-            tick_spacing: 60,
-            factory: Address::from([0xf0u8; 20]),
-            sqrt_price_x96: U256::from(1u128) << 96,
-            liquidity: 1_000_000,
-            tick: 0,
-            tick_data: HashMap::new(),
-            update_block,
-            coverage: PoolTickCoverage::Sparse,
-            fetcher: None,
-            ..Default::default()
-        });
+        let pool_id = bot
+            .state
+            .write()
+            .register_v3_pool(&RegisterV3PoolParams {
+                address: pool_addr,
+                token0: Address::from([0xa0u8; 20]),
+                token1: Address::from([0xa1u8; 20]),
+                fee: 3_000,
+                tick_spacing: 60,
+                factory: Address::from([0xf0u8; 20]),
+                sqrt_price_x96: U256::from(1u128) << 96,
+                liquidity: 1_000_000,
+                tick: 0,
+                tick_data: HashMap::new(),
+                update_block,
+                coverage: PoolTickCoverage::Sparse,
+                fetcher: None,
+                ..Default::default()
+            })
+            .expect("test setup: V3 registration");
         let counting = Arc::new(CountingSubscriber {
             notifies: Mutex::new(0),
         });
@@ -617,7 +639,7 @@ mod tests {
     /// tick = 0.
     fn bot_with_v4(
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         update_block: u64,
     ) -> (Arc<Bot>, u64, Arc<CountingSubscriber>) {
         use crate::bot_core::{PoolTickCoverage, RegisterV4PoolParams, V4PoolKey};
@@ -660,7 +682,7 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn make_v4_swap_log(
         pool_manager: Address,
-        pool_id: degenbot_decoders::v4_swap_decoder::PoolId,
+        pool_id: degenbot_decoders::v4_swap_decoder::V4PoolId,
         sqrt_price_x96: U256,
         liquidity: u128,
         tick: i32,
@@ -712,7 +734,7 @@ mod tests {
     #[test]
     fn dispatch_reorg_log_v4_single_delta_at_target_restores_to_registration() {
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xeeu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xeeu8; 32];
         let (bot, pool_id, sub) = bot_with_v4(pool_manager, pool_id_bytes, 5);
         let count = || *sub.notifies.lock().unwrap();
 
@@ -769,7 +791,7 @@ mod tests {
     #[test]
     fn dispatch_reorg_log_v4_empty_journal_is_too_deep() {
         let pool_manager = Address::from([0x44u8; 20]);
-        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::PoolId = [0xefu8; 32];
+        let pool_id_bytes: degenbot_decoders::v4_swap_decoder::V4PoolId = [0xefu8; 32];
         let (bot, pool_id, _sub) = bot_with_v4(pool_manager, pool_id_bytes, 5);
         assert!(bot
             .state

@@ -49,11 +49,11 @@ from typing import Any, Self
 
 import pytest
 
-from degenbot.anvil_fork import AnvilFork
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import MAX_INT256
-from degenbot.degenbot_rs import PyBot
 from degenbot.exceptions.pool import IncompleteSwap
+from degenbot.fork import AnvilFork
 from degenbot.uniswap.v3_libraries import MAX_SQRT_RATIO, MIN_SQRT_RATIO
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 
@@ -62,6 +62,7 @@ from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v3_pool_factory import make_v3_pool
+from tests.helpers.w3_contract import make_contract
 
 UNISWAP_V3_PARITY_BLOCK = 24_407_242  # tip minus ~1M
 
@@ -301,10 +302,7 @@ def test_cached_calculations_v3_wbtc_weth(golden_factory) -> None:
     with _RecordFork(recording=golden.is_recording) as ctx:
         if golden.is_recording:
             assert ctx.fork is not None
-            ctx.contract = ctx.fork.w3.eth.contract(
-                address=UNISWAP_V3_QUOTER_ADDRESS,
-                abi=_QUOTER_ABI,
-            )
+            ctx.contract = make_contract(ctx.fork.http_url, UNISWAP_V3_QUOTER_ADDRESS, _QUOTER_ABI)
         for method, key, token_in, token_out, amount, sqrt_limit in cases:
             oracle = golden.check(
                 key,

@@ -9,6 +9,7 @@
 
 use crate::bot::token::PyErc20Token;
 use crate::prelude::*;
+use alloy::primitives::U256;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -48,21 +49,44 @@ struct PyTickWordFetcher {
 /// (same as the per-call path this replaces).
 pub(crate) fn make_tick_fetcher(
     callback: pyo3::Py<pyo3::PyAny>,
-) -> std::sync::Arc<dyn degenbot_bot::bot_core::tick_fetch::TickWordFetcher> {
+) -> std::sync::Arc<dyn degenbot_pools::tick_fetch::TickWordFetcher> {
     std::sync::Arc::new(PyTickWordFetcher { callback })
 }
 
-impl degenbot_bot::bot_core::tick_fetch::TickWordFetcher for PyTickWordFetcher {
+/// Construct a Chain-arm `TickBootstrapRpc` from a `PyBotIo`'s native alloy
+/// provider, if present (5NT2OC / NOD4PS — Option B: route the Chain arm
+/// through the pure-Rust [`AlloyTickBootstrapRpc`]).
+///
+/// Returns `None` when the `PyBotIo` has no native alloy provider (legacy
+/// Python test doubles) → the caller passes `chain=None` to the assemble helper,
+/// preserving the current (no-Chain-arm) behavior.
+///
+/// The returned `Arc<dyn TickBootstrapRpc>` is `Send + Sync` + holds no GIL
+/// state — the full choreography (bitmap decode, bit enumeration, per-tick
+/// `eth_call`) runs in pure Rust under `py.detach`, no per-RPC GIL re-entry
+/// (the architectural end state: Rust is the engine; Python is a driver
+/// shell, not a co-implementation).
+#[must_use]
+pub(crate) fn make_tick_bootstrap_rpc(
+    io: &crate::bot::py_bot_io::PyBotIo,
+) -> Option<std::sync::Arc<dyn degenbot_pools::tick_fetch::TickBootstrapRpc>> {
+    io.alloy_provider().map(|provider| {
+        std::sync::Arc::new(degenbot_rpc::AlloyTickBootstrapRpc::new(provider))
+            as std::sync::Arc<dyn degenbot_pools::tick_fetch::TickBootstrapRpc>
+    })
+}
+
+impl degenbot_pools::tick_fetch::TickWordFetcher for PyTickWordFetcher {
     fn fetch_missing_tick_word(
         &self,
         _pool_id: u64,
         word: i32,
         block: u64,
     ) -> Result<
-        degenbot_bot::bot_core::tick_fetch::FetchedTickWord,
-        degenbot_bot::bot_core::tick_fetch::FetchTickWordError,
+        degenbot_pools::tick_fetch::FetchedTickWord,
+        degenbot_pools::tick_fetch::FetchTickWordError,
     > {
-        use degenbot_bot::bot_core::tick_fetch::{FetchTickWordError, FetchedTickWord};
+        use degenbot_pools::tick_fetch::{FetchTickWordError, FetchedTickWord};
         Python::attach(|py| {
             let result = self
                 .callback
@@ -124,19 +148,17 @@ pub(crate) struct PyBalancerRateProvider {
 #[must_use]
 pub fn make_balancer_rate_provider(
     callback: pyo3::Py<pyo3::PyAny>,
-) -> Arc<dyn degenbot_bot::bot_core::rate_provider::BalancerRateProvider> {
+) -> Arc<dyn degenbot_pools::rate_provider::BalancerRateProvider> {
     Arc::new(PyBalancerRateProvider { callback })
 }
 
-impl degenbot_bot::bot_core::rate_provider::BalancerRateProvider for PyBalancerRateProvider {
+impl degenbot_pools::rate_provider::BalancerRateProvider for PyBalancerRateProvider {
     fn get_rates(
         &self,
         block_identifier: Option<u64>,
-    ) -> Result<
-        Vec<alloy::primitives::U256>,
-        degenbot_bot::bot_core::rate_provider::RateProviderError,
-    > {
-        use degenbot_bot::bot_core::rate_provider::RateProviderError;
+    ) -> Result<Vec<alloy::primitives::U256>, degenbot_pools::rate_provider::RateProviderError>
+    {
+        use degenbot_pools::rate_provider::RateProviderError;
         pyo3::Python::attach(|py| {
             let py_none = pyo3::types::PyNone::get(py);
             let result = match block_identifier {
@@ -188,15 +210,15 @@ pub(crate) struct PyCurveDataProvider {
 #[must_use]
 pub fn make_curve_data_provider(
     callback: pyo3::Py<pyo3::PyAny>,
-) -> Arc<dyn degenbot_bot::bot_core::curve_data_provider::CurveDataProvider> {
+) -> Arc<dyn degenbot_pools::curve_data_provider::CurveDataProvider> {
     Arc::new(PyCurveDataProvider { callback })
 }
 
-impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveDataProvider {
+impl degenbot_pools::curve_data_provider::CurveDataProvider for PyCurveDataProvider {
     fn block_number(
         &self,
-    ) -> Result<u64, degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError> {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<u64, degenbot_pools::curve_data_provider::CurveDataProviderError> {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let result = self
                 .callback
@@ -212,8 +234,8 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
     fn block_timestamp(
         &self,
         block_number: u64,
-    ) -> Result<u64, degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError> {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<u64, degenbot_pools::curve_data_provider::CurveDataProviderError> {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let result = self
                 .callback
@@ -231,11 +253,9 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
         token_address: alloy::primitives::Address,
         holder_address: alloy::primitives::Address,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let tok = address_utils::address_to_checksum_string(&token_address);
             let holder = address_utils::address_to_checksum_string(&holder_address);
@@ -254,11 +274,9 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
         &self,
         token_address: alloy::primitives::Address,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let tok = address_utils::address_to_checksum_string(&token_address);
             let result = self
@@ -277,7 +295,7 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
         block_number: u64,
     ) -> Result<
         Vec<alloy::primitives::U256>,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+        degenbot_pools::curve_data_provider::CurveDataProviderError,
     > {
         self.read_u256_vec("lending_rates", block_number)
     }
@@ -285,20 +303,16 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
     fn d(
         &self,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
         self.read_u256("d", block_number)
     }
 
     fn gamma(
         &self,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
         self.read_u256("gamma", block_number)
     }
 
@@ -307,7 +321,7 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
         block_number: u64,
     ) -> Result<
         Vec<alloy::primitives::U256>,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+        degenbot_pools::curve_data_provider::CurveDataProviderError,
     > {
         self.read_u256_vec("price_scale", block_number)
     }
@@ -317,7 +331,7 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
         block_number: u64,
     ) -> Result<
         Vec<alloy::primitives::U256>,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+        degenbot_pools::curve_data_provider::CurveDataProviderError,
     > {
         self.read_u256_vec("admin_balances", block_number)
     }
@@ -325,18 +339,16 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
     fn redemption_price(
         &self,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
         self.read_u256("redemption_price", block_number)
     }
 
     fn base_cache_updated(
         &self,
         block_number: u64,
-    ) -> Result<u64, degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError> {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<u64, degenbot_pools::curve_data_provider::CurveDataProviderError> {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let result = self
                 .callback
@@ -352,20 +364,16 @@ impl degenbot_bot::bot_core::curve_data_provider::CurveDataProvider for PyCurveD
     fn base_virtual_price(
         &self,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
         self.read_u256("base_virtual_price", block_number)
     }
 
     fn virtual_price(
         &self,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
         self.read_u256("virtual_price", block_number)
     }
 }
@@ -376,11 +384,9 @@ impl PyCurveDataProvider {
         &self,
         method: &str,
         block_number: u64,
-    ) -> Result<
-        alloy::primitives::U256,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
-    > {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+    ) -> Result<alloy::primitives::U256, degenbot_pools::curve_data_provider::CurveDataProviderError>
+    {
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let result = self
                 .callback
@@ -400,9 +406,9 @@ impl PyCurveDataProvider {
         block_number: u64,
     ) -> Result<
         Vec<alloy::primitives::U256>,
-        degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+        degenbot_pools::curve_data_provider::CurveDataProviderError,
     > {
-        use degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError;
+        use degenbot_pools::curve_data_provider::CurveDataProviderError;
         pyo3::Python::attach(|py| {
             let result = self
                 .callback
@@ -428,7 +434,7 @@ impl PyCurveDataProvider {
 /// A thin Python handle to a pool registered in `BotState`.
 ///
 /// Does not own any state — all data lives in Rust inside `BotState`.
-#[pyclass(skip_from_py_object)]
+#[pyclass(skip_from_py_object, module = "degenbot._ffi")]
 pub struct PyLiquidityPool {
     core: Arc<parking_lot::RwLock<BotState>>,
     pool_id: u64,
@@ -445,8 +451,7 @@ impl PyLiquidityPool {
     /// re-entrant) provider call.
     fn curve_provider(
         &self,
-    ) -> Option<std::sync::Arc<dyn degenbot_bot::bot_core::curve_data_provider::CurveDataProvider>>
-    {
+    ) -> Option<std::sync::Arc<dyn degenbot_pools::curve_data_provider::CurveDataProvider>> {
         let core = self.core.read();
         core.get_curve_pool(self.pool_id)?.data_provider.clone()
     }
@@ -457,10 +462,10 @@ impl PyLiquidityPool {
         &self,
         py: Python<'_>,
         f: impl Fn(
-            &std::sync::Arc<dyn degenbot_bot::bot_core::curve_data_provider::CurveDataProvider>,
+            &std::sync::Arc<dyn degenbot_pools::curve_data_provider::CurveDataProvider>,
         ) -> Result<
             Vec<alloy::primitives::U256>,
-            degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+            degenbot_pools::curve_data_provider::CurveDataProviderError,
         >,
     ) -> PyResult<Py<PyAny>> {
         let Some(provider) = self.curve_provider() else {
@@ -480,10 +485,10 @@ impl PyLiquidityPool {
         &self,
         py: Python<'_>,
         f: impl Fn(
-            &std::sync::Arc<dyn degenbot_bot::bot_core::curve_data_provider::CurveDataProvider>,
+            &std::sync::Arc<dyn degenbot_pools::curve_data_provider::CurveDataProvider>,
         ) -> Result<
             alloy::primitives::U256,
-            degenbot_bot::bot_core::curve_data_provider::CurveDataProviderError,
+            degenbot_pools::curve_data_provider::CurveDataProviderError,
         >,
     ) -> PyResult<Option<Py<PyAny>>> {
         let Some(provider) = self.curve_provider() else {
@@ -839,7 +844,7 @@ impl PyLiquidityPool {
         let r = {
             let core = self.core.read();
             core.get_v2_pool_state(self.pool_id)
-                .map(|s| s.reserve0)
+                .map(|s| s.reserve0.to::<U256>())
                 .unwrap_or_default()
         };
         Ok(crate::conversion::alloy::u256_to_py(py, &r)?.unbind())
@@ -851,7 +856,7 @@ impl PyLiquidityPool {
         let r = {
             let core = self.core.read();
             core.get_v2_pool_state(self.pool_id)
-                .map(|s| s.reserve1)
+                .map(|s| s.reserve1.to::<U256>())
                 .unwrap_or_default()
         };
         Ok(crate::conversion::alloy::u256_to_py(py, &r)?.unbind())
@@ -1183,7 +1188,7 @@ impl PyLiquidityPool {
         let spx = {
             let core = self.core.read();
             core.get_v3_or_v4_pool(self.pool_id)
-                .map(degenbot_bot::bot_core::V3FamilyPool::sqrt_price_x96)
+                .map(degenbot_bot::bot_core::ConcentratedLiquidityPool::sqrt_price_x96)
                 .unwrap_or_default()
         };
         Ok(crate::conversion::alloy::u256_to_py(py, &spx)?.unbind())
@@ -1195,7 +1200,7 @@ impl PyLiquidityPool {
         self.core
             .read()
             .get_v3_or_v4_pool(self.pool_id)
-            .map(degenbot_bot::bot_core::V3FamilyPool::liquidity)
+            .map(degenbot_bot::bot_core::ConcentratedLiquidityPool::liquidity)
             .unwrap_or_default()
     }
 
@@ -1205,7 +1210,7 @@ impl PyLiquidityPool {
         self.core
             .read()
             .get_v3_or_v4_pool(self.pool_id)
-            .map(degenbot_bot::bot_core::V3FamilyPool::tick)
+            .map(degenbot_bot::bot_core::ConcentratedLiquidityPool::tick)
             .unwrap_or_default()
     }
 
@@ -1295,7 +1300,7 @@ impl PyLiquidityPool {
         let v = {
             let core = self.core.read();
             core.get_aerodrome_pool(self.pool_id)
-                .map(|s| s.reserve0)
+                .map(|s| s.reserve0.to::<U256>())
                 .unwrap_or_default()
         };
         Ok(crate::conversion::alloy::u256_to_py(py, &v)?.unbind())
@@ -1307,7 +1312,7 @@ impl PyLiquidityPool {
         let v = {
             let core = self.core.read();
             core.get_aerodrome_pool(self.pool_id)
-                .map(|s| s.reserve1)
+                .map(|s| s.reserve1.to::<U256>())
                 .unwrap_or_default()
         };
         Ok(crate::conversion::alloy::u256_to_py(py, &v)?.unbind())
@@ -1320,11 +1325,13 @@ impl PyLiquidityPool {
     /// WETH = 5e21), so the prior `to::<u64>()` conversion panicked on
     /// overflow.
     fn snapshot_aerodrome(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let snap = self
-            .core
-            .read()
-            .get_aerodrome_pool(self.pool_id)
-            .map(|s| (s.reserve0, s.reserve1, s.update_block));
+        let snap = self.core.read().get_aerodrome_pool(self.pool_id).map(|s| {
+            (
+                s.reserve0.to::<U256>(),
+                s.reserve1.to::<U256>(),
+                s.update_block,
+            )
+        });
         match snap {
             None => Ok(None),
             Some((reserve0, reserve1, block)) => {
@@ -1351,12 +1358,20 @@ impl PyLiquidityPool {
         reserve1: &Bound<'_, PyAny>,
         block_number: u64,
     ) -> PyResult<()> {
-        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
-        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
-        let _ =
-            self.core
-                .write()
-                .apply_aerodrome_sync_by_pool_id(self.pool_id, r0, r1, block_number);
+        let r0 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )
+        .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
+        let r1 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )
+        .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
+        let _ = self
+            .core
+            .write()
+            .apply_sync_by_pool_id(self.pool_id, r0, r1, block_number);
         Ok(())
     }
 
@@ -1476,18 +1491,31 @@ impl PyLiquidityPool {
         reserve1: &Bound<'_, PyAny>,
         block_number: u64,
     ) -> PyResult<()> {
-        let r0 = crate::conversion::alloy::extract_python_u256(reserve0)?;
-        let r1 = crate::conversion::alloy::extract_python_u256(reserve1)?;
+        let r0 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve0)?,
+            "reserve0",
+        )
+        .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
+        let r1 = degenbot_pools::spec_bounds::narrow_v2_reserve(
+            crate::conversion::alloy::extract_python_u256(reserve1)?,
+            "reserve1",
+        )
+        .map_err(|sv| crate::bot::engine::SpecViolationError::new_err(format!("{sv}")))?;
         let _ = self
             .core
             .write()
-            .apply_v2_sync_by_pool_id(self.pool_id, r0, r1, block_number);
+            .apply_sync_by_pool_id(self.pool_id, r0, r1, block_number);
         Ok(())
     }
 
     /// Number of deltas in the V2 reorg journal (genesis + transitions).
     fn journal_len(&self) -> usize {
-        self.core.read().v2_journal_len(self.pool_id)
+        let core = self.core.read();
+        if core.get_v2_pool_state(self.pool_id).is_none() {
+            0
+        } else {
+            core.pool_journal_len(self.pool_id).unwrap_or(0)
+        }
     }
 
     /// Discard V2 reorg journal deltas earlier than `block`.
@@ -1497,9 +1525,12 @@ impl PyLiquidityPool {
     ///         every known state).
     #[pyo3(signature = (block))]
     fn discard_before_block(&self, block: u64) -> PyResult<()> {
-        self.core
-            .write()
-            .v2_discard_before_block(self.pool_id, block)
+        let mut core = self.core.write();
+        if core.get_v2_pool_state(self.pool_id).is_none() {
+            return Ok(());
+        }
+        core.discard_pool_before_block(self.pool_id, block)
+            .unwrap_or(Ok(()))
             .map_err(journal_err_to_py)
     }
 
@@ -1512,25 +1543,37 @@ impl PyLiquidityPool {
     ///     `ValueError`: If `block` is at or before the registration block.
     #[pyo3(signature = (block))]
     fn restore_before_block(&self, py: Python<'_>, block: u64) -> PyResult<Option<Py<PyAny>>> {
-        let result = {
+        // Read-after-restore (ADR-016): post-restore reserves == the
+        // before-values the per-family tuple previously carried.
+        let (r0, r1, blk) = {
             let mut core = self.core.write();
-            core.v2_restore_before_block(self.pool_id, block)
-        };
-        match result {
-            None => Ok(None),
-            Some(Err(e)) => Err(journal_err_to_py(e)),
-            Some(Ok((r0, r1, blk))) => {
-                let tuple = pyo3::types::PyTuple::new(
-                    py,
-                    [
-                        crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
-                        crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
-                        blk.into_pyobject(py)?.into_any().unbind(),
-                    ],
-                )?;
-                Ok(Some(tuple.into_any().unbind()))
+            if core.get_v2_pool_state(self.pool_id).is_none() {
+                return Ok(None);
             }
-        }
+            match core.restore_pool_before_block(self.pool_id, block) {
+                None => return Ok(None),
+                Some(Err(e)) => return Err(journal_err_to_py(e)),
+                Some(Ok(())) => {
+                    let state = core
+                        .get_v2_pool_state(self.pool_id)
+                        .expect("V2 pool confirmed above");
+                    (
+                        state.reserve0.to::<alloy::primitives::U256>(),
+                        state.reserve1.to::<alloy::primitives::U256>(),
+                        state.update_block,
+                    )
+                }
+            }
+        };
+        let tuple = pyo3::types::PyTuple::new(
+            py,
+            [
+                crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
+                crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
+                blk.into_pyobject(py)?.into_any().unbind(),
+            ],
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 
     // --- Aerodrome V2 reorg journal ---
@@ -1541,9 +1584,12 @@ impl PyLiquidityPool {
     ///     `ValueError`: If the target is past the newest delta.
     #[pyo3(signature = (block))]
     fn discard_aerodrome_before_block(&self, block: u64) -> PyResult<()> {
-        self.core
-            .write()
-            .aerodrome_discard_before_block(self.pool_id, block)
+        let mut core = self.core.write();
+        if core.get_aerodrome_pool(self.pool_id).is_none() {
+            return Ok(());
+        }
+        core.discard_pool_before_block(self.pool_id, block)
+            .unwrap_or(Ok(()))
             .map_err(journal_err_to_py)
     }
 
@@ -1560,25 +1606,36 @@ impl PyLiquidityPool {
         py: Python<'_>,
         block: u64,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let result = {
+        // Read-after-restore (ADR-016).
+        let (r0, r1, blk) = {
             let mut core = self.core.write();
-            core.aerodrome_restore_before_block(self.pool_id, block)
-        };
-        match result {
-            None => Ok(None),
-            Some(Err(e)) => Err(journal_err_to_py(e)),
-            Some(Ok((r0, r1, blk))) => {
-                let tuple = pyo3::types::PyTuple::new(
-                    py,
-                    [
-                        crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
-                        crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
-                        blk.into_pyobject(py)?.into_any().unbind(),
-                    ],
-                )?;
-                Ok(Some(tuple.into_any().unbind()))
+            if core.get_aerodrome_pool(self.pool_id).is_none() {
+                return Ok(None);
             }
-        }
+            match core.restore_pool_before_block(self.pool_id, block) {
+                None => return Ok(None),
+                Some(Err(e)) => return Err(journal_err_to_py(e)),
+                Some(Ok(())) => {
+                    let state = core
+                        .get_aerodrome_pool(self.pool_id)
+                        .expect("Aerodrome pool confirmed above");
+                    (
+                        state.reserve0.to::<alloy::primitives::U256>(),
+                        state.reserve1.to::<alloy::primitives::U256>(),
+                        state.update_block,
+                    )
+                }
+            }
+        };
+        let tuple = pyo3::types::PyTuple::new(
+            py,
+            [
+                crate::conversion::alloy::u256_to_py(py, &r0)?.unbind(),
+                crate::conversion::alloy::u256_to_py(py, &r1)?.unbind(),
+                blk.into_pyobject(py)?.into_any().unbind(),
+            ],
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 
     // --- V3 mutations (plan-101 slice 8a) ---
@@ -1772,13 +1829,12 @@ impl PyLiquidityPool {
     fn discard_v3_before_block(&self, block: u64) -> PyResult<()> {
         let mut core = self.core.write();
         // J63J3N: only apply when this handle points at a V3/V4 pool —
-        // otherwise silently no-op (avoids corrupting a V2's journal from a
-        // V3-shaped companion). The family dispatcher routes V4 to its own
-        // journal method; V2 / unregistered no-ops (V3's contract).
+        // otherwise silently no-op. Unified dispatcher (ADR-016).
         if core.get_v3_or_v4_pool(self.pool_id).is_none() {
             return Ok(());
         }
-        core.discard_v3_or_v4_before_block(self.pool_id, block)
+        core.discard_pool_before_block(self.pool_id, block)
+            .unwrap_or(Ok(()))
             .map_err(journal_err_to_py)
     }
 
@@ -1791,33 +1847,40 @@ impl PyLiquidityPool {
     ///     `ValueError`: If `block` is at or before the registration block.
     #[pyo3(signature = (block))]
     fn restore_v3_before_block(&self, py: Python<'_>, block: u64) -> PyResult<Option<Py<PyAny>>> {
-        let result = {
+        // Read-after-restore (ADR-016 D4): the trait returns `()`; the
+        // post-restore scalar fields ARE the before-values the
+        // `V3RestoreResult.scalar_priors` previously carried.
+        let (sqrt_p, liq, tick, blk) = {
             let mut core = self.core.write();
             if core.get_v3_or_v4_pool(self.pool_id).is_none() {
                 return Ok(None);
             }
-            core.restore_v3_or_v4_before_block(self.pool_id, block)
-        };
-        match result {
-            None => Ok(None),
-            Some(restore) => {
-                let p = restore
-                    .scalar_priors
-                    .as_ref()
-                    .expect("post-restore scalar_priors must be Some");
-                let tuple = pyo3::types::PyTuple::new(
-                    py,
-                    [
-                        crate::conversion::alloy::u256_to_py(py, &p.sqrt_price_x96_before)?
-                            .unbind(),
-                        p.liquidity_before.into_pyobject(py)?.into_any().unbind(),
-                        p.tick_before.into_pyobject(py)?.into_any().unbind(),
-                        restore.block.into_pyobject(py)?.into_any().unbind(),
-                    ],
-                )?;
-                Ok(Some(tuple.into_any().unbind()))
+            match core.restore_pool_before_block(self.pool_id, block) {
+                None => return Ok(None),
+                Some(Err(e)) => return Err(journal_err_to_py(e)),
+                Some(Ok(())) => {
+                    let s = core
+                        .get_v3_or_v4_pool(self.pool_id)
+                        .expect("V3/V4 pool confirmed above");
+                    (
+                        s.sqrt_price_x96(),
+                        s.liquidity(),
+                        s.tick(),
+                        s.update_block(),
+                    )
+                }
             }
-        }
+        };
+        let tuple = pyo3::types::PyTuple::new(
+            py,
+            [
+                crate::conversion::alloy::u256_to_py(py, &sqrt_p)?.unbind(),
+                liq.into_pyobject(py)?.into_any().unbind(),
+                tick.into_pyobject(py)?.into_any().unbind(),
+                blk.into_pyobject(py)?.into_any().unbind(),
+            ],
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 
     /// Snapshot of the V3/V4 `tick_data` `HashMap` as a Python dict.
@@ -2423,7 +2486,7 @@ impl PyLiquidityPool {
         Ok(self
             .core
             .write()
-            .apply_curve_balance_update_by_pool_id(self.pool_id, bal, block_number)
+            .apply_balance_update_by_pool_id(self.pool_id, bal, block_number)
             .is_some())
     }
 
@@ -2515,7 +2578,7 @@ impl PyLiquidityPool {
         Ok(self
             .core
             .write()
-            .apply_balancer_weighted_balance_update_by_pool_id(self.pool_id, bal, block_number)
+            .apply_balance_update_by_pool_id(self.pool_id, bal, block_number)
             .is_some())
     }
 
@@ -2775,7 +2838,7 @@ impl PyLiquidityPool {
         Ok(self
             .core
             .write()
-            .apply_balancer_stable_balance_update_by_pool_id(self.pool_id, bal, block_number)
+            .apply_balance_update_by_pool_id(self.pool_id, bal, block_number)
             .is_some())
     }
 }
@@ -2825,4 +2888,270 @@ fn extract_tick_data(
             )
         })
         .collect())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Prototype structural `Pool` handle (`PyPool`) — all families.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Thin Python handle to a pool, exposing a structural (not identity-based)
+/// interface that mirrors the Rust [`degenbot_pools::Pool`] handle.
+#[pyclass(skip_from_py_object, module = "degenbot._ffi")]
+pub struct PyPool {
+    core: Arc<parking_lot::RwLock<BotState>>,
+    pool_id: u64,
+}
+
+impl PyPool {
+    pub(crate) const fn new(core: Arc<parking_lot::RwLock<BotState>>, pool_id: u64) -> Self {
+        Self { core, pool_id }
+    }
+
+    fn with_pool<T>(&self, f: impl FnOnce(degenbot_pools::Pool<'_>) -> T) -> T {
+        let core = self.core.read();
+        let entry = core
+            .pool_entry(self.pool_id)
+            .expect("PyPool references a registered pool");
+        f(degenbot_pools::Pool::new(entry))
+    }
+}
+
+#[pymethods]
+impl PyPool {
+    /// Structural family: one of ``"reserve_pair"``, ``"concentrated_liquidity"``,
+    /// ``"balance_vector"``.
+    fn structure(&self) -> String {
+        self.with_pool(|pool| match pool.structure() {
+            degenbot_pools::Structure::ReservePair => "reserve_pair".to_string(),
+            degenbot_pools::Structure::ConcentratedLiquidity => {
+                "concentrated_liquidity".to_string()
+            }
+            degenbot_pools::Structure::BalanceVector => "balance_vector".to_string(),
+        })
+    }
+
+    /// Identity as a simple tuple ``(family, variant)``.
+    ///
+    /// * reserve-pair: ``("reserve_pair", "uniswap_v2" | "aerodrome_v2_stable" | "aerodrome_v2_volatile")``
+    /// * concentrated-liquidity: ``("concentrated_liquidity", "uniswap_v3" | "uniswap_v4")``
+    /// * balance-vector: ``("balance_vector", "curve" | "balancer_weighted" | "balancer_stable")``
+    fn identity(&self) -> (String, Option<String>) {
+        self.with_pool(|pool| match pool.identity() {
+            degenbot_pools::Identity::ReservePair { variant } => (
+                "reserve_pair".to_string(),
+                Some(match variant {
+                    degenbot_pools::ReservePairVariant::UniswapV2 => "uniswap_v2".to_string(),
+                    degenbot_pools::ReservePairVariant::AerodromeV2 { stable } => {
+                        format!(
+                            "aerodrome_v2_{}",
+                            if stable { "stable" } else { "volatile" }
+                        )
+                    }
+                }),
+            ),
+            degenbot_pools::Identity::ConcentratedLiquidity { variant } => (
+                "concentrated_liquidity".to_string(),
+                Some(match variant {
+                    degenbot_pools::ConcentratedLiquidityVariant::UniswapV3 => {
+                        "uniswap_v3".to_string()
+                    }
+                    degenbot_pools::ConcentratedLiquidityVariant::UniswapV4 => {
+                        "uniswap_v4".to_string()
+                    }
+                }),
+            ),
+            degenbot_pools::Identity::BalanceVector { variant } => (
+                "balance_vector".to_string(),
+                Some(match variant {
+                    degenbot_pools::BalanceVectorVariant::Curve => "curve".to_string(),
+                    degenbot_pools::BalanceVectorVariant::BalancerWeighted => {
+                        "balancer_weighted".to_string()
+                    }
+                    degenbot_pools::BalanceVectorVariant::BalancerStable => {
+                        "balancer_stable".to_string()
+                    }
+                }),
+            ),
+        })
+    }
+
+    /// Reserve-pair structural view. Raises ``ValueError`` for non-reserve-pair pools.
+    fn reserve_pair(&self) -> PyResult<PyReservePairView> {
+        self.with_pool(|pool| match pool.reserve_pair() {
+            Some(view) => Ok(PyReservePairView {
+                token0: address_utils::address_to_checksum_string(&view.token0()),
+                token1: address_utils::address_to_checksum_string(&view.token1()),
+                reserve0: view.reserve0(),
+                reserve1: view.reserve1(),
+            }),
+            None => Err(pyo3::exceptions::PyValueError::new_err(
+                "pool is not a reserve-pair pool",
+            )),
+        })
+    }
+
+    /// Concentrated-liquidity structural view. Raises ``ValueError`` for non-CL pools.
+    fn concentrated_liquidity(&self) -> PyResult<PyConcentratedLiquidityView> {
+        self.with_pool(|pool| match pool.concentrated_liquidity() {
+            Some(view) => Ok(PyConcentratedLiquidityView {
+                token0: address_utils::address_to_checksum_string(&view.token0()),
+                token1: address_utils::address_to_checksum_string(&view.token1()),
+                fee: view.fee(),
+                tick_spacing: view.tick_spacing(),
+                sqrt_price_x96: view.sqrt_price_x96(),
+                liquidity: view.liquidity(),
+                tick: view.tick(),
+            }),
+            None => Err(pyo3::exceptions::PyValueError::new_err(
+                "pool is not a concentrated-liquidity pool",
+            )),
+        })
+    }
+
+    /// Balance-vector structural view. Raises ``ValueError`` for non-balance-vector pools.
+    fn balance_vector(&self) -> PyResult<PyBalanceVectorView> {
+        self.with_pool(|pool| match pool.balance_vector() {
+            Some(view) => Ok(PyBalanceVectorView {
+                tokens: view
+                    .tokens()
+                    .iter()
+                    .map(address_utils::address_to_checksum_string)
+                    .collect(),
+                balances: view.balances().to_vec(),
+            }),
+            None => Err(pyo3::exceptions::PyValueError::new_err(
+                "pool is not a balance-vector pool",
+            )),
+        })
+    }
+
+    /// Exact-input swap: return output amount, or ``None`` if not computable.
+    fn calculate_tokens_out(
+        &self,
+        py: Python<'_>,
+        zero_for_one: bool,
+        amount_in: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let amount_in = crate::conversion::alloy::extract_python_u256(amount_in)?;
+        let out = self.with_pool(|pool| pool.calculate_tokens_out(zero_for_one, amount_in));
+        Ok(out.map(|v| {
+            crate::conversion::alloy::u256_to_py(py, &v)
+                .unwrap()
+                .unbind()
+        }))
+    }
+}
+
+/// Read-only reserve-pair view exposed to Python.
+#[pyclass(module = "degenbot._ffi")]
+pub struct PyReservePairView {
+    token0: String,
+    token1: String,
+    reserve0: U256,
+    reserve1: U256,
+}
+
+#[pymethods]
+impl PyReservePairView {
+    #[getter]
+    fn token0(&self) -> String {
+        self.token0.clone()
+    }
+
+    #[getter]
+    fn token1(&self) -> String {
+        self.token1.clone()
+    }
+
+    #[getter]
+    fn reserve0(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        crate::conversion::alloy::u256_to_py(py, &self.reserve0).map(pyo3::Bound::unbind)
+    }
+
+    #[getter]
+    fn reserve1(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        crate::conversion::alloy::u256_to_py(py, &self.reserve1).map(pyo3::Bound::unbind)
+    }
+}
+
+/// Read-only concentrated-liquidity view exposed to Python.
+#[pyclass(module = "degenbot._ffi")]
+pub struct PyConcentratedLiquidityView {
+    token0: String,
+    token1: String,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: U256,
+    liquidity: u128,
+    tick: i32,
+}
+
+#[pymethods]
+impl PyConcentratedLiquidityView {
+    #[getter]
+    fn token0(&self) -> String {
+        self.token0.clone()
+    }
+
+    #[getter]
+    fn token1(&self) -> String {
+        self.token1.clone()
+    }
+
+    #[getter]
+    fn fee(&self) -> u32 {
+        self.fee
+    }
+
+    #[getter]
+    fn tick_spacing(&self) -> i32 {
+        self.tick_spacing
+    }
+
+    #[getter]
+    fn sqrt_price_x96(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        crate::conversion::alloy::u256_to_py(py, &self.sqrt_price_x96).map(pyo3::Bound::unbind)
+    }
+
+    #[getter]
+    fn liquidity(&self) -> u128 {
+        self.liquidity
+    }
+
+    #[getter]
+    fn tick(&self) -> i32 {
+        self.tick
+    }
+}
+
+/// Read-only balance-vector view exposed to Python.
+#[pyclass(module = "degenbot._ffi")]
+pub struct PyBalanceVectorView {
+    tokens: Vec<String>,
+    balances: Vec<U256>,
+}
+
+#[pymethods]
+impl PyBalanceVectorView {
+    #[getter]
+    fn tokens(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(pyo3::types::PyList::new(py, self.tokens.clone())?
+            .into_any()
+            .unbind())
+    }
+
+    #[getter]
+    fn balances(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let py_vals: Vec<Py<PyAny>> = self
+            .balances
+            .iter()
+            .map(|b| crate::conversion::alloy::u256_to_py(py, b).map(pyo3::Bound::unbind))
+            .collect::<PyResult<_>>()?;
+        Ok(pyo3::types::PyList::new(py, py_vals)?.into_any().unbind())
+    }
+
+    #[getter]
+    fn n_tokens(&self) -> usize {
+        self.tokens.len()
+    }
 }

@@ -23,7 +23,6 @@ import pytest
 from eth_abi import encode as abi_encode
 from hexbytes import HexBytes
 from sqlalchemy import select
-from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli.pool_updater_configs import (
@@ -42,7 +41,7 @@ from degenbot.database.models.pools import (
     UniswapV4PoolTable,
 )
 from degenbot.database.operations import create_new_sqlite_database, get_scoped_sqlite_session
-from degenbot.degenbot_rs import (
+from degenbot.db import (
     db_fetch_exchange,
     db_fetch_exchange_by_name,
     db_set_exchange_active,
@@ -50,6 +49,7 @@ from degenbot.degenbot_rs import (
     db_upsert_exchange,
     db_upsert_pool_manager,
 )
+from degenbot.types.rpc_types import LogReceipt
 
 if TYPE_CHECKING:
     import pathlib

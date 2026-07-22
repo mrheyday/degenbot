@@ -25,14 +25,13 @@ import eth_abi.abi
 from degenbot.builders.camelot_builder import CamelotBuilder
 from degenbot.camelot.pools import CamelotLiquidityPool
 from hexbytes import HexBytes
-from web3 import Web3
 
 from degenbot.aerodrome.pools import AerodromeV2Pool
 from degenbot.builders.aerodrome_v2_builder import AerodromeV2Builder
 from degenbot.builders.context import BuilderContext
 from degenbot.builders.erc20_builder import Erc20Builder
-from degenbot.builders.pool_io import SyncPoolIO
 from degenbot.builders.request import BuildPoolRequest
+from degenbot.crypto import function_selector
 from degenbot.database.session_manager import DatabaseSessionManager
 from degenbot.erc20 import Erc20Token
 from degenbot.registry import PoolRegistry, TokenRegistry
@@ -52,7 +51,7 @@ class FakeProvider:
     def __init__(self, responses: dict[str, bytes]) -> None:
         self._responses = responses
 
-    def call(self, *, to: str, data: bytes, block: int | None = None) -> HexBytes:
+    def call(self, to: str, data: bytes, block: int | None = None) -> HexBytes:
         selector = data[:4].hex()
         if selector in self._responses:
             return HexBytes(self._responses[selector])
@@ -65,7 +64,7 @@ class FakeProvider:
 
 def _selector(signature: str) -> str:
     """Return the 4-byte function selector as a hex string (no 0x prefix)."""
-    return Web3.keccak(text=signature)[:4].hex()
+    return function_selector(signature).hex()
 
 
 def _make_erc20(address: str, chain_id: int = 42161) -> Erc20Token:
@@ -167,7 +166,7 @@ class TestAerodromeV2BuilderWithPoolIO:
     def test_build_uses_io(self) -> None:
         """When io= is passed to build(), the builder uses it for I/O."""
         provider = _aerodrome_provider()
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_aerodrome_builder()
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert isinstance(pool, AerodromeV2Pool)
@@ -182,7 +181,7 @@ class TestAerodromeV2BuilderConstruction:
     def test_build_aerodrome_v2_returns_pool(self) -> None:
         """build() should return an AerodromeV2Pool instance."""
         provider = _aerodrome_provider()
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_aerodrome_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert isinstance(pool, AerodromeV2Pool)
@@ -190,7 +189,7 @@ class TestAerodromeV2BuilderConstruction:
     def test_build_aerodrome_v2_fetches_stable_and_fee(self) -> None:
         """build() should fetch stable and fee from chain."""
         provider = _aerodrome_provider(stable=True, fee=50)
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_aerodrome_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert pool.stable is True
@@ -199,7 +198,7 @@ class TestAerodromeV2BuilderConstruction:
     def test_build_aerodrome_v2_volatile_pool(self) -> None:
         """build() with stable=False should create a volatile pool."""
         provider = _aerodrome_provider(stable=False, fee=30)
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_aerodrome_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert pool.stable is False
@@ -237,7 +236,7 @@ class TestCamelotBuilderConstruction:
     def test_build_camelot_returns_camelot_pool(self) -> None:
         """build() should return a CamelotLiquidityPool instance."""
         provider = _camelot_provider()
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_camelot_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert isinstance(pool, CamelotLiquidityPool)
@@ -248,7 +247,7 @@ class TestCamelotBuilderConstruction:
         provider = _camelot_provider(
             stable_swap=True, fee_denominator=1000, fee_token0=5, fee_token1=7
         )
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_camelot_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert pool.stable_swap is True
@@ -259,7 +258,7 @@ class TestCamelotBuilderConstruction:
     def test_build_camelot_stable_swap_false(self) -> None:
         """build() with stable_swap=False should set the attribute accordingly."""
         provider = _camelot_provider(stable_swap=False)
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_camelot_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert pool.stable_swap is False
@@ -267,7 +266,7 @@ class TestCamelotBuilderConstruction:
     def test_build_camelot_sets_fee_as_fraction(self) -> None:
         """build() should set fee_token0/fee_token1 as Fractions."""
         provider = _camelot_provider(fee_denominator=10000, fee_token0=30, fee_token1=30)
-        io = SyncPoolIO(provider)
+        io = provider
         builder = _make_camelot_builder(provider)
         pool = builder.build(self.POOL_ADDRESS, io=io, request=BuildPoolRequest(silent=True))
         assert isinstance(pool.fee_token0, Fraction)

@@ -1,7 +1,14 @@
-"""Fake ProviderAdapter for Curve pool detection tests.
+"""Fake AlloyProvider for Curve pool detection tests.
 
 Provides a configurable fake that returns pre-programmed responses to
 provider.call_raw() based on the method selector in the calldata.
+
+Post ADR-005 slice-14 collapse: ``SyncPoolIO`` is deleted. The Curve
+detection modules use the generic ``io.call_raw()`` / ``io.get_block()``
+surface (they were not collapsed to ``fetch_curve_*``), and
+``FakeCurveBackend`` already duck-types that surface — so it serves as
+the ``io`` directly. ``make_fake_pool_io`` returns it typed as ``Any``
+(builders never ``isinstance(io, PyBotIo)``; they duck-type the calls).
 """
 
 from __future__ import annotations
@@ -9,10 +16,8 @@ from __future__ import annotations
 from typing import Any
 
 from hexbytes import HexBytes
-from web3.exceptions import Web3Exception
 
-from degenbot.builders.pool_io import SyncPoolIO
-from degenbot.provider.sync_adapter import ProviderAdapter
+from degenbot.exceptions import ContractLogicError
 
 
 class FakeCurveBackend:
@@ -39,6 +44,9 @@ class FakeCurveBackend:
     def get_block_number(self) -> int:
         return 18_000_000
 
+    def get_block_timestamp(self, block: int | None = None) -> int:
+        return self._block_timestamp
+
     def get_block(self, block_identifier: int | str) -> dict[str, Any] | None:
         return {"number": 18_000_000, "timestamp": self._block_timestamp}
 
@@ -60,7 +68,7 @@ class FakeCurveBackend:
         handler = self._call_responses.get(selector)
         if handler is None:
             msg = f"No handler for selector {selector.hex()}"
-            raise Web3Exception(msg)
+            raise ContractLogicError(msg)
         if callable(handler):
             return HexBytes(handler(tx.get("to", ""), data, block))
         return HexBytes(handler)
@@ -84,31 +92,25 @@ class FakeCurveBackend:
         pass
 
 
-def make_fake_curve_provider(call_responses: dict[bytes, Any]) -> ProviderAdapter:
-    """Create a ProviderAdapter backed by a FakeCurveBackend.
+def make_fake_curve_provider(call_responses: dict[bytes, Any]) -> Any:
+    """Create a duck-typed AlloyProvider backed by a FakeCurveBackend.
 
     Usage:
         provider = make_fake_curve_provider({
             COINS_UINT256_SELECTOR: lambda to, data, block: ...,
             BALANCES_UINT256_SELECTOR: ...,
         })
-        result = discover_coins(io=SyncPoolIO(provider), pool_address, block_identifier=18_000_000)
+        result = discover_coins(io=provider, pool_address, block_identifier=18_000_000)
     """
-    backend = FakeCurveBackend(call_responses)
-    # Bypass factory methods — inject the backend directly
-    adapter = ProviderAdapter.__new__(ProviderAdapter)
-    adapter._backend = backend
-    adapter._provider_type = "alloy"  # not "web3" — we're testing the abstracted path
-    adapter._raw_provider = None
-    return adapter
+    return FakeCurveBackend(call_responses)
 
 
-def make_fake_pool_io(call_responses: dict[bytes, Any]) -> SyncPoolIO:
-    """Create a SyncPoolIO backed by a FakeCurveBackend.
+def make_fake_pool_io(call_responses: dict[bytes, Any]) -> Any:
+    """Create a duck-typed ``PyBotIo`` stand-in backed by a FakeCurveBackend.
 
-    Thin wrapper around make_fake_curve_provider that returns a SyncPoolIO
-    instead of a bare ProviderAdapter. Preferred for detection module tests
-    that now accept io: PoolIO instead of provider: ProviderAdapter.
+    The Curve detection modules use the generic ``io.call_raw()`` /
+    ``io.get_block()`` surface; ``FakeCurveBackend`` already exposes those,
+    so it serves as ``io`` directly (no ``SyncPoolIO`` wrapper needed).
 
     Usage:
         io = make_fake_pool_io({
@@ -117,4 +119,4 @@ def make_fake_pool_io(call_responses: dict[bytes, Any]) -> SyncPoolIO:
         })
         result = discover_coins(io, pool_address, block_identifier=18_000_000)
     """
-    return SyncPoolIO(make_fake_curve_provider(call_responses))
+    return FakeCurveBackend(call_responses)

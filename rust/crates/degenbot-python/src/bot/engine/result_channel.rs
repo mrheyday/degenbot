@@ -1,18 +1,18 @@
-//! `PyO3` wrapper for the `UniswapEngine` — `result_channel` `#[pymethods]` slice.
+//! `PyO3` wrapper for the `ArbitrageEngine` — `result_channel` `#[pymethods]` slice.
 //!
 //! Split out of the former monolithic `py_binding.rs` (ergo UG6FKN task 74W2Z6),
-//! mirroring `crates/degenbot-bot/src/solvers/uniswap_engine/`'s per-concern
-//! layout. `PyO3` allows multiple `#[pymethods] impl PyUniswapArbEngine { … }`
+//! mirroring `crates/degenbot-bot/src/solvers/arb_engine/`'s per-concern
+//! layout. `PyO3` allows multiple `#[pymethods] impl PyArbitrageEngine { … }`
 //! blocks per type, so each concern file contributes one slice.
 
 use super::{
-    mpsc, Address, Arc, BlockNotification, HopType, MixedPoolRef, PyDict, PyList,
-    PyStopAsyncIteration, PyUniswapArbEngine, ResultBatch, SolvePathResult, U256,
+    mpsc, Address, Arc, BlockNotification, HopType, MixedPoolRef, PyArbitrageEngine, PyDict,
+    PyList, PyStopAsyncIteration, ResultBatch, SolvePathResult, U256,
 };
 use crate::prelude::*;
 
 #[pymethods]
-impl PyUniswapArbEngine {
+impl PyArbitrageEngine {
     /// Read the last solved results and block number.
     ///
     /// Inspect a registered path by ID.
@@ -28,6 +28,7 @@ impl PyUniswapArbEngine {
     ///     - "`tick_spacing"`: int (V3/V4 only)
     ///   Returns None if the `path_id` is not found.
     #[pyo3(signature = (path_id))]
+    #[allow(clippy::too_many_lines)]
     fn inspect_path(&self, path_id: u64, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         // Phase 1: Collect pool refs from the path
         let pool_refs: Vec<MixedPoolRef> = {
@@ -114,6 +115,39 @@ impl PyUniswapArbEngine {
                     hops.push(HopInfo {
                         hop_type: "Solidly".to_string(),
                         address: None,
+                        pool_id: None,
+                        zero_for_one: pool_ref.zero_for_one,
+                        fee: None,
+                        tick_spacing: None,
+                    });
+                }
+                HopType::BalancerWeighted => {
+                    let id = core.get_balancer_weighted_identity(pool_ref.pool_key);
+                    hops.push(HopInfo {
+                        hop_type: "BalW".to_string(),
+                        address: id.map(|i| format!("{}", i.address)),
+                        pool_id: None,
+                        zero_for_one: pool_ref.zero_for_one,
+                        fee: None,
+                        tick_spacing: None,
+                    });
+                }
+                HopType::BalancerStable => {
+                    let id = core.get_balancer_stable_identity(pool_ref.pool_key);
+                    hops.push(HopInfo {
+                        hop_type: "BalS".to_string(),
+                        address: id.map(|i| format!("{}", i.address)),
+                        pool_id: None,
+                        zero_for_one: pool_ref.zero_for_one,
+                        fee: None,
+                        tick_spacing: None,
+                    });
+                }
+                HopType::CurveStableswap => {
+                    let id = core.get_curve_identity(pool_ref.pool_key);
+                    hops.push(HopInfo {
+                        hop_type: "Crv".to_string(),
+                        address: id.map(|i| format!("{}", i.address)),
                         pool_id: None,
                         zero_for_one: pool_ref.zero_for_one,
                         fee: None,
@@ -389,7 +423,7 @@ fn solve_result_to_py_tuple<'py>(
     )
         .into_pyobject(py)
 }
-/// One hop's view for [`PyUniswapArbEngine::inspect_path`], built from the
+/// One hop's view for [`PyArbitrageEngine::inspect_path`], built from the
 /// engine's sub-states before being projected into a Python dict by
 /// [`hop_info_to_pydict`].
 struct HopInfo {
@@ -430,16 +464,16 @@ fn hop_info_to_pydict<'py>(py: Python<'py>, hop: &HopInfo) -> PyResult<Bound<'py
 // shared receiver survives across awaits.
 
 /// pyo3 async iterator over `newHeads` block notifications.
-#[pyclass(name = "BlockStream", skip_from_py_object)]
+#[pyclass(name = "BlockStream", skip_from_py_object, module = "degenbot._ffi")]
 pub struct BlockStream {
     /// The block-notification receiver. `Option` + `put-back` mirrors
-    /// `PyUniswapArbEngine::result_rx` so the coroutine can re-share the
+    /// `PyArbitrageEngine::result_rx` so the coroutine can re-share the
     /// receiver across `__anext__` calls.
     block_rx: Arc<parking_lot::Mutex<Option<mpsc::UnboundedReceiver<BlockNotification>>>>,
 }
 
 impl BlockStream {
-    /// Construct from the receiver handed out by `PyUniswapArbEngine::block_stream`.
+    /// Construct from the receiver handed out by `PyArbitrageEngine::block_stream`.
     #[must_use]
     pub fn new(block_rx: mpsc::UnboundedReceiver<BlockNotification>) -> Self {
         Self {

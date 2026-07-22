@@ -14,7 +14,12 @@
 //! - [`subscription`] — double-buffer `SubscriptionHandle`, raw `drain_raw`,
 //!   and the `pump_*` subscription drivers.
 
+pub mod abi;
 pub mod contract;
 pub mod multicall3;
+pub mod offline;
 pub mod provider;
 pub mod subscription;
+pub mod tick_bootstrap;
+
+pub use tick_bootstrap::AlloyTickBootstrapRpc;

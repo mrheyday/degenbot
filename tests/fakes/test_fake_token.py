@@ -10,9 +10,8 @@ from fractions import Fraction
 
 import pytest
 
-from degenbot.aerodrome.pools import AerodromeV2Pool
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot
 from degenbot.types.address_comparable import AddressComparable
 from tests.fakes.tokens import FakeToken
 from tests.helpers.aerodrome_pool_factory import make_aerodrome_v2_pool
@@ -193,6 +192,7 @@ class TestCanaryAerodromeV2PoolWithFakeToken:
         )
         assert pool.token0.address == token0.address
         assert pool.token1.address == token1.address
+
     """Canary: CurveStableswapPool construction with FakeToken."""
 
     def test_construct_curve_pool(self) -> None:

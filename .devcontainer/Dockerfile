@@ -13,6 +13,10 @@ RUN dnf install -y \
         git \
         just \
         ripgrep \
+        # Faster linkers for cargo (dev-only perf; see rust/PERF_RESULTS.md).
+        # mold is the default via the user-level ~/.cargo/config.toml below;
+        # lld is installed as a fallback (switch via that config).
+        mold lld \
         sudo tmux vim htop procps-ng psmisc \
         glibc-langpack-en \
         bash-completion \
@@ -91,7 +95,7 @@ RUN curl -L https://foundry.paradigm.xyz | bash \
 # rebuild the image to bump.
 RUN npm install -g @earendil-works/pi-coding-agent
 RUN npm install -g agent-browser
-RUN agent-browser install
+RUN agent-browser install --with-deps
 RUN npx skills add vercel-labs/agent-browser -g --agent pi --yes
 
 RUN go install github.com/sandover/ergo/cmd/ergo@latest
@@ -104,6 +108,39 @@ RUN go install github.com/sandover/ergo/cmd/ergo@latest
 # the global uv tool (not the project venv) keeps the hooks prek generates
 # from pinning a throwaway .venv path; they fall back to `prek` on PATH.
 RUN uv tool install prek
+
+# cargo-nextest (Rust test runner). Baked into the image — `cargo nextest`
+# gives ~20% faster build+run than `cargo test` via execution parallelism
+# (see rust/PERF_RESULTS.md lever #3). CI does NOT install nextest, so the
+# CI-facing `just test-rust` recipe still uses `cargo test`; the dev-only
+# `just test-rust-nextest` recipe (see justfile) uses this binary. Installed
+# under the dev user's cargo home (~/.cargo/bin, already on PATH via the
+# ENV PATH above). `--locked` pins to the Cargo.lock in nextest's own
+# published crate for reproducibility.
+RUN cargo install --locked cargo-nextest
+
+# User-level cargo config: use `mold` as the linker for all cargo builds
+# inside the container (dev-only perf; see rust/PERF_RESULTS.md lever #1).
+# Lives at ~/.cargo/config.toml (cargo's home config, read in ADDITION to
+# any repo-local .cargo/config.toml) so it travels with the image and
+# applies to every cargo invocation — including rust-analyzer, just recipes,
+# and the uv/maturin PyO3 extension rebuild — regardless of entry path
+# (VSCode 'Reopen in Container' OR attach.sh's `podman start`+`exec`).
+#
+# This is INTENTIONALLY NOT committed as rust/.cargo/config.toml: that would
+# force mold on CI (runs on ubuntu-latest without mold → link failures) and
+# on non-devcontainer cloners. Scoping mold to the devcontainer image keeps
+# the repo buildable anywhere with the default system linker. mold was
+# measured to cut the clean build 59→51s, the test-binary build 64→48s, and
+# the degenbot_rs cdylib link 27→19.5s. To try lld instead, swap
+# `-fuse-ld=mold` for `-fuse-ld=lld` (lld is installed above as a fallback).
+RUN mkdir -p "${HOME}/.cargo" \
+    && printf '%s\n' \
+        '# Devcontainer-only: use mold linker for faster cargo links.' \
+        '# See rust/PERF_RESULTS.md. Remove or swap to lld if mold breaks.' \
+        '[target.x86_64-unknown-linux-gnu]' \
+        'rustflags = ["-C", "link-arg=-fuse-ld=mold"]' \
+        > "${HOME}/.cargo/config.toml"
 
 # Generate shell completions for the four curl/npm/go-installed CLIs into
 # ~/.bashrc.d/, which ~/.bashrc already loops over and sources at shell
@@ -119,22 +156,5 @@ RUN mkdir -p "${HOME}/.bashrc.d" \
     && uv generate-shell-completion bash > "${HOME}/.bashrc.d/uv-completion.sh" \
     && ergo completion bash > "${HOME}/.bashrc.d/ergo-completion.sh" \
     && cast completions bash > "${HOME}/.bashrc.d/cast-completion.sh"
-
-# Auto-connect interactive `pi` sessions to pi-link on startup. pi-link is
-# off by default; only `--link`/`--link-name`/`pi-link`/`/link-connect` opt in
-# (see the pi-link README "Configuration" section). The function in pi-link.sh
-# prepends `--link` to plain interactive launches (`pi`, `pi "do X"`, `pi
-# --resume`, ...) and passes through pi's print-and-exit subcommands (install,
-# remove, uninstall, update, list, config) and the --help/-h/--version/-v
-# flags untouched, where connecting would be pointless. Sourced from ~/.bashrc
-# (which loops over ~/.bashrc.d/*.sh at interactive startup); bash functions
-# are unavailable in non-interactive shells, so scripted/`podman exec` `pi`
-# calls are unaffected. COPY'd from the build context (= .devcontainer/) so the
-# live source of truth is the file in the repo, not an inline printf. Baked
-# into the image for the same attach reason as the ~/.bashrc.d completions
-# above: attach.sh does `podman start`+`exec` and never runs postCreateCommand,
-# and /home/dev is overlay (not bind-mounted), so a runtime write would not
-# survive a rebuild.
-COPY --chown=${USERNAME}:${USERNAME} pi-link.sh /home/${USERNAME}/.bashrc.d/pi-link.sh
 
 WORKDIR /workspaces/degenbot

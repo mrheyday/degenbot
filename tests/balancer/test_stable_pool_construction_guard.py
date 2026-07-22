@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from degenbot.balancer.stable_pools import BalancerV2StablePool
-from degenbot.degenbot_rs import PyBot
+from degenbot.bot import PyBot
 from degenbot.exceptions import DegenbotValueError
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v2_pool_factory import make_v2_pool
@@ -55,12 +55,8 @@ class TestWrongFamilyHandle:
     def test_v2_handle_raises_degenbot_value_error(self) -> None:
         """A V2-family handle is not a Balancer stable pool."""
         bot = PyBot()
-        t0 = make_erc20(
-            bot, address="0x" + "a1" * 20, name="T0", symbol="T0", decimals=18
-        )
-        t1 = make_erc20(
-            bot, address="0x" + "b2" * 20, name="T1", symbol="T1", decimals=18
-        )
+        t0 = make_erc20(bot, address="0x" + "a1" * 20, name="T0", symbol="T0", decimals=18)
+        t1 = make_erc20(bot, address="0x" + "b2" * 20, name="T1", symbol="T1", decimals=18)
         v2_pool = make_v2_pool(
             "0x" + "c3" * 20,
             token0=t0,
@@ -76,7 +72,7 @@ class TestWrongFamilyHandle:
         # The V2 pool's handle is a V2-family handle; wrapping it as a
         # Balancer stable companion must raise.
         with pytest.raises(DegenbotValueError) as exc_info:
-            BalancerV2StablePool._from_py_pool(v2_pool._py_pool)  # noqa: SLF001
+            BalancerV2StablePool._from_py_pool(v2_pool._py_pool)
 
         message = str(exc_info.value)
         assert "Balancer stable" in message
@@ -90,12 +86,8 @@ class TestRateProviderIsStored:
         from tests.helpers.balancer_pool_factory import make_balancer_stable_pool
 
         bot = PyBot()
-        t0 = make_erc20(
-            bot, address="0x" + "d4" * 20, name="S0", symbol="S0", decimals=18
-        )
-        t1 = make_erc20(
-            bot, address="0x" + "e5" * 20, name="S1", symbol="S1", decimals=18
-        )
+        t0 = make_erc20(bot, address="0x" + "d4" * 20, name="S0", symbol="S0", decimals=18)
+        t1 = make_erc20(bot, address="0x" + "e5" * 20, name="S1", symbol="S1", decimals=18)
         pool = make_balancer_stable_pool(
             address="0x" + "f6" * 20,
             pool_id=bytes.fromhex("f6" * 20 + "0002" + "0" * 20),
@@ -109,7 +101,7 @@ class TestRateProviderIsStored:
         )
 
         # No live provider → static fallback → these all report "no I/O".
-        assert pool._rate_provider_is_static is True  # noqa: SLF001
+        assert pool._rate_provider_is_static is True
         assert pool.rate_provider is None
         assert not pool.requires_io_at_calculation_time
         # If token list does include BPT... here it doesn't, so also check.
@@ -121,18 +113,14 @@ class TestRateProviderIsStored:
             def __init__(self, rates: tuple[int, ...]) -> None:
                 self._rates = rates
 
-            def get_rates(self, block_identifier=None):  # noqa: ANN001, ANN202, ARG002
+            def get_rates(self, block_identifier=None):
                 return self._rates
 
         from tests.helpers.balancer_pool_factory import make_balancer_stable_pool
 
         bot = PyBot()
-        t0 = make_erc20(
-            bot, address="0x" + "d4" * 20, name="S0", symbol="S0", decimals=18
-        )
-        t1 = make_erc20(
-            bot, address="0x" + "e5" * 20, name="S1", symbol="S1", decimals=18
-        )
+        t0 = make_erc20(bot, address="0x" + "d4" * 20, name="S0", symbol="S0", decimals=18)
+        t1 = make_erc20(bot, address="0x" + "e5" * 20, name="S1", symbol="S1", decimals=18)
         # ComposableStablePool (bpt_idx=0) + dynamic provider.
         rates = (10**18, 2 * 10**18, 3 * 10**18)
         pool = make_balancer_stable_pool(
@@ -149,7 +137,7 @@ class TestRateProviderIsStored:
             py_bot=bot,
         )
 
-        assert pool._rate_provider_is_static is False  # noqa: SLF001
+        assert pool._rate_provider_is_static is False
         assert pool.rate_provider is not None
         # The adapter delegates get_rates to the stored Rust trait object.
         assert pool.rate_provider.get_rates(42) == rates

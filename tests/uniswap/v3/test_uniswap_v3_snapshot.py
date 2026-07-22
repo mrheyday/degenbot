@@ -2,11 +2,10 @@ from collections import deque
 
 import pytest
 
-from degenbot.anvil_fork import AnvilFork
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import ZERO_ADDRESS
 from degenbot.exceptions.pool import UnknownPool
-from degenbot.provider import ProviderAdapter
+from degenbot.fork import AnvilFork
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
 from degenbot.uniswap.trackers import UniswapV3PoolTracker
 from degenbot.uniswap.v3_snapshot import (
@@ -43,7 +42,7 @@ def empty_mainnet_snapshot_from_file(fork_mainnet_full: AnvilFork) -> UniswapV3L
 def empty_mainnet_snapshot_from_file_with_pending_events_up_to_block_12_369_870(
     fork_mainnet_full: AnvilFork,
 ) -> UniswapV3LiquiditySnapshot:
-    provider = ProviderAdapter.from_web3(fork_mainnet_full.w3)
+    provider = fork_mainnet_full.provider
 
     snapshot = UniswapV3LiquiditySnapshot(
         source=MonolithicJsonFileSnapshot(EMPTY_SNAPSHOT_FILENAME),
@@ -268,7 +267,7 @@ def test_apply_update_to_snapshot(
 ):
     pool_address = get_checksum_address("0xCBCdF9626bC03E24f779434178A73a0B4bad62eD")
 
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork_mainnet_full.w3))
+    bot = make_bot_with_provider(fork_mainnet_full.provider)
 
     tick_data = {
         253320: LiquidityAtTick(
@@ -359,7 +358,7 @@ def test_pool_manager_applies_snapshot_from_file(
     empty_mainnet_snapshot_from_file_with_pending_events_up_to_block_12_369_870: UniswapV3LiquiditySnapshot,  # noqa: E501
     fork_mainnet_full: AnvilFork,
 ):
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork_mainnet_full.w3))
+    bot = make_bot_with_provider(fork_mainnet_full.provider)
 
     # Build a pool manager to inject the liquidity events into the new pools as they are created
     pool_manager = UniswapV3PoolTracker(
@@ -537,7 +536,7 @@ def test_pool_manager_applies_snapshot_from_dir(
     mainnet_snapshot_at_block_12_369_870_from_dir: UniswapV3LiquiditySnapshot,
     fork_mainnet_full: AnvilFork,
 ):
-    bot = make_bot_with_provider(ProviderAdapter.from_web3(fork_mainnet_full.w3))
+    bot = make_bot_with_provider(fork_mainnet_full.provider)
 
     # Build a pool manager to inject the liquidity events into the new pools as they are created
     pool_manager = UniswapV3PoolTracker(
@@ -715,7 +714,7 @@ def test_fetch_large_range(
     fork_mainnet_full: AnvilFork,
     mainnet_snapshot_at_block_12_369_870_from_dir: UniswapV3LiquiditySnapshot,
 ):
-    provider = ProviderAdapter.from_web3(fork_mainnet_full.w3)
+    provider = fork_mainnet_full.provider
     # First 250 blocks only have Mint events, so fetch extra to cover Burn event logic
     mainnet_snapshot_at_block_12_369_870_from_dir.fetch_new_events(
         to_block=EMPTY_SNAPSHOT_BLOCK + 1_000,

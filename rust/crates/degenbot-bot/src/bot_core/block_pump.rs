@@ -1,7 +1,7 @@
 //! `BlockPump` — `Bot`'s WS transport + drain loop (ADR-006 D4).
 //!
 //! Generalized from the `BlockPump`: holds `Arc<Bot>` +
-//! `Arc<dyn DrainSink>` instead of `Arc<Mutex<UniswapEngine>>`. Per WS log,
+//! `Arc<dyn DrainSink>` instead of `Arc<Mutex<ArbitrageEngine>>`. Per WS log,
 //! the pump calls `bot.dispatch_log(log)` (slice 4: decode → apply to
 //! `BotState` → notify the `EngineSubscriber`, which dirties the engine). At
 //! block boundaries / drain ticks / reorg the pump drives the `DrainSink`
@@ -28,9 +28,11 @@
 //! 2. **Resume phase** (`resume_from_subscribe()`): Begins normal processing —
 //!    logs applied eagerly, solved + sent on block boundaries / debounce.
 //!
-//! **Critical ordering**: Python must run backfill AFTER `subscribe()` returns
-//! but BEFORE `resume_from_subscribe()`. The `DrainSink`'s
-//! `last_processed_block()` is the backfill-start boundary.
+//! **Critical ordering**: backfill must run AFTER `subscribe()` returns but
+//! BEFORE `resume_from_subscribe()`. The `DrainSink`'s
+//! `last_processed_block()` is the backfill-start boundary. (Pre-epic-P73ER6
+//! Python orchestrated this manually; the epic relocates backfill into the
+//! core, driven automatically by `resume`.)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +76,12 @@ const DEBOUNCE_MS: u64 = 50;
 /// deadline even under dense log pressure) and runs the same
 /// `handle_timeout_eager` catch-up the no-activity path uses.
 const HEADER_STALENESS_SECS: u64 = 30;
+
+/// Default backfill chunk size (blocks per `eth_getLogs` request) for the
+/// snapshot→WS gap closed automatically inside `resume_from_subscribe`
+/// (J3FMDO). Mirrors the `pyo3` `backfill_from_snapshot` default (`chunk_size` = 2000):
+/// the per-chunk response size stays under `eth_getLogs` payload caps.
+const DEFAULT_BACKFILL_CHUNK_SIZE: u64 = 2000;
 
 /// Whether a log confirms that a tracked header block is "complete".
 ///
@@ -342,7 +350,21 @@ impl BlockPump {
         }
     }
 
-    /// Resume phase using the pump's own watch channel.
+    /// Resume the pump from a subscribe state — auto-backfilling the
+    /// snapshot→WS gap (J3FMDO) before the live loop begins.
+    ///
+    /// When the core `BotState` carries a snapshot seed `S` (set by
+    /// `Bot::load_snapshot_from_db` or `load_*_from_py`) strictly less than
+    /// the first observed WS block `W`, this method first awaits
+    /// [`backfill_from_snapshot`](Self::backfill_from_snapshot) with the
+    /// pump's own provider — applying `S+1..W-1` log state under
+    /// `BotState::process_backfill_logs` with zero result batches. The Python
+    /// `engine_registry.start()` no longer calls the pyo3
+    /// `backfill_from_snapshot`; one Python `resume()` invocation drives both.
+    ///
+    /// When `S` is `None` (cold start) or `S >= W` (snapshot already at/after
+    /// the live head), the backfill step is skipped — the live loop anchors
+    /// on `W` directly.
     ///
     /// # Panics
     ///
@@ -352,9 +374,48 @@ impl BlockPump {
         let combined = subscribe_state
             .combined_stream
             .expect("resume() called without WS stream — did you call subscribe() first?");
+        let first_block = subscribe_state.first_block;
+        // J3FMDO: auto-backfill the snapshot→WS gap before the live loop. The
+        // backfill only buffers state into BotState (no solve, no on_send);
+        // result batches therefore do not flow pre-resume.
+        if let Err(e) = self.backfill_to_ws_block(first_block).await {
+            log::error!(
+                "BlockPump: auto-backfill failed — starting live loop from {first_block} (gap not closed): {e}"
+            );
+        }
+        self.run_with_stream(combined, first_block).await;
+    }
 
-        self.run_with_stream(combined, subscribe_state.first_block)
-            .await;
+    /// Close the snapshot→WS gap by buffering `eth_getLogs(S+1..W-1)` into the
+    /// core `BotState`'s per-pool backfill buffer (no solve, no `on_send`).
+    ///
+    /// This is the SYNCHRONOUSLY-awaitable half of `resume_from_subscribe` —
+    /// `PumpState::resume` `block_on`s it BEFORE spawning the live loop so
+    /// Python's `build_paths` (which drains the per-pool backfill buffer via
+    /// `apply_backfill_buffer_v3`) cannot race the backfill. Pre-fix the
+    /// backfill ran inside the spawned `resume_from_subscribe` task and
+    /// `resume` returned immediately, so an active pool's burn was not yet
+    /// buffered when `build_paths` drained → `VerificationMismatchError` at
+    /// post-drain verify (2026-07-12 backrun crash).
+    ///
+    /// No-op when `S` is unset (cold start), `S >= W` (catch-up snapshot), or
+    /// `S == 0`. Errors log + return (the live loop still starts from `W`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` if a chunk's `eth_getLogs` call fails (message
+    /// includes the offending block range + provider error).
+    pub async fn backfill_to_ws_block(&self, ws_block: u64) -> Result<u64, String> {
+        let s = self.bot.state_arc().read().snapshot_seed_block();
+        let Some(seed) = s else { return Ok(0) };
+        if seed == 0 || ws_block == 0 || seed >= ws_block {
+            return Ok(0);
+        }
+        log::info!(
+            "BlockPump: auto-backfill from snapshot block {seed} to WS block {ws_block} before resume"
+        );
+        self.backfill_from_snapshot(ws_block, DEFAULT_BACKFILL_CHUNK_SIZE)
+            .await
     }
 
     /// Run the main pump loop with an existing WS stream.
@@ -364,7 +425,7 @@ impl BlockPump {
     /// waiting for a block header. Block headers provide metadata
     /// (timestamp, fees) and handle empty-block detection.
     #[allow(unused_assignments, clippy::too_many_lines)]
-    async fn run_with_stream(
+    pub async fn run_with_stream(
         &mut self,
         mut combined: stream::BoxStream<'static, WsEvent>,
         first_observed_block: u64,
@@ -376,16 +437,43 @@ impl BlockPump {
         // confirmed and fixed.
         const DIAG_STATS_INTERVAL: Duration = Duration::from_secs(10);
 
+        // hotpath drain-path tracer bullet (`src/profiling.rs`): hold a
+        // profiling guard for the whole pump loop iff `DEGENBOT_HOTPATH=1`.
+        // No-op (not even constructed) otherwise, and a no-op stub when the
+        // `hotpath` Cargo feature is off. Dropping at loop exit writes the
+        // report; for a long-running bot use `HOTPATH_SHUTDOWN_MS`.
+        let _hotpath_guard = crate::profiling::hotpath_guard("block_pump");
+
         let relevant_topic_set: HashSet<B256> = RELEVANT_TOPICS.into_iter().collect();
 
-        // Read the last block processed by Python backfill.
+        // Read the last block processed by the engine (the post-backfill
+        // cursor when the snapshot→WS gap was closed inside resume; cold-start
+        // otherwise). J3FMDO: the core `BlockPump::backfill_from_snapshot`
+        // applies state via `BotState::process_backfill_logs`, which advances
+        // neither the sink's drain cursor (only `on_drain`/`finalize_block`
+        // do) nor the engine's `last_processed_block`. Hence on the
+        // post-backfill resume path the sink's `last_processed_block` is still
+        // `None` and the branch below re-anchors on `first_observed_block`.
         let mut current_block: u64 = self.sink.last_processed_block().unwrap_or(0);
 
+        let snapshot_seed = self.bot.state_arc().read().snapshot_seed_block();
         if current_block == 0 && first_observed_block > 0 {
             current_block = first_observed_block;
-            log::info!("BlockPump: cold start from block {first_observed_block}");
+            if let Some(seed) = snapshot_seed {
+                if seed > 0 && seed < first_observed_block {
+                    log::info!(
+                        "BlockPump: resuming from block {first_observed_block} (backfilled snapshot gap {start}–{end})",
+                        start = seed + 1,
+                        end = first_observed_block - 1
+                    );
+                } else {
+                    log::info!("BlockPump: cold start from block {first_observed_block}");
+                }
+            } else {
+                log::info!("BlockPump: cold start from block {first_observed_block}");
+            }
         } else {
-            log::info!("BlockPump: starting from block {current_block} (Python backfill)");
+            log::info!("BlockPump: starting from block {current_block}");
         }
 
         // Track the last block we've solved for. Used to detect block
@@ -640,10 +728,19 @@ impl BlockPump {
                     // tombstone (first removed:false log for N+1), a reorg
                     // signal, or an unreliable-WS late forward (→ shutdown).
                     match clock.observe_log(log_block, log.removed) {
-                        LogDecision::EnterReorg(_) | LogDecision::ContinueReorg => {
+                        LogDecision::EnterReorg(reorg_block) => {
                             // Reorg: per-event per-pool restore via the
                             // coordinator (ADR-006 slice 7). A too-deep reorg
-                            // → graceful shutdown.
+                            // → graceful shutdown. The previous block was
+                            // tombstoned; this `removed: true` log reopens it.
+                            // Visible operator signal so an unwind is no longer
+                            // silent — the prior success path logged nothing,
+                            // making a duplicate block log ambiguous (reorg
+                            // vs. WS duplication).
+                            log::warn!(
+                                "BlockPump: chain reorg detected at block \
+                                 {reorg_block} (removed log) — entering unwind path"
+                            );
                             if let Err(err) = self.reorg_coordinator.dispatch_reorg_log(&log) {
                                 log::error!("BlockPump: too-deep reorg — shutting down. {err:?}");
                                 self.shutdown.store(true, Ordering::Relaxed);
@@ -654,10 +751,31 @@ impl BlockPump {
                             publish_pending = false;
                             continue;
                         }
+                        LogDecision::ContinueReorg => {
+                            // Subsequent removed: true log in the same window —
+                            // restore another pool at `log_block`. Trailing the
+                            // first event lets the operator correlate successive
+                            // unwinds in the same reorg.
+                            log::warn!(
+                                "BlockPump: reorg continues — restoring pool for \
+                                 removed log at block {log_block}"
+                            );
+                            if let Err(err) = self.reorg_coordinator.dispatch_reorg_log(&log) {
+                                log::error!("BlockPump: too-deep reorg — shutting down. {err:?}");
+                                self.shutdown.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                            publish_pending = false;
+                            continue;
+                        }
                         LogDecision::CloseReorg { new_head } => {
                             // Reorg window closed — the coordinator restored
                             // unwound pools per-event; this forward log's block
                             // is the new head. Resume forward tracking from it.
+                            log::info!(
+                                "BlockPump: reorg window closed — resuming \
+                                 forward tracking from block {new_head}"
+                            );
                             current_block = new_head;
                             publish_pending = false;
                             // Fall through to dispatch this forward log.
@@ -921,6 +1039,95 @@ impl BlockPump {
             );
         }
     }
+
+    /// Backfill the snapshot→WS gap `S+1..W-1` using the NO-SOLVE path
+    /// (FD7NFG, epic P73ER6). Reads `S` from `BotState::snapshot_seed_block`
+    /// (set by `Bot::load_snapshot_from_db`) and `W` from the `ws_block` param
+    /// (the block the WS subscription landed on — `SubscribeState::first_block`,
+    /// passed by the pyo3 caller or J3FMDO's auto-backfill before `resume`).
+    /// Fetches logs via the pump's own `AlloyProvider` (no `rpc_url` from
+    /// Python) in `chunk_size` chunks via `build_backfill_filter`, applying
+    /// each chunk via `BotState::process_backfill_logs` (the relocated engine
+    /// loop). No `solve_dirty` / no batches — the `Backfilled` phase invariant
+    /// is "state advanced, no dispatch".
+    ///
+    /// Returns the count of blocks backfilled (`W-1 - (S+1) + 1 = W-1-S`), or
+    /// `Ok(0)` for a no-op (cold start / S≥W). The post-backfill boundary is
+    /// `W-1`; the pump's resume anchors on `first_observed_block = W` regardless
+    /// (the WS anchor, NOT `last_processed_block`), so this method does NOT stamp
+    /// the sink's cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` on a `get_logs` RPC failure.
+    pub async fn backfill_from_snapshot(
+        &self,
+        ws_block: u64,
+        chunk_size: u64,
+    ) -> Result<u64, String> {
+        let w = ws_block;
+        let s = {
+            let arc = self.bot.state_arc();
+            let state = arc.read();
+            state.snapshot_seed_block()
+        };
+        let Some(s) = s else {
+            log::info!(
+                "BlockPump::backfill_from_snapshot: no snapshot loaded (S=None), cold-start path"
+            );
+            return Ok(0);
+        };
+        if s == 0 {
+            log::warn!("BlockPump::backfill_from_snapshot: snapshot block S=0, skipping");
+            return Ok(0);
+        }
+        if s >= w {
+            log::info!(
+                "BlockPump::backfill_from_snapshot: snapshot at {s} ≥ WS block {w}, nothing to backfill"
+            );
+            return Ok(0);
+        }
+        let from_block = s + 1;
+        let to_block = w - 1;
+        let total_blocks = to_block - from_block + 1;
+        log::info!(
+            "BlockPump::backfill_from_snapshot: fetching events {from_block}–{to_block} ({total_blocks} blocks, chunk_size={chunk_size})"
+        );
+        let provider = self.provider.provider_arc();
+        let mut total_logs = 0usize;
+        let mut chunk_start = from_block;
+        while chunk_start <= to_block {
+            let chunk_end = (chunk_start + chunk_size - 1).min(to_block);
+            let filter = build_backfill_filter(chunk_start, chunk_end);
+            log::info!(
+                "BlockPump::backfill_from_snapshot: fetching chunk {chunk_start}-{chunk_end}"
+            );
+            let t0 = std::time::Instant::now();
+            let logs = provider.get_logs(&filter).await.map_err(|e| {
+                format!("eth_getLogs failed for blocks {chunk_start}-{chunk_end}: {e}")
+            })?;
+            let n = logs.len();
+            let fetch_ms = t0.elapsed().as_millis();
+            log::info!(
+                "BlockPump::backfill_from_snapshot: chunk {chunk_start}-{chunk_end} fetched {n} logs in {fetch_ms}ms"
+            );
+            total_logs += n;
+            // Hold the write guard across the chunk so the apply + buffer-expire
+            // (which advance `last_processed_block`) stay atomic per chunk.
+            self.bot
+                .state_arc()
+                .write()
+                .process_backfill_logs(&logs, chunk_end);
+            log::info!(
+                "BlockPump::backfill_from_snapshot: blocks {chunk_start}-{chunk_end}: {n} logs applied"
+            );
+            chunk_start = chunk_end + 1;
+        }
+        log::info!(
+            "BlockPump::backfill_from_snapshot: complete — {total_logs} logs across {total_blocks} blocks"
+        );
+        Ok(total_blocks)
+    }
 }
 
 #[cfg(test)]
@@ -947,6 +1154,13 @@ impl BlockPump {
             shutdown,
             header_staleness: Duration::from_secs(HEADER_STALENESS_SECS),
         }
+    }
+
+    /// Test-only access to the shared `Bot` arc (FD7NFG tests inject
+    /// `snapshot_seed_block` to drive the `S≥W` / `S=0` no-op branches).
+    #[must_use]
+    pub fn bot_arc_for_test(&self) -> Arc<Bot> {
+        Arc::clone(&self.bot)
     }
 
     /// Drive the resume loop with a synthetic `WsEvent` stream. Test-only
@@ -1442,7 +1656,7 @@ mod tests {
 
     use crate::bot_core::log_dispatcher::PoolStateSubscriber;
     use crate::bot_core::RegisterV2PoolParams;
-    use alloy::primitives::{Address, Bytes, U256};
+    use alloy::primitives::{aliases::U112, Address, Bytes, U256};
 
     /// Build a V2 `Sync` log for `pool_address` carrying
     /// `(reserve0, reserve1)`, at `block_number`, with `removed` set.
@@ -1454,6 +1668,10 @@ mod tests {
         block_number: u64,
         removed: bool,
     ) -> Log {
+        // Test helper: emits a raw V2 `Sync(uint112,uint112)` log as 64
+        // bytes of ABI data (two 32-byte left-padded words). The decoder
+        // narrows to `U112` on decode — this helper keeps the `U256` ABI
+        // word shape so the bytes match on-chain log data.
         let data = {
             let mut data = Vec::with_capacity(64);
             data.extend_from_slice(&reserve0.to_be_bytes::<32>());
@@ -1474,6 +1692,49 @@ mod tests {
             transaction_index: None,
             log_index: None,
             removed,
+        }
+    }
+
+    /// Build a V3 `Burn` log with `block_number` set (for backfill tests).
+    /// data = abi.encode(uint128 amount, uint256 amount0, uint256 amount1).
+    fn make_v3_burn_log_with_block(
+        pool_address: Address,
+        tick_lower: i32,
+        tick_upper: i32,
+        amount: u128,
+        block_number: u64,
+    ) -> Log {
+        use alloy::primitives::{I256, U128};
+        let tick_to_topic = |tick: i32| {
+            let i = I256::try_from(i128::from(tick)).unwrap_or(I256::ZERO);
+            alloy::primitives::B256::from(i.to_be_bytes::<32>())
+        };
+        let mut amount_word = [0u8; 32];
+        amount_word[16..32].copy_from_slice(&U128::from(amount).to_be_bytes::<16>());
+        let mut data = Vec::with_capacity(96);
+        data.extend_from_slice(&amount_word);
+        data.extend_from_slice(&alloy::primitives::U256::ZERO.to_be_bytes::<32>());
+        data.extend_from_slice(&alloy::primitives::U256::ZERO.to_be_bytes::<32>());
+        let owner = alloy::primitives::Address::from([0xccu8; 20]);
+        let inner = alloy::primitives::Log::new_unchecked(
+            pool_address,
+            vec![
+                V3_BURN_TOPIC,
+                owner.into_word(),
+                tick_to_topic(tick_lower),
+                tick_to_topic(tick_upper),
+            ],
+            Bytes::from(data),
+        );
+        Log {
+            inner,
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
         }
     }
 
@@ -1498,21 +1759,25 @@ mod tests {
         update_block: u64,
     ) -> (Arc<Bot>, u64, Arc<FakeCountingSubscriber>) {
         let bot = Arc::new(Bot::new(1));
-        let pool_id = bot.state.write().register_v2_pool(&RegisterV2PoolParams {
-            address: pool_addr,
-            token0: Address::from([0xa0u8; 20]),
-            token1: Address::from([0xa1u8; 20]),
-            reserve0: U256::from(1_000),
-            reserve1: U256::from(2_000),
-            fee_token0: (997, 1000),
-            fee_token1: (997, 1000),
-            factory: Address::from([0xf0u8; 20]),
-            update_block,
-            variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
-            stable_swap: false,
-            fee_denominator: None,
-            ..Default::default()
-        });
+        let pool_id = bot
+            .state
+            .write()
+            .register_v2_pool(&RegisterV2PoolParams {
+                address: pool_addr,
+                token0: Address::from([0xa0u8; 20]),
+                token1: Address::from([0xa1u8; 20]),
+                reserve0: U112::from(1_000),
+                reserve1: U112::from(2_000),
+                fee_token0: (997, 1000),
+                fee_token1: (997, 1000),
+                factory: Address::from([0xf0u8; 20]),
+                update_block,
+                variant: degenbot_uniswap::dex_identity::DexVariant::UniswapV2,
+                stable_swap: false,
+                fee_denominator: None,
+                ..Default::default()
+            })
+            .expect("test setup: V2 registration");
         let counting = Arc::new(FakeCountingSubscriber {
             notifies: Mutex::new(0),
         });
@@ -1761,5 +2026,364 @@ mod tests {
              gate (got {} sends)",
             sent.len()
         );
+    }
+    /// FD7NFG: `backfill_from_snapshot` no-op when no snapshot loaded (cold
+    /// start — `snapshot_seed_block = None`). Default fresh `Bot` has S=None.
+    #[tokio::test]
+    async fn backfill_from_snapshot_cold_start_is_noop() {
+        let (pump, _sink) = pump_for_test(None);
+        // Fresh Bot: snapshot_seed_block is None → no-op, no provider call.
+        let n = pump.backfill_from_snapshot(100, 10).await.unwrap();
+        assert_eq!(n, 0, "cold start (S=None) → no blocks backfilled");
+    }
+
+    /// FD7NFG: `backfill_from_snapshot` no-op when `S >= W` (snapshot at/after
+    /// the WS block — nothing to backfill).
+    #[tokio::test]
+    async fn backfill_from_snapshot_s_ge_w_is_noop() {
+        let (pump, _sink) = pump_for_test(None);
+        // Inject S = W (snapshot caught up to the WS block).
+        {
+            let bot = pump.bot_arc_for_test();
+            bot.state_arc().write().set_snapshot_seed_block(Some(100));
+        }
+        let n = pump.backfill_from_snapshot(100, 10).await.unwrap();
+        assert_eq!(n, 0, "S >= W → nothing to backfill");
+    }
+
+    /// FD7NFG: `backfill_from_snapshot` no-op when `S = 0` (degenerate
+    /// snapshot block — guarded to avoid a `from_block=1` unbounded fetch).
+    #[tokio::test]
+    async fn backfill_from_snapshot_s_zero_is_noop() {
+        let (pump, _sink) = pump_for_test(None);
+        {
+            let bot = pump.bot_arc_for_test();
+            bot.state_arc().write().set_snapshot_seed_block(Some(0));
+        }
+        let n = pump.backfill_from_snapshot(100, 10).await.unwrap();
+        assert_eq!(n, 0, "S = 0 → skip (degenerate)");
+    }
+
+    /// JUCFCB/J3FMDO helper: build a `pump_for_test_with_bot` variant that
+    /// also returns the `Asserter` so a test can push `eth_getLogs`
+    /// responses and observe whether the auto-backfill path drains them.
+    fn pump_for_test_with_asserter(
+        bot: Arc<Bot>,
+        last_processed: Option<u64>,
+    ) -> (
+        BlockPump,
+        Arc<FakeDrainSink>,
+        Arc<AtomicBool>,
+        alloy::transports::mock::Asserter,
+    ) {
+        use alloy::network::Ethereum as NetEth;
+        use alloy::providers::{Provider, ProviderBuilder};
+        use alloy::rpc::client::ClientBuilder;
+        use alloy::transports::mock::{Asserter, MockTransport};
+
+        let asserter = Asserter::new();
+        let client = ClientBuilder::default().transport(MockTransport::new(asserter.clone()), true);
+        let dyn_provider = ProviderBuilder::new().connect_client(client).erased();
+        let provider = Arc::new(AlloyProvider::from_provider(
+            Arc::new(dyn_provider) as Arc<dyn alloy::providers::Provider<NetEth>>
+        ));
+        let reorg = Arc::new(crate::bot_core::reorg_coordinator::ReorgCoordinator::new(
+            Arc::clone(&bot),
+        ));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let sink = Arc::new(FakeDrainSink::new(last_processed));
+        let pump = BlockPump::for_test(bot, sink.clone(), reorg, provider, Arc::clone(&shutdown));
+        (pump, sink, shutdown, asserter)
+    }
+
+    /// J3FMDO: `resume_from_subscribe` auto-backfills the snapshot→WS gap
+    /// (S < W) before the live loop begins — proving the core path closes the
+    /// gap with zero Python orchestration. The Asserter queue drains by exactly
+    /// one `eth_getLogs` response (S+1..W-1 fits in a single default-size chunk).
+    #[tokio::test]
+    async fn auto_backfill_runs_inside_resume_when_s_lt_w() {
+        let bot = Arc::new(Bot::new(1));
+        bot.state_arc().write().set_snapshot_seed_block(Some(85));
+        let (mut pump, _sink, _shutdown, asserter) = pump_for_test_with_asserter(bot, None);
+
+        // The single eth_getLogs chunk (blocks 86..99, ≤ DEFAULT_BACKFILL_CHUNK_SIZE)
+        // returns an empty log array — the pump's provider drains this response.
+        asserter.push_success(&Vec::<Log>::new());
+
+        let combined = stream::iter(Vec::<WsEvent>::new()).boxed();
+        let state = SubscribeState {
+            first_block: 100,
+            first_timestamp: 0,
+            combined_stream: Some(combined),
+        };
+        pump.resume_from_subscribe(state).await;
+
+        assert_eq!(
+            asserter.read_q().len(),
+            0,
+            "auto-backfill inside resume popped exactly one eth_getLogs response; queue must be empty"
+        );
+    }
+
+    /// J3FMDO race regression: `backfill_to_ws_block` is the
+    /// synchronously-awaitable backfill that `PumpState::resume` `block_on`s
+    /// BEFORE spawning the live loop. Pre-fix the backfill ran INSIDE the
+    /// spawned `resume_from_subscribe` task, so `PumpState::resume` returned
+    /// immediately and Python's `build_paths` drained an EMPTY backfill buffer
+    /// (the burn for an active pool was not yet buffered) → the post-drain
+    /// verify mismatched on-chain and crashed the backrun bot with
+    /// `VerificationMismatchError`. This pins the contract: after
+    /// `backfill_to_ws_block` returns, the V3 backfill buffer is populated —
+    /// the event did NOT require the live loop to run first.
+    #[tokio::test]
+    async fn backfill_to_ws_block_populates_buffer_before_return() {
+        let pool_addr = alloy::primitives::Address::from([0xc2u8; 20]);
+        let bot = Arc::new(Bot::new(1));
+        bot.state_arc().write().set_snapshot_seed_block(Some(85));
+        let (pump, _sink, _shutdown, asserter) =
+            pump_for_test_with_asserter(Arc::clone(&bot), None);
+
+        // A V3 Burn log at block 90 (in the backfill range 86..99).
+        asserter.push_success(&vec![make_v3_burn_log_with_block(
+            pool_addr, -100, 100, 500, 90,
+        )]);
+
+        // backfill_to_ws_block must fully buffer the burn BEFORE returning.
+        pump.backfill_to_ws_block(100)
+            .await
+            .expect("backfill_to_ws_block completes against the mock");
+
+        // The burn was buffered (not applied — pool unregistered → buffer
+        // branch). Pre-fix: this method did not exist and `resume` returned
+        // before the spawned task buffered → count 0 → race.
+        assert_eq!(
+            bot.state_arc().read().buffered_v3_event_count(&pool_addr),
+            1,
+            "backfill_to_ws_block must buffer the V3 burn before returning (race regression)"
+        );
+    }
+
+    /// J3FMDO: `resume_from_subscribe` skips the auto-backfill entirely when no
+    /// snapshot seed is present (`S = None`, cold start). The Asserter queue is
+    /// left untouched (the pump never calls `eth_getLogs`) and the live loop
+    /// anchors on `first_observed_block` directly. An empty queue under a live
+    /// `eth_getLogs` request would error; we assert the queue stays empty AND
+    /// the resume returns without a provider error.
+    #[tokio::test]
+    async fn auto_backfill_skipped_when_s_none_in_resume() {
+        let bot = Arc::new(Bot::new(1));
+        // Fresh Bot: snapshot_seed_block is None — no gap to backfill.
+        let (mut pump, _sink, _shutdown, asserter) = pump_for_test_with_asserter(bot, None);
+
+        let combined = stream::iter(Vec::<WsEvent>::new()).boxed();
+        let state = SubscribeState {
+            first_block: 100,
+            first_timestamp: 0,
+            combined_stream: Some(combined),
+        };
+        pump.resume_from_subscribe(state).await;
+
+        assert_eq!(
+            asserter.read_q().len(),
+            0,
+            "cold-start resume never calls eth_getLogs (auto-backfill gated on S<W)"
+        );
+    }
+
+    /// J3FMDO: `resume_from_subscribe` skips the auto-backfill when the
+    /// snapshot is already at/after the WS block (`S >= W` — catch-up snapshot
+    /// with no gap to backfill).
+    #[tokio::test]
+    async fn auto_backfill_skipped_when_s_ge_w_in_resume() {
+        let bot = Arc::new(Bot::new(1));
+        bot.state_arc().write().set_snapshot_seed_block(Some(100));
+        let (mut pump, _sink, _shutdown, asserter) = pump_for_test_with_asserter(bot, None);
+
+        let combined = stream::iter(Vec::<WsEvent>::new()).boxed();
+        let state = SubscribeState {
+            first_block: 100,
+            first_timestamp: 0,
+            combined_stream: Some(combined),
+        };
+        pump.resume_from_subscribe(state).await;
+
+        assert_eq!(
+            asserter.read_q().len(),
+            0,
+            "S ≥ W → no auto-backfill, no eth_getLogs call"
+        );
+    }
+
+    /// Diagnostic for the 2026-07-12 WS `eth_getLogs` hang.
+    ///
+    /// Root cause (confirmed here with tracing + a concurrent
+    /// `get_block_number` probe): tungstenite correctly returns
+    /// `Error::Capacity(MessageTooLong)` for a response larger than the
+    /// default `max_frame_size` (16 MiB) / `max_message_size` (64 MiB), but
+    /// `alloy-pubsub`'s `WsBackend` converts that to
+    /// `TransportErrorKind::backend_gone()` (a *retryable* error) at the
+    /// backend→service boundary — losing the Capacity specificity. The pubsub
+    /// service then enters an INFINITE reconnect→redispatch loop: `reconnect()`
+    /// succeeds on the first attempt (the WS handshake is fine; only the
+    /// response is too big), `max_retries` is never consumed, and the pending
+    /// in-flight `eth_getLogs` is re-dispatched each cycle. The caller's
+    /// `get_logs` future never resolves; small concurrent calls keep working.
+    ///
+    /// Three variants:
+    /// A — default tungstenite caps: demonstrates the infinite cycle (HUNG,
+    ///     `get_block_number` probe still succeeding concurrently);
+    /// B — raised caps via raw `WsConnect::with_config`: WS handles it;
+    /// C — production `AlloyProvider::new` path (= the `build_provider` fix):
+    ///     regression sentinel.
+    ///
+    /// Run with:
+    /// `cargo test -p degenbot-bot --manifest-path rust/Cargo.toml \
+    ///   -- --ignored --nocapture ws_getlogs_large_filter_diagnostic`
+    ///
+    /// Requires `DEGENBOT_RPC_WS_CHAINID_1` (a mainnet WS endpoint).
+    #[tokio::test]
+    #[ignore = "requires a live mainnet WS endpoint (DEGENBOT_RPC_WS_CHAINID_1)"]
+    #[allow(clippy::too_many_lines)]
+    async fn ws_getlogs_large_filter_diagnostic() {
+        use alloy::network::Ethereum;
+        use alloy::providers::{Provider, ProviderBuilder, WebSocketConfig, WsConnect};
+        use std::time::Duration;
+        use tokio::time::timeout;
+        use tracing_subscriber::util::SubscriberInitExt;
+        type Erased = std::sync::Arc<dyn Provider<Ethereum>>;
+
+        let Ok(ws_url) = std::env::var("DEGENBOT_RPC_WS_CHAINID_1") else {
+            eprintln!("skip: DEGENBOT_RPC_WS_CHAINID_1 not set");
+            return;
+        };
+
+        // Fetch a recent block number (small call — works over default WS).
+        let anchor_provider: Erased = {
+            let mid = ProviderBuilder::default()
+                .connect_ws(WsConnect::new(ws_url.clone()))
+                .await
+                .expect("ws connect (anchor)")
+                .erased();
+            Arc::new(mid)
+        };
+        let latest = anchor_provider
+            .get_block_number()
+            .await
+            .expect("block number");
+        // Leave a few blocks of margin so the range is settled.
+        let to = latest - 5;
+        let from = to - 1_999;
+        let filter = build_backfill_filter(from, to);
+        eprintln!("filter range {from}–{to} (latest={latest})");
+
+        // --- Variant A: DEFAULT tungstenite config (max_message_size=64MiB) ---
+        // Install a tracing subscriber so alloy's reconnect-cycle `error!`/
+        // `warn!` logs surface (without one they're silently dropped — which is
+        // why the earlier run showed "no error surfaced"). Also poll
+        // `get_block_number` concurrently: if it keeps succeeding while
+        // `get_logs` is pending, the WS service is alive and silently
+        // reconnecting (proving the oversized-response cycle), NOT truly
+        // stalled in tungstenite.
+        let _guard = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(
+                "alloy_pubsub=debug,alloy_transport_ws=debug,tungstenite=info",
+            ))
+            .with_test_writer()
+            .set_default();
+        let p: Erased = {
+            let mid = ProviderBuilder::default()
+                .connect_ws(WsConnect::new(ws_url.clone()))
+                .await
+                .expect("ws connect (A)")
+                .erased();
+            Arc::new(mid)
+        };
+        // Concurrent block-number probe on the SAME provider.
+        let probe_p = Arc::clone(&p);
+        let probe = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            tick.tick().await; // skip immediate
+            for i in 1..=15_u32 {
+                tick.tick().await;
+                match probe_p.get_block_number().await {
+                    Ok(n) => eprintln!("A probe #{i}: get_block_number OK = {n}"),
+                    Err(e) => eprintln!("A probe #{i}: get_block_number ERR = {e}"),
+                }
+            }
+        });
+        let t0 = std::time::Instant::now();
+        let res = timeout(Duration::from_secs(30), p.get_logs(&filter)).await;
+        let elapsed = t0.elapsed();
+        match res {
+            Ok(Ok(logs)) => eprintln!(
+                "A DEFAULT   : OK  {} logs in {:.2}s (under the 64MiB cap this run)",
+                logs.len(),
+                elapsed.as_secs_f64()
+            ),
+            Ok(Err(e)) => eprintln!(
+                "A DEFAULT   : ERR after {:.2}s — `{e}`",
+                elapsed.as_secs_f64()
+            ),
+            Err(_) => {
+                eprintln!("A DEFAULT   : HUNG (30s timeout, no error surfaced to the caller)");
+            }
+        }
+        // Let the probe finish printing so we see the concurrent-call verdict.
+        let _ = timeout(Duration::from_secs(35), probe).await;
+
+        // --- Variant B: RAISED config (no size cap) ---
+        let cfg = WebSocketConfig::default()
+            .max_message_size(None)
+            .max_frame_size(None);
+        let p: Erased = {
+            let mid = ProviderBuilder::default()
+                .connect_ws(WsConnect::new(ws_url.clone()).with_config(cfg))
+                .await
+                .expect("ws connect (B)")
+                .erased();
+            Arc::new(mid)
+        };
+        let t0 = std::time::Instant::now();
+        let res = timeout(Duration::from_mins(1), p.get_logs(&filter)).await;
+        let elapsed = t0.elapsed();
+        match res {
+            Ok(Ok(logs)) => eprintln!(
+                "B RAISED    : OK  {} logs in {:.2}s",
+                logs.len(),
+                elapsed.as_secs_f64()
+            ),
+            Ok(Err(e)) => eprintln!(
+                "B RAISED    : ERR after {:.2}s — `{e}`",
+                elapsed.as_secs_f64()
+            ),
+            Err(_) => eprintln!("B RAISED    : HUNG (60s timeout)"),
+        }
+
+        // --- Variant C: production path (`AlloyProvider::new` → ---
+        // `build_provider`), which now raises the tungstenite caps in
+        // `degenbot_rpc::provider::build_provider`. This is the regression
+        // sentinel: if a future change drops the raised-config in
+        // `build_provider`, this variant hangs and the test suite surfaces it.
+        let alloy_provider = degenbot_rpc::provider::AlloyProvider::new(&ws_url, 3)
+            .await
+            .expect("AlloyProvider::new");
+        let p = alloy_provider.provider_arc();
+        let t0 = std::time::Instant::now();
+        let res = timeout(Duration::from_mins(1), p.get_logs(&filter)).await;
+        let elapsed = t0.elapsed();
+        match res {
+            Ok(Ok(logs)) => eprintln!(
+                "C PRODUCTION: OK  {} logs in {:.2}s",
+                logs.len(),
+                elapsed.as_secs_f64()
+            ),
+            Ok(Err(e)) => eprintln!(
+                "C PRODUCTION: ERR after {:.2}s — `{e}`",
+                elapsed.as_secs_f64()
+            ),
+            Err(_) => {
+                eprintln!("C PRODUCTION: HUNG (60s timeout) — `build_provider` config regression");
+            }
+        }
     }
 }

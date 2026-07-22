@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from hexbytes import HexBytes
 
-from degenbot.abi_adapter import decode as abi_decode
 from degenbot.builders.request import BuildManagedPoolRequest
 from degenbot.builders.tick_data_fetcher import (
     FetchedTickData,
@@ -17,11 +16,9 @@ from degenbot.builders.tick_data_fetcher import (
 from degenbot.builders.v4_builder_base import V4BuilderBase, V4DbValues, V4Slot0Data
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import ZERO_ADDRESS as _ZERO_ADDRESS
-from degenbot.degenbot_rs import cl_get_tick_word_and_bit_position
 from degenbot.exceptions.base import DegenbotValueError
 from degenbot.exceptions.pool import LiquidityPoolError
 from degenbot.logging import logger
-from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
 from degenbot.uniswap.v4_liquidity_pool import ProtocolFee, UniswapV4Pool
 from degenbot.uniswap.v4_types import (
@@ -31,13 +28,12 @@ from degenbot.uniswap.v4_types import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from web3.types import BlockIdentifier
-
+    from degenbot.bot import PyBotIo
     from degenbot.builders.context import BuilderContext
-    from degenbot.builders.pool_io import PoolIO
     from degenbot.builders.request import BuildRequest
     from degenbot.types.abstract.liquidity_pool import AbstractLiquidityPool
     from degenbot.types.aliases import ChainId
+    from degenbot.types.rpc_types import BlockIdentifier
 
 
 class V4PoolBuilder(V4BuilderBase):
@@ -66,7 +62,7 @@ class V4PoolBuilder(V4BuilderBase):
         pool_manager_address: str,
         state_view_address: str,
         chain_id: int,
-        io: PoolIO,
+        io: PyBotIo,
     ) -> Callable[[int, int], FetchedTickData | None]:
         """Create a tick data fetcher callback for a V4 pool.
 
@@ -99,7 +95,7 @@ class V4PoolBuilder(V4BuilderBase):
         address: str,
         *,
         chain_id: ChainId | None = None,
-        io: PoolIO,
+        io: PyBotIo,
         request: BuildRequest,
     ) -> AbstractLiquidityPool:
         """Fetch pool data from DB/RPC and construct an I/O-free UniswapV4Pool.
@@ -129,47 +125,28 @@ class V4PoolBuilder(V4BuilderBase):
         # token fetches. Falls back to skipping when no `io` /
         # `database_path` is configured (mirrors `contextlib.suppress`).
         db_values = None
-        pool_id_db: int | None = None
-        fetch_pool_manager = getattr(io, "fetch_pool_manager", None) if io is not None else None
-        # All PyBotIo DB-query methods are present together; bind them via
-        # `getattr(..., None)` so the static type checker doesn't flag the
-        # `PoolIO`-protocol access (`PyBotIo` defines them; `PoolIO` does not).
-        fetch_v4_pool_by_pool_hash = (
-            getattr(io, "fetch_v4_pool_by_pool_hash", None)
-            if fetch_pool_manager is not None
-            else None
-        )
-        fetch_token_by_id = (
-            getattr(io, "fetch_token_by_id", None) if fetch_pool_manager is not None else None
-        )
-        if (
-            fetch_pool_manager is not None
-            and fetch_v4_pool_by_pool_hash is not None
-            and fetch_token_by_id is not None
-        ):
-            with contextlib.suppress(Exception):
-                manager_row = fetch_pool_manager(chain_id=chain_id, address=pool_manager_address)
-                if manager_row is not None:
-                    v4_row = fetch_v4_pool_by_pool_hash(pool_hash_hex=pool_id_bytes.to_0x_hex())
-                    if (
-                        v4_row is not None
-                        and v4_row.currency0_id is not None
-                        and v4_row.currency1_id is not None
-                    ):
-                        currency0_row = fetch_token_by_id(token_id=v4_row.currency0_id)
-                        currency1_row = fetch_token_by_id(token_id=v4_row.currency1_id)
-                        if currency0_row is not None and currency1_row is not None:
-                            db_values = V4DbValues(
-                                currency0_address=get_checksum_address(currency0_row.address),
-                                currency1_address=get_checksum_address(currency1_row.address),
-                                hook_address=get_checksum_address(v4_row.hooks),
-                                tick_spacing=v4_row.tick_spacing,
-                                fee=v4_row.fee_token0,
-                                state_view_address=manager_row.state_view,
-                            )
-                            # The V4 tick snapshot is keyed by
-                            # `managed_pool_id`.
-                            pool_id_db = v4_row.managed_pool_id
+        # Route the DB read through the Rust `PyBotIo` seam (QVMWQC). The
+        # `contextlib.suppress` makes a missing/empty DB a skip, not an error.
+        with contextlib.suppress(Exception):
+            manager_row = io.fetch_pool_manager(chain_id=chain_id, address=pool_manager_address)
+            if manager_row is not None:
+                v4_row = io.fetch_v4_pool_by_pool_hash(pool_hash_hex=pool_id_bytes.to_0x_hex())
+                if (
+                    v4_row is not None
+                    and v4_row.currency0_id is not None
+                    and v4_row.currency1_id is not None
+                ):
+                    currency0_row = io.fetch_token_by_id(token_id=v4_row.currency0_id)
+                    currency1_row = io.fetch_token_by_id(token_id=v4_row.currency1_id)
+                    if currency0_row is not None and currency1_row is not None:
+                        db_values = V4DbValues(
+                            currency0_address=get_checksum_address(currency0_row.address),
+                            currency1_address=get_checksum_address(currency1_row.address),
+                            hook_address=get_checksum_address(v4_row.hooks),
+                            tick_spacing=v4_row.tick_spacing,
+                            fee=v4_row.fee_token0,
+                            state_view_address=manager_row.state_view,
+                        )
 
         # Get immutable values
         if db_values is not None:
@@ -225,172 +202,72 @@ class V4PoolBuilder(V4BuilderBase):
         )
 
         # Fetch slot0 + liquidity via state view contract
-        # ADR-005 slice 14o: when io is a PyBotIo, delegate both RPCs to Rust.
-        fetch_v4_slot0_liquidity = getattr(io, "fetch_v4_slot0_liquidity", None)
-        if fetch_v4_slot0_liquidity is not None:
-            try:
-                assert state_view_address is not None
-                sqrt_price_x96, tick_raw, protocol_fee_raw, lp_fee, liquidity_val = (
-                    fetch_v4_slot0_liquidity(state_view_address, pool_id_bytes, block=state_block)
-                )
-            except Exception as exc:
-                raise LiquidityPoolError(message="Could not decode contract data") from exc
-            slot0_data = V4Slot0Data(
-                sqrt_price_x96=int(sqrt_price_x96),
-                tick=int(tick_raw),
-                protocol_fee_one_to_zero=int(protocol_fee_raw) >> 12,
-                protocol_fee_zero_to_one=int(protocol_fee_raw) & 0xFFF,
-                lp_fee=int(lp_fee),
+        # ADR-005 slice 14o: delegate both RPCs to Rust (PyBotIo is the only
+        # executor; the Python parity-gate fallback is retired).
+        try:
+            assert state_view_address is not None
+            sqrt_price_x96, tick_raw, protocol_fee_raw, lp_fee, liquidity_val = (
+                io.fetch_v4_slot0_liquidity(state_view_address, pool_id_bytes, block=state_block)
             )
-        else:
-            try:
-                slot0_calldata = encode_function_calldata(
-                    "getSlot0(bytes32)",
-                    [pool_id_bytes],
-                )
-                liquidity_calldata = encode_function_calldata(
-                    "getLiquidity(bytes32)",
-                    [pool_id_bytes],
-                )
+        except Exception as exc:
+            raise LiquidityPoolError(message="Could not decode contract data") from exc
+        slot0_data = V4Slot0Data(
+            sqrt_price_x96=int(sqrt_price_x96),
+            tick=int(tick_raw),
+            protocol_fee_one_to_zero=int(protocol_fee_raw) >> 12,
+            protocol_fee_zero_to_one=int(protocol_fee_raw) & 0xFFF,
+            lp_fee=int(lp_fee),
+        )
 
-                assert state_view_address is not None
-                slot0_result = io.call(
-                    to=state_view_address,
-                    data=slot0_calldata,
-                    block=state_block,
-                )
-                liquidity_result = io.call(
-                    to=state_view_address,
-                    data=liquidity_calldata,
-                    block=state_block,
-                )
-            except Exception as exc:
-                raise LiquidityPoolError(message="Could not decode contract data") from exc
+        # Fetch initial tick bitmap and tick data via the Rust `assemble_*`
+        # helper (UHPXSD cutover / epic Candidate 1 / Decision 6 (B)) — V4 twin
+        # of the V3 builder cutover. One call — Store take → Db precedence,
+        # both in Rust; on a hit, the returned `tick_rows` is already in
+        # `register_v4_pool`'s `tick_data` arg shape
+        # (`{tick: (liquidity_gross, liquidity_net, block)}`). On a miss, fall
+        # through to Branch 3 (sparse RPC) as before.
+        #
+        # ``tick_map_is_tracked`` is True ONLY when the tick map is complete
+        # (a full snapshot) — so the Rust dense swap's ``gen_ticks(tick_data)``
+        # can trust it to propose every crossing tick. The live single-word RPC
+        # fetch path below seeds ONLY the current tick-bitmap word; swaps that
+        # cross into a neighbouring word would silently walk uninitialized
+        # boundary ticks (applying no liquidity_net) and produce wrong amounts.
+        # Such pools MUST register ``coverage=sparse`` + a fetcher so the Rust
+        # miss-detection backfills missing words.
+        #
+        # QVMWQC: the tick-snapshot read stays routed through the Rust seam.
+        # Db + Chain errors propagate as `RuntimeError` from the Rust helper
+        # (Decision 8 (A): loud failure over silent degrade, deliberate
+        # behavior change — a `database is locked` or RPC failure now aborts
+        # pool registration where Python previously swallowed it and fell to
+        # sparse RPC).
+        #
+        # Task XH5ID5: the Python Branch 3 inline sparse-RPC choreography is
+        # GONE — the Rust Chain arm owns it. `io=io` threads the
+        # `AlloyTickBootstrapRpc` through; `io=None` (cold-start, no `Bot`-bound
+        # provider) leaves the Chain arm off → `(tick_data=None,
+        # coverage="sparse")` registration (the defensive fallback).
+        register_rows: dict[int, tuple[int, int, int]] | None = None
+        coverage = "sparse"
+        tick_map_is_tracked = False
 
-            slot0_data = V4BuilderBase.decode_slot0(slot0_result)
-            (liquidity_val,) = abi_decode(
-                types=["uint256"],
-                data=liquidity_result,
-            )
-
-        # Fetch initial tick bitmap and tick data
-        working_tick_bitmap: dict[int, Any] = {}
-        working_tick_data: dict[int, Any] = {}
-        # ``tick_data_complete`` is True ONLY when ``working_tick_data`` holds
-        # EVERY on-chain initialized tick (a full snapshot) — so the Rust dense
-        # swap's ``gen_ticks(tick_data)`` can trust it to propose every crossing
-        # tick. The live single-word RPC fetch path below seeds ONLY the current
-        # tick-bitmap word; swaps that cross into a neighbouring word would
-        # silently walk uninitialized boundary ticks (applying no liquidity_net)
-        # and produce wrong amounts. Such pools MUST register ``coverage=sparse``
-        # + a fetcher so the Rust miss-detection backfills missing words.
-        tick_data_complete = False
-
-        # Use provided tick data if given (snapshot or test fixtures)
-        if request.tick_bitmap is not None and request.tick_data is not None:
-            working_tick_bitmap = dict(request.tick_bitmap)
-            working_tick_data = dict(request.tick_data)
-            tick_data_complete = True
-        elif request.tick_bitmap is not None or request.tick_data is not None:
-            raise DegenbotValueError(message="Provide both tick_bitmap and tick_data, or neither.")
-        else:
-            # Try DB snapshot tables first — route the tick-snapshot read
-            # through the Rust `PyBotIo` seam (QVMWQC). The V4 managed tables
-            # are keyed by `managed_pool_id` (= `pool_id_db`); the
-            # liquidity-update block comes from the V4 subclass row.
-            db_snapshot_loaded = False
-            if pool_id_db is not None:
-                fetch_init_maps = getattr(io, "fetch_managed_initialization_maps", None)
-                fetch_liq_positions = getattr(io, "fetch_managed_liquidity_positions", None)
-                fetch_pool_kind = getattr(io, "fetch_pool_kind", None)
-                if (
-                    fetch_init_maps is not None
-                    and fetch_liq_positions is not None
-                    and fetch_pool_kind is not None
-                ):
-                    with contextlib.suppress(Exception):
-                        init_maps = fetch_init_maps(pool_id_db)
-                        liq_positions = fetch_liq_positions(pool_id_db)
-                        update_block = None
-                        kind_row = fetch_pool_kind(kind="uniswap_v4", pool_id=pool_id_db)
-                        if kind_row is not None:
-                            update_block = kind_row.liquidity_update_block
-                        working_tick_bitmap, working_tick_data, db_snapshot_loaded = (
-                            V4BuilderBase.load_tick_snapshot_from_seam_rows(
-                                init_maps=init_maps,
-                                liq_positions=liq_positions,
-                                liquidity_update_block=update_block,
-                            )
-                        )
-
-            if not db_snapshot_loaded:
-                word, _ = cl_get_tick_word_and_bit_position(
-                    tick=int(slot0_data.tick),
-                    tick_spacing=tick_spacing_for_pool,
-                )
-
-                assert state_view_address is not None
-                # ADR-005 slice 14t: delegate V4 tick-bitmap + per-tick RPCs to Rust.
-                fetch_v4_tick_bitmap = getattr(io, "fetch_v4_tick_bitmap", None)
-                fetch_v4_tick_data = getattr(io, "fetch_v4_tick_data", None)
-                if fetch_v4_tick_bitmap is not None:
-                    bitmap_at_word = fetch_v4_tick_bitmap(
-                        state_view_address,
-                        pool_id_bytes,
-                        word,
-                        block=state_block,
-                    )
-                else:
-                    (bitmap_at_word,) = abi_decode(
-                        types=["uint256"],
-                        data=io.call(
-                            to=state_view_address,
-                            data=encode_function_calldata(
-                                "getTickBitmap(bytes32,int16)",
-                                [pool_id_bytes, word],
-                            ),
-                            block=state_block,
-                        ),
-                    )
-
-                if bitmap_at_word != 0:
-                    active_ticks = [
-                        ((word << 8) + i) * tick_spacing_for_pool
-                        for i in range(256)
-                        if bitmap_at_word & (1 << i) > 0
-                    ]
-
-                    for active_tick in active_ticks:
-                        if fetch_v4_tick_data is not None:
-                            liquidity_gross, liquidity_net = fetch_v4_tick_data(
-                                state_view_address,
-                                pool_id_bytes,
-                                active_tick,
-                                block=state_block,
-                            )
-                        else:
-                            result = io.call(
-                                to=state_view_address,
-                                data=encode_function_calldata(
-                                    "getTickLiquidity(bytes32,int24)",
-                                    [pool_id_bytes, active_tick],
-                                ),
-                                block=state_block,
-                            )
-                            liquidity_gross, liquidity_net = abi_decode(
-                                types=["uint128", "int128"],
-                                data=result,
-                            )
-                        working_tick_data[active_tick] = LiquidityAtTick(
-                            liquidity_net=int(liquidity_net),
-                            liquidity_gross=int(liquidity_gross),
-                            block=state_block,
-                        )
-
-                working_tick_bitmap[word] = BitmapAtWord(
-                    bitmap=bitmap_at_word,
-                    block=state_block,
-                )
+        assembled = self._py_bot.assemble_v4_tick_map(
+            pool_manager_address,
+            pool_id_bytes,
+            state_view_address,
+            tick=int(slot0_data.tick),
+            tick_spacing=tick_spacing_for_pool,
+            block=int(state_block),
+            io=io,
+        )
+        if assembled is not None:
+            rows, coverage = assembled
+            tick_map_is_tracked = coverage == "tracked"
+            register_rows = rows
+        # Cold-start fallback: when `io=None` the Chain arm is off →
+        # register_rows stays None + coverage stays "sparse" (matches the
+        # pre-cutover path).
 
         # If tick data was populated, pass both. Otherwise pass None (sparse mode).
         assert state_view_address is not None
@@ -407,32 +284,10 @@ class V4PoolBuilder(V4BuilderBase):
         # Previously the builder registered empty then called
         # ``update_tick_data`` (a `state.tick_data = …` REPLACE that clobbered
         # any live ModifyLiquidity in the register→seed window → V4 desync).
-        register_rows: dict[int, tuple[int, int, int]] | None = None
-        coverage = "sparse"
-        # Seed whatever ticks we have (the current word) INLINE so the pool is
-        # never visible to a live pump unseeded; ``coverage`` is the
-        # completeness contract: ``tracked`` ONLY when the tick map is complete
-        # (full snapshot) — a windowed single-word seed stays ``sparse`` so the
-        # Rust miss-detection backfills neighbouring words on demand.
-        tick_map_is_tracked = bool(working_tick_data) and tick_data_complete
-        if tick_map_is_tracked:
-            coverage = "tracked"
-        if working_tick_data:
-            rows: dict[int, tuple[int, int, int]] = {}
-            for t, info in working_tick_data.items():
-                if isinstance(info, LiquidityAtTick):
-                    rows[int(t)] = (
-                        int(info.liquidity_gross),
-                        int(info.liquidity_net),
-                        int(info.block),
-                    )
-                else:
-                    rows[int(t)] = (
-                        int(info[0]),
-                        int(info[1]),
-                        int(info[2]) if len(info) > 2 else 0,  # noqa: PLR2004
-                    )
-            register_rows = rows
+        # ``coverage`` is the completeness contract: ``tracked`` ONLY when the
+        # tick map is complete (full snapshot) — a windowed single-word seed
+        # stays ``sparse`` so the Rust miss-detection backfills neighbouring
+        # words on demand.
         pool_handle_pool_id = self._py_bot.register_v4_pool(
             pool_manager=pool_manager_address,
             pool_id_hex=pool_id_bytes.to_0x_hex(),
@@ -496,7 +351,7 @@ class V4PoolBuilder(V4BuilderBase):
         pool: AbstractLiquidityPool,
         *,
         block_number: BlockIdentifier | None = None,
-        io: PoolIO | None = None,
+        io: PyBotIo | None = None,
     ) -> bool:
         """Fetch current state from chain and push update to the pool.
 
@@ -515,44 +370,22 @@ class V4PoolBuilder(V4BuilderBase):
         raw_block = block_number if block_number is not None else io.get_block_number()
         block_number_ = int(raw_block) if not isinstance(raw_block, int) else raw_block
 
-        # ADR-005 slice 14o: when io is a PyBotIo, delegate both RPCs to Rust.
-        fetch_v4_slot0_liquidity = getattr(io, "fetch_v4_slot0_liquidity", None)
-        if fetch_v4_slot0_liquidity is not None:
-            sqrt_price_x96, tick_raw, protocol_fee_raw, lp_fee, liquidity_val = (
-                fetch_v4_slot0_liquidity(
-                    pool._state_view_address,  # noqa: SLF001
-                    pool.pool_id,
-                    block=block_number_,
-                )
-            )
-            slot0_data = V4Slot0Data(
-                sqrt_price_x96=int(sqrt_price_x96),
-                tick=int(tick_raw),
-                protocol_fee_one_to_zero=int(protocol_fee_raw) >> 12,
-                protocol_fee_zero_to_one=int(protocol_fee_raw) & 0xFFF,
-                lp_fee=int(lp_fee),
-            )
-        else:
-            slot0_calldata = encode_function_calldata("getSlot0(bytes32)", [pool.pool_id])
-            slot0_result = io.call(
-                to=pool._state_view_address,  # noqa: SLF001
-                data=slot0_calldata,
+        # ADR-005 slice 14o: delegate both RPCs to Rust (PyBotIo is the only
+        # executor; the Python parity-gate fallback is retired).
+        sqrt_price_x96, tick_raw, protocol_fee_raw, lp_fee, liquidity_val = (
+            io.fetch_v4_slot0_liquidity(
+                pool._state_view_address,  # noqa: SLF001
+                pool.pool_id,
                 block=block_number_,
             )
-            slot0_data = V4BuilderBase.decode_slot0(slot0_result)
-
-            liquidity_calldata = encode_function_calldata("getLiquidity(bytes32)", [pool.pool_id])
-            (liquidity_val,) = cast(
-                "tuple[int]",
-                abi_decode(
-                    types=["uint256"],
-                    data=io.call(
-                        to=pool._state_view_address,  # noqa: SLF001
-                        data=liquidity_calldata,
-                        block=block_number_,
-                    ),
-                ),
-            )
+        )
+        slot0_data = V4Slot0Data(
+            sqrt_price_x96=int(sqrt_price_x96),
+            tick=int(tick_raw),
+            protocol_fee_one_to_zero=int(protocol_fee_raw) >> 12,
+            protocol_fee_zero_to_one=int(protocol_fee_raw) & 0xFFF,
+            lp_fee=int(lp_fee),
+        )
 
         if (
             pool.sqrt_price_x96 == slot0_data.sqrt_price_x96

@@ -7,7 +7,6 @@ tags:
 related_files:
   - ../../src/degenbot/cli/aave.py
   - ../../src/degenbot/database/models/aave.py
-  - ../../src/degenbot/aave/libraries/wad_ray_math.py
 complexity: complex
 ---
 
@@ -63,33 +62,13 @@ GHO is Aave's stablecoin with discounted borrowing based on stkAAVE holdings. Th
 
 This difference exists because GHO deprecated the discount mechanism in revision 4, which changed the rounding requirements in the Pool contract.
 
-When processing GHO BORROW events, always pre-calculate the scaled amount using `calculate_mint_scaled_amount()` from the original borrow amount (extracted from the BORROW event), then pass it to `process_mint_event()`:
-
-```python
-processor = TokenProcessorFactory.get_gho_debt_processor(revision=6)
-
-# Pre-calculate from BORROW event
-borrow_amount = ...  # From BORROW event
-scaled_delta = processor.calculate_mint_scaled_amount(
-    raw_amount=borrow_amount,
-    index=index,
-)
-
-# Process Mint event with pre-calculated value
-result = processor.process_mint_event(
-    event_data=mint_event,
-    previous_balance=previous_balance,
-    previous_index=previous_index,
-    previous_discount=0,  # Ignored for V4+
-)
-```
-
-### GHO Processing
-
-Dedicated processors handle GHO Mint/Burn events:
-- Calculate discount-scaled balances
-- Update user discount rates based on position changes
-- Verify against contract after each block
+When processing GHO BORROW events, the scaled amount must be pre-calculated
+from the original borrow amount (extracted from the BORROW event) using
+`calculate_mint_scaled_amount()` before being applied to the Mint event.
+This rounding behaviour now lives in the Rust `degenbot-aave-updater` core
+(see the *Writer implementation* section below); the Python
+`TokenProcessorFactory` that previously exposed it was retired with the
+rest of the Python enrichment/processing pipeline.
 
 ## Offline Position Calculation
 
@@ -365,7 +344,10 @@ This ensures chronological processing within each block.
 
 ## Token Revision Libraries
 
-The code supports multiple Aave V3 token revisions. The `WadRayMathLibrary` protocol (defined in [`src/degenbot/aave/libraries/wad_ray_math.py`](../../src/degenbot/aave/libraries/wad_ray_math.py)) defines the interface for math operations, with `Rounding` enum support:
+The code supports multiple Aave V3 token revisions. The wad/ray math (scaled-balance
+multiplication with rounding) is **Rust-owned** (`degenbot-evm-math::wad_ray_math`,
+exposed to the updater via `degenbot-aave::updater::processors`). The rounding
+modes mirror the Solidity `WadRayMathLibrary`:
 
 | Rounding Mode | Usage |
 |--------------|-------|
@@ -375,7 +357,9 @@ The code supports multiple Aave V3 token revisions. The `WadRayMathLibrary` prot
 
 ### Rounding Functions by Revision
 
-**All revisions**: Use `ray_div(a, b, rounding=...)` with the `Rounding` enum from [`src/degenbot/aave/libraries/wad_ray_math.py`](../../src/degenbot/aave/libraries/wad_ray_math.py).
+**All revisions**: `ray_div(a, b, rounding=...)` with the rounding mode
+(`FLOOR` / `CEIL` / half-up default) — the Rust `processors` module selects
+the mode per token revision + operation.
 
 - `Rounding.FLOOR` - Round down
 - `Rounding.CEIL` - Round up
@@ -395,7 +379,7 @@ The code supports multiple Aave V3 token revisions. The `WadRayMathLibrary` prot
 
 ## Writer implementation
 
-The Aave V3 writer is **Rust-owned** (`degenbot-aave-updater` core crate). The per-market chunk loop, RPC fetch+decode, DB writes, the per-chunk transaction, and the on-chain-truth verification all live in the Rust core, driven from `degenbot aave update` via the `run_aave_update` PyO3 seam (a thin driver shell). The former Python writer pipeline (`update_aave_market`, `event_handlers._process_*`, `transaction_processor`/`operations_parser`/`token_processor`, `db_*.py`, the `verify_*` Python invariants) was retired by the §4.2 cutover (task `CZM7TI`) after the Rust path was proven GREEN to the live chain tip with full verification. The `Event Processing Details` and `Algorithm Details` sections above describe domain behavior that remains accurate; the implementation now lives in `rust/crates/degenbot-aave-updater/`.
+The Aave V3 writer is **Rust-owned** (`degenbot-aave` core crate). The per-market chunk loop, RPC fetch+decode, DB writes, the per-chunk transaction, and the on-chain-truth verification all live in the Rust core, driven from `degenbot aave update` via the `run_aave_update` PyO3 seam (a thin driver shell). The former Python writer pipeline (`update_aave_market`, `event_handlers._process_*`, `transaction_processor`/`operations_parser`/`token_processor`, `db_*.py`, the `verify_*` Python invariants) was retired by the §4.2 cutover (task `CZM7TI`) after the Rust path was proven GREEN to the live chain tip with full verification. The `Event Processing Details` and `Algorithm Details` sections above describe domain behavior that remains accurate; the implementation now lives in `rust/crates/degenbot-aave/`.
 
 ## Configuration
 
@@ -423,13 +407,13 @@ The command uses Web3 connections from the degenbot config file. Each active cha
 
 - **Database**: SQLAlchemy ORM (see [`src/degenbot/database/models/aave.py`](../../src/degenbot/database/models/aave.py))
 - **Blockchain**: Web3.py for RPC calls
-- **Math**: Aave WadRayMath library for scaled balance calculations with rounding enum support
+- **Math**: Rust `degenbot-evm-math::wad_ray_math` for scaled balance calculations with rounding mode support (the former Python `aave/libraries/` package was retired)
 - **Logging**: Click for CLI output, tqdm for progress bars
-- **Token Revisions**: Protocol-based library selection for different Aave V3 token implementations
+- **Writer**: Rust `degenbot-aave-updater` core crate (the Python enrichment/processing pipeline was retired)
 
 ## Solidity Reference
 
-The CLI interacts with Aave V3 contracts. Key implementation details in [`src/degenbot/aave/libraries/`](../../src/degenbot/aave/libraries/):
+The CLI interacts with Aave V3 contracts. Key implementation details in [`rust/crates/degenbot-aave/src/updater/`](../../rust/crates/degenbot-aave/src/updater/) + [`degenbot-evm-math`](../../rust/crates/degenbot-evm-math/src/wad_ray_math.rs):
 
 ### Scaled Balance Pattern
 
@@ -448,7 +432,7 @@ Events are notifications only. Actual storage changes happen in `_mint()` and `_
 
 Solidity uses half-up rounding: `(a * b + HALF_RAY) / RAY`
 
-The Python port in [`src/degenbot/aave/libraries/wad_ray_math.py`](../../src/degenbot/aave/libraries/wad_ray_math.py) must match this exactly for correct balance synchronization. The library supports `Rounding.FLOOR`, `Rounding.CEIL`, and default half-up rounding.
+The Rust port (`degenbot-evm-math::wad_ray_math`) matches this exactly for correct balance synchronization. The `processors` module in `degenbot-aave` selects `FLOOR`, `CEIL`, or half-up rounding per token revision + operation.
 
 ### Event Structure
 

@@ -17,8 +17,10 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
+from degenbot._ffi.dex_identity import PyDexIdentity
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot, PyDexIdentity, PyLiquidityPool
+from degenbot.types import PyLiquidityPool
 from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 
 if TYPE_CHECKING:
@@ -150,9 +152,7 @@ def make_v2_pool(
     # so guard with ``get_token``.
     for tok in (token0, token1):
         if py_bot.get_token(tok.address) is None:
-            py_bot.register_token(
-                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
-            )
+            py_bot.register_token(tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id)
 
     py_pool: PyLiquidityPool | None = py_bot.get_pool(pool_id)
     assert py_pool is not None, "register_v2_pool returned a pool_id with no handle"

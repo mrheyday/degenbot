@@ -30,23 +30,27 @@ resolver = "2"
 members = [
     "crates/degenbot-core",
     "crates/degenbot-cl-math",
+    "crates/degenbot-v2-math",
     "crates/degenbot-curve-math",
     "crates/degenbot-balancer-math",
     "crates/degenbot-solidly-math",
     "crates/degenbot-evm-math",
+    "crates/degenbot-pools",
+    "crates/degenbot-solvers",
     "crates/degenbot-price",
     "crates/degenbot-executor",
     "crates/degenbot-submission",
     "crates/degenbot-simulation",
     "crates/degenbot-abi",
     "crates/degenbot-rpc",
+    "crates/degenbot-fork",
     "crates/degenbot-bot",
     "crates/degenbot-decoders",
     "crates/degenbot-uniswap",
     "crates/degenbot-pathfinding",
     "crates/degenbot-db",
     "crates/degenbot-pool-updater",
-    "crates/degenbot-aave-updater",
+    "crates/degenbot-aave",
     "crates/degenbot-executor",
     "crates/degenbot-python",
     "crates/degenbot",
@@ -75,6 +79,8 @@ codegen-units = 1
 codegen-units = 16
 [profile.release.package.degenbot-cl-math]
 codegen-units = 16
+[profile.release.package.degenbot-v2-math]
+codegen-units = 16
 [profile.release.package.degenbot-curve-math]
 codegen-units = 16
 [profile.release.package.degenbot-balancer-math]
@@ -83,11 +89,15 @@ codegen-units = 16
 codegen-units = 16
 [profile.release.package.degenbot-evm-math]
 codegen-units = 16
+[profile.release.package.degenbot-pools]
+codegen-units = 16
 [profile.release.package.degenbot-price]
 codegen-units = 16
 [profile.release.package.degenbot-abi]
 codegen-units = 16
 [profile.release.package.degenbot-rpc]
+codegen-units = 16
+[profile.release.package.degenbot-fork]
 codegen-units = 16
 [profile.release.package.degenbot-bot]
 codegen-units = 16

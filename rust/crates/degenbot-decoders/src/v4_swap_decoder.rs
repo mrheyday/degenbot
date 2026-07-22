@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! event Swap(
-//!     PoolId indexed id,       // bytes32
+//!     V4PoolId indexed id,       // bytes32
 //!     address indexed sender,
 //!     int128 amount0,
 //!     int128 amount1,
@@ -18,18 +18,19 @@
 //! )
 //!
 //! topic[0] = 0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f
-//! topic[1] = PoolId (indexed bytes32)
+//! topic[1] = V4PoolId (indexed bytes32)
 //! topic[2] = sender (indexed address)
 //! data    = abi.encode(int128, int128, uint160, uint128, int24, uint24)
 //!         = 6 × 32 bytes = 192 bytes
 //! ```
 //!
 //! The V4 Swap event differs from V3 in three ways:
-//! 1. `PoolId` (bytes32) replaces the pool contract address — V4 pools
+//! 1. `V4PoolId` (bytes32) replaces the pool contract address — V4 pools
 //!    live inside `PoolManager`, not as separate contracts.
 //! 2. Amounts are `int128` (not `int256`), and a `fee` field is present.
 //! 3. The event is emitted by `PoolManager`, not by individual pool contracts.
 
+use crate::uniswap_tick_range::extract_int24_from_word;
 use alloy::primitives::{Address, B256, I256, U128, U256};
 use alloy::rpc::types::Log;
 
@@ -40,13 +41,13 @@ pub const V4_SWAP_TOPIC: B256 = B256::new([
 ]);
 
 /// V4 pool identifier — a `bytes32` derived from `keccak256(PoolKey)`.
-pub type PoolId = [u8; 32];
+pub type V4PoolId = [u8; 32];
 
 /// Decoded V4 Swap event carrying post-swap state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V4SwapEvent {
     /// The pool ID (bytes32 from topic[1]).
-    pub pool_id: PoolId,
+    pub pool_id: V4PoolId,
     /// The sender (from topic[2]).
     pub sender: Address,
     /// Amount of currency0 (signed — negative for exact-input in V4).
@@ -84,8 +85,8 @@ pub fn decode_v4_swap_log(log: &Log) -> Option<V4SwapEvent> {
         return None;
     }
 
-    // Decode PoolId from topic[1] (indexed bytes32)
-    let pool_id: PoolId = topics[1].0;
+    // Decode V4PoolId from topic[1] (indexed bytes32)
+    let pool_id: V4PoolId = topics[1].0;
 
     // Decode sender from topic[2] (indexed address)
     let sender = Address::from_word(topics[2]);
@@ -111,12 +112,9 @@ pub fn decode_v4_swap_log(log: &Log) -> Option<V4SwapEvent> {
     // Decode liquidity (uint128, bytes 96..128)
     let liquidity = U128::from_be_bytes::<16>(data[112..128].try_into().ok()?);
 
-    // Decode tick (int24, bytes 128..160 — sign-extended to 256 bits in ABI)
-    let tick_bytes: [u8; 4] = data[156..160].try_into().ok()?;
-    let tick = i32::from_be_bytes(tick_bytes);
-    if !(-887_272..=887_272).contains(&tick) {
-        return None;
-    }
+    // Decode tick (int24, bytes 128..160 — sign-extended to int256 in the ABI;
+    // range-checked against the Uniswap V3 tick bounds by the shared helper).
+    let tick = extract_int24_from_word(&data[128..160])?;
 
     // Decode fee (uint24, bytes 160..192)
     let fee_bytes: [u8; 4] = data[188..192].try_into().ok()?;
@@ -144,7 +142,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn make_v4_swap_log(
-        pool_id: PoolId,
+        pool_id: V4PoolId,
         sender: Address,
         amount0: I256,
         amount1: I256,

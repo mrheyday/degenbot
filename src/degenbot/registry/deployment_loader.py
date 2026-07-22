@@ -63,20 +63,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from degenbot.aerodrome.pools import AerodromeV2Pool, AerodromeV3Pool
-from degenbot.balancer.pools import BalancerV2Pool
-from degenbot.balancer.stable_pools import BalancerV2StablePool
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.config import CONFIG_FILE
-from degenbot.degenbot_rs import PyDexIdentity, dex_identity
 from degenbot.logging import logger
-from degenbot.pancakeswap.pools import PancakeswapV3Pool
+from degenbot.types import dex_identity
 from degenbot.types.pool_type import PoolFamily
-from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
-from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 
 if TYPE_CHECKING:
     from degenbot.registry.pool_type import PoolTypeRegistry
+    from degenbot.types import DexIdentity
     from degenbot.types.abstract import AbstractLiquidityPool
 
 _SHIPPED_JSON = Path(__file__).with_name("deployments.json")
@@ -95,22 +90,47 @@ class DeploymentRecord:
     factory: str
     deployer: str | None
     init_hash: str | None
+    implementation_address: str | None = None
 
 
 # ``pool_type`` string → Python companion class. This map lives in the loader
 # (companion layer, ADR-005) — the JSON carries only the string key, so the
 # data file stays free of Python-class coupling and a standalone-Rust consumer
 # reading the same JSON would carry its own (Rust-side) pool_type → enum map.
-POOL_TYPE_MAP: dict[str, type[AbstractLiquidityPool]] = {
-    "uniswap-v2": UniswapV2Pool,
-    "uniswap-v3": UniswapV3Pool,
-    "pancakeswap-v3": PancakeswapV3Pool,
-    "sushiswap-v3": UniswapV3Pool,
-    "aerodrome-v2": AerodromeV2Pool,
-    "aerodrome-v3": AerodromeV3Pool,
-    "balancer-weighted": BalancerV2Pool,
-    "balancer-stable": BalancerV2StablePool,
-}
+#
+# Lazy: pool classes trigger heavy import chains (aerodrome → uniswap →
+# trackers → deployments → this loader) which would circular-import if
+# constructed at module level. Built once on first access.
+_POOL_TYPE_MAP: dict[str, type[AbstractLiquidityPool]] | None = None
+
+
+def _pool_type_map() -> dict[str, type[AbstractLiquidityPool]]:
+    """Return the pool_type → class map, building it lazily on first call.
+
+    Returns:
+        A mapping of pool type string to its Python pool class.
+
+    """
+    global _POOL_TYPE_MAP  # noqa: PLW0603
+    if _POOL_TYPE_MAP is None:
+        from degenbot.aerodrome.pools import AerodromeV2Pool, AerodromeV3Pool
+        from degenbot.balancer.pools import BalancerV2Pool
+        from degenbot.balancer.stable_pools import BalancerV2StablePool
+        from degenbot.pancakeswap.pools import PancakeswapV3Pool
+        from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
+        from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
+
+        _POOL_TYPE_MAP = {
+            "uniswap-v2": UniswapV2Pool,
+            "uniswap-v3": UniswapV3Pool,
+            "pancakeswap-v3": PancakeswapV3Pool,
+            "sushiswap-v3": UniswapV3Pool,
+            "aerodrome-v2": AerodromeV2Pool,
+            "aerodrome-v3": AerodromeV3Pool,
+            "balancer-weighted": BalancerV2Pool,
+            "balancer-stable": BalancerV2StablePool,
+        }
+    return _POOL_TYPE_MAP
 
 
 def _parse_record(raw: dict[str, object]) -> DeploymentRecord:
@@ -124,11 +144,17 @@ def _parse_record(raw: dict[str, object]) -> DeploymentRecord:
 
     """
     pool_type = _require_str(raw, "pool_type")
-    if pool_type not in POOL_TYPE_MAP:
+    if pool_type not in _pool_type_map():
         msg = f"Unknown pool_type {pool_type!r} in deployments JSON"
         raise ValueError(msg)
     init_hash_raw = raw.get("init_hash")
     init_hash = init_hash_raw if isinstance(init_hash_raw, str) and init_hash_raw else None
+    implementation_raw = raw.get("implementation_address")
+    implementation_address = (
+        get_checksum_address(implementation_raw)
+        if isinstance(implementation_raw, str) and implementation_raw
+        else None
+    )
     return DeploymentRecord(
         name=_require_str(raw, "name"),
         chain_id=_require_int(raw, "chain_id"),
@@ -139,6 +165,7 @@ def _parse_record(raw: dict[str, object]) -> DeploymentRecord:
         factory=get_checksum_address(_require_str(raw, "factory")),
         deployer=_optional_str(raw, "deployer"),
         init_hash=init_hash,
+        implementation_address=implementation_address,
     )
 
 
@@ -307,7 +334,7 @@ def register_from_deployments(records: list[DeploymentRecord], registry: PoolTyp
     low-level ``register()`` primitive for each record.
 
     The ``dex_variant`` preset is resolved via
-    :func:`~degenbot.degenbot_rs.dex_identity` and asserted non-None — a
+    :func:`~degenbot._ffi.dex_identity` and asserted non-None — a
     preset string in the JSON must resolve, otherwise the deployment data is
     inconsistent with the compiled ``DexIdentity`` presets (Rust-side).
 
@@ -317,10 +344,10 @@ def register_from_deployments(records: list[DeploymentRecord], registry: PoolTyp
 
     """
     for record in records:
-        pool_class = POOL_TYPE_MAP[record.pool_type]
+        pool_class = _pool_type_map()[record.pool_type]
         family = _resolve_family(record.family)
         if record.dex_variant is not None:
-            identity: PyDexIdentity | None = dex_identity(record.dex_variant)
+            identity: DexIdentity | None = dex_identity(record.dex_variant)
             assert identity is not None, (
                 f"dex_variant {record.dex_variant!r} for "
                 f"{record.name} (chain {record.chain_id}, {record.factory}) "
@@ -338,4 +365,5 @@ def register_from_deployments(records: list[DeploymentRecord], registry: PoolTyp
             family=family,
             variant=record.variant,
             dex_identity=identity,
+            implementation_address=record.implementation_address,
         )

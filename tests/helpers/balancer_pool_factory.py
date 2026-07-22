@@ -20,15 +20,15 @@ from typing import TYPE_CHECKING
 
 from degenbot.balancer.libraries.scaling_helpers import _compute_scaling_factor
 from degenbot.balancer.pools import BalancerV2Pool
-from degenbot.balancer.stable_pools import BalancerV2StablePool, INVARIANT_V2
+from degenbot.balancer.stable_pools import INVARIANT_V2, BalancerV2StablePool
+from degenbot.bot import PyBot
 from degenbot.builders.balancer_builder_base import BalancerBuilderBase
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot
 
 if TYPE_CHECKING:
     from degenbot.balancer.stable_pools import BalancerRateProvider
-    from degenbot.degenbot_rs import PyLiquidityPool
     from degenbot.erc20.erc20 import Erc20Token
+    from degenbot.types import PyLiquidityPool
     from degenbot.types.aliases import BlockNumber
 
 
@@ -101,10 +101,8 @@ def make_balancer_weighted_pool(
     # ADR-005 sealed seam: register tokens in the same Bot as the pool.
     for tok in tokens:
         if bot.get_token(tok.address) is None:
-            bot.register_token(
-                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
-            )
-    return pool_class._from_py_pool(handle)  # noqa: SLF001
+            bot.register_token(tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id)
+    return pool_class._from_py_pool(handle)
 
 
 def make_balancer_stable_pool(
@@ -164,9 +162,7 @@ def make_balancer_stable_pool(
     # get_balancer_stable_tokens, which requires registered tokens).
     for tok in tokens:
         if bot.get_token(tok.address) is None:
-            bot.register_token(
-                tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id
-            )
+            bot.register_token(tok.address, tok.name, tok.symbol, tok.decimals, tok.chain_id)
 
     pool_id_int = bot.register_balancer_stable_pool(
         address=address_checksum,
@@ -185,7 +181,7 @@ def make_balancer_stable_pool(
     handle: PyLiquidityPool | None = bot.get_pool(pool_id_int)
     assert handle is not None, "register_balancer_stable_pool returned a pool_id with no handle"
 
-    return pool_class._from_py_pool(handle)  # noqa: SLF001
+    return pool_class._from_py_pool(handle)
 
 
 __all__ = [

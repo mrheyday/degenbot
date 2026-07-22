@@ -30,8 +30,23 @@ pub use degenbot_core::{address_utils, errors, hex_utils, runtime};
 
 /// Per-chain Rust-owned bot state (`BotState`), reorg journal, decoders,
 /// liquidity verifier, block pump, log/solve/reorg coordinators, V2/V3/V4
-/// state, plus the Möbius solvers + the unified `UniswapEngine`.
+/// state, plus the Möbius solvers + the unified `ArbitrageEngine`.
 pub use degenbot_bot::{bot_core, solvers};
+
+/// Value-only pool identity/state structs + stateless swap simulation
+/// (`PoolEntry`, `*PoolIdentity`/`*PoolState`, `v3_simulate_swap`/`v4_simulate_swap`,
+/// the V2 constant-product dispatch, the spec-bound validators) + the
+/// `TickWordFetcher`/`CurveDataProvider`/`BalancerRateProvider` *interface*
+/// traits (ADR-005 standalone-by-design pool value/trait layer).
+pub use degenbot_pools;
+
+/// Pathfinding graph (`PathGraph`) + edge graph.
+pub use degenbot_pathfinding;
+
+/// Möbius solver math (`basket` / `mixed`) relocated out of
+/// `degenbot_bot::solvers` into this standalone crate. `degenbot_bot::solvers`
+/// re-exports only `arb_engine`; the relocated solver math lives here.
+pub use degenbot_solvers;
 
 /// Uniswap-protocol domain — `DexIdentity` / `DexVariant` / `ReservesAbi`
 /// value objects + `pub const` per-DEX presets, and the V2 swap-call encoder.
@@ -58,6 +73,8 @@ pub use degenbot_price;
 
 /// cmd-executor domain — simulation warmup-slot storage math (pure-Rust leaf).
 pub use degenbot_executor;
+/// Transaction submission pipeline — fee sizing, signer, dispatcher, and the
+/// pending-tx receipt monitor (pure-Rust leaf).
 pub use degenbot_submission;
 
 /// `eth_simulateV1` `stateOverrides` construction — code injection + ETH/WETH
@@ -67,6 +84,10 @@ pub use degenbot_simulation;
 
 /// Concentrated-liquidity math (`cl_lib`, `tick_math`).
 pub use degenbot_cl_math;
+/// Uniswap V2 constant-product (`x·y=k`) single-hop swap math (`IntHopState`,
+/// `int_simulate_path`) — the shared primitive for the V2 pool family + the
+/// Solidly/Camelot/Aerodrome volatile V2-equivalent hop.
+pub use degenbot_v2_math;
 
 /// ABI encode/decode (`abi_decoder`, `abi_encoder`).
 pub use degenbot_abi;
@@ -80,13 +101,30 @@ pub use degenbot_rpc;
 /// feature).
 pub use degenbot_db;
 
+/// Aave V3 domain — the updater chunk-loop + the position-analysis math
+/// (health-factor / LTV / eMode / isolation). Standalone-Rust core: a
+/// `cargo add degenbot` consumer runs `run_aave_update` with no Python.
+pub use degenbot_aave;
+
+/// Anvil fork lifecycle + dev-RPC core (`AnvilFork`, `evm_mine`,
+/// `anvil_reset`, `anvil_snapshot`, ...). Standalone-Rust core: a Rust-only
+/// consumer spins an anvil fork with no Python (the `anvil` binary must be
+/// in `$PATH` at runtime).
+pub use degenbot_fork;
+
+/// Pool-updater chunk-loop RPC + decode bridge (`run_pool_update`,
+/// `apply_chunk_writes_on_conn`, on-chain `verify_v3/v4_liquidity_map`).
+/// Standalone-Rust core mirroring the Aave updater shape.
+pub use degenbot_pool_updater;
+
 // ---------------------------------------------------------------------------
 // Convenience top-level re-exports of the most-used types (mirrors how the
 // `polars` umbrella re-exports `DataFrame`/`Series` at the crate root).
 // ---------------------------------------------------------------------------
 
 pub use degenbot_bot::bot_core::{
-    BotState, PoolEntry, RegisterV2PoolParams, RegisterV3PoolParams, V2PoolState,
+    BotState, PoolEntry, RegisterV2PoolParams, RegisterV3PoolParams, RegisterV4PoolParams,
+    V2PoolState, V4PoolKey,
 };
 pub use degenbot_uniswap::dex_identity::{
     preset_for_variant, DexIdentity, DexVariant, ReservesAbi, UNISWAP_V2,

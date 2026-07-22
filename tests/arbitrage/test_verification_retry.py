@@ -28,10 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from degenbot.degenbot_rs import (  # type: ignore[attr-defined]
-    VerificationMismatchError,
-    VerificationRpcError,
-)
+from degenbot.exceptions import VerificationMismatchError, VerificationRpcError
 
 
 class TestRetryVerificationCall:
@@ -197,10 +194,8 @@ class TestVerificationRetryPolicy:
         # ``exception_types`` (a single class or a tuple). Assert the retry
         # set is EXACTLY {VerificationRpcError} — a future maintainer widening
         # it to ``RuntimeError`` would re-introduce the mismatch-retry footgun.
-        from degenbot.degenbot_rs import (  # type: ignore[attr-defined]
-            VerificationMismatchError,
-            VerificationRpcError,
-        )
+        from degenbot.exceptions import VerificationMismatchError, VerificationRpcError
+
         accepted = retrier.retry.exception_types
         accepted_tuple = accepted if isinstance(accepted, tuple) else (accepted,)
         assert VerificationRpcError in accepted_tuple

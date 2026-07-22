@@ -16,7 +16,11 @@ use runtime::get_runtime;
 use std::sync::Arc;
 
 /// Python wrapper for `LogFilter`.
-#[pyclass(name = "LogFilter", skip_from_py_object)]
+#[pyclass(
+    name = "LogFilter",
+    skip_from_py_object,
+    module = "degenbot._ffi.provider"
+)]
 #[derive(Clone)]
 pub struct PyLogFilter {
     pub inner: LogFilter,
@@ -72,7 +76,11 @@ impl PyLogFilter {
 }
 
 /// Python wrapper for `AlloyProvider`.
-#[pyclass(name = "AlloyProvider", skip_from_py_object)]
+#[pyclass(
+    name = "AlloyProvider",
+    skip_from_py_object,
+    module = "degenbot._ffi.provider"
+)]
 pub struct PyAlloyProvider {
     pub provider: Arc<AlloyProvider>,
     pub max_blocks_per_request: u64,
@@ -204,15 +212,21 @@ impl PyAlloyProvider {
         let provider = Arc::clone(&self.provider);
 
         // Release GIL during RPC call
-        let result = py
-            .detach(|| {
-                get_runtime().block_on(async {
-                    provider
-                        .eth_call(&to_address, data_bytes, block_number)
-                        .await
-                })
+        let result = py.detach(|| {
+            get_runtime().block_on(async {
+                provider
+                    .eth_call(&to_address, data_bytes, block_number)
+                    .await
             })
-            .map_err(Into::<PyErr>::into)?;
+        });
+
+        let result = match result {
+            Ok(bytes) => bytes,
+            Err(degenbot_core::errors::ProviderError::ExecutionReverted { message, .. }) => {
+                return Err(crate::rpc::revert_to_pyerr(py, to, &message));
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // Create HexBytes from result
         let result_hb = create_hexbytes(py, &result)?;
@@ -303,6 +317,51 @@ impl PyAlloyProvider {
 
     fn __repr__(&self) -> String {
         format!("AlloyProvider(rpc_url={:?})", self.provider.rpc_url())
+    }
+
+    /// Build an offline `AlloyProvider` from a recorded-JSON file.
+    ///
+    /// The JSON may be either the single-block format (`{chain_id, block_number,
+    /// timestamp, calls, code}`) or the multi-block format (`{chain_id, blocks:
+    /// {"<n>": {…}}}`). All RPCs are served from the in-memory recorded data —
+    /// no network connection is needed.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the file cannot be read or is not valid recorded data.
+    #[staticmethod]
+    #[pyo3(name = "offline_from_json_file")]
+    fn offline_from_json_file(path: &str) -> PyResult<Self> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            PyValueError::new_err(format!("Failed to read offline JSON file {path:?}: {e}"))
+        })?;
+        let offline = degenbot_rpc::offline::OfflineProvider::from_json_bytes(&bytes)
+            .map_err(|e| PyValueError::new_err(format!("Invalid offline JSON: {e}")))?;
+        let provider = offline.as_alloy_provider();
+        Ok(Self {
+            provider: Arc::new(provider),
+            max_blocks_per_request: 5000,
+        })
+    }
+
+    /// Build an offline `AlloyProvider` from a recorded-JSON string.
+    ///
+    /// See [`offline_from_json_file`](Self::offline_from_json_file) for the
+    /// accepted formats.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the string is not valid recorded data.
+    #[staticmethod]
+    #[pyo3(name = "offline_from_json_string")]
+    fn offline_from_json_string(s: &str) -> PyResult<Self> {
+        let offline = degenbot_rpc::offline::OfflineProvider::from_json_str(s)
+            .map_err(|e| PyValueError::new_err(format!("Invalid offline JSON: {e}")))?;
+        let provider = offline.as_alloy_provider();
+        Ok(Self {
+            provider: Arc::new(provider),
+            max_blocks_per_request: 5000,
+        })
     }
 
     /// Get current gas price.
@@ -690,7 +749,16 @@ impl PyAlloyProvider {
 /// Add provider module to Python module.
 #[allow(clippy::missing_errors_doc)]
 pub fn add_provider_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyLogFilter>()?;
-    m.add_class::<PyAlloyProvider>()?;
+    let py = m.py();
+    let submod = PyModule::new(py, "degenbot._ffi.provider")?;
+    submod.add_class::<PyLogFilter>()?;
+    submod.add_class::<PyAlloyProvider>()?;
+    #[cfg(feature = "async")]
+    submod.add_class::<crate::rpc::async_provider::PyAsyncAlloyProvider>()?;
+    submod.add_class::<crate::rpc::subscription::PyAlloySubscription>()?;
+    m.add_submodule(&submod)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("degenbot._ffi.provider", &submod)?;
     Ok(())
 }

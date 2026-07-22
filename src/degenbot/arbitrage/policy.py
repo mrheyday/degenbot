@@ -13,9 +13,7 @@ family (subclassing :class:`~degenbot.exceptions.ArbitrageError`, NOT
 ``ValueError``) so callers classify by type — mirroring the Plan 102
 typed-exception pattern now used for pool admission + verification.
 
-The predicate is a pluggable protocol (mirrors
-:class:`~degenbot.arbitrage.ApprovalStrategy` /
-:class:`~degenbot.arbitrage.PayloadComposer`): callers inject a
+The predicate is a pluggable protocol: callers inject a
 :class:`PathPolicy` (or any structural implementation of
 :class:`PathCompositionPredicate`) into ``EngineRegistry``.
 """
@@ -48,8 +46,7 @@ __all__ = [
     "touched_tokens",
 ]
 
-#: The concrete pool union ``register_path`` accepts (mirrors
-#: ``hop_info.build_hops_from_pools``'s accepted pool types).
+#: The concrete pool union ``register_path`` accepts.
 type ArbPathPool = UniswapV2Pool | UniswapV3Pool | UniswapV4Pool
 
 

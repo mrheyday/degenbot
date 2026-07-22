@@ -1,240 +1,26 @@
-//! `PyO3` wrapper for the `UniswapEngine` — snapshot `#[pymethods]` slice.
+//! `PyO3` wrapper for the `ArbitrageEngine` — snapshot `#[pymethods]` slice.
 //!
 //! Split out of the former monolithic `py_binding.rs` (ergo UG6FKN task 74W2Z6),
-//! mirroring `crates/degenbot-bot/src/solvers/uniswap_engine/`'s per-concern
-//! layout. `PyO3` allows multiple `#[pymethods] impl PyUniswapArbEngine { … }`
+//! mirroring `crates/degenbot-bot/src/solvers/arb_engine/`'s per-concern
+//! layout. `PyO3` allows multiple `#[pymethods] impl PyArbitrageEngine { … }`
 //! blocks per type, so each concern file contributes one slice.
+//!
+//! ## Retired surface (epic `XEANMB`)
+//! RUQ637's `SnapshotStore` fields + the `load_*_from_py` / `clear_*_snapshot`
+//! ingestion surface are RETIRED. The in-memory `SnapshotStore` was a
+//! boot-time freeze of the DB cut; epic `XEANMB` replaced it with a WAL held
+//! read transaction (`SnapshotDb`) so every per-pool `fetch_liquidity_map`
+//! during `build_paths` shares one frozen DB snapshot. Per-pool tick data is
+//! now read through the Db arm of `assemble_*_tick_map` (the held tx) for the
+//! DB path, or fetched via the Chain arm (RPC) for the non-DB path. The
+//! non-DB (file/memory) path sets `snapshot_seed_block` (the auto-backfill
+//! anchor `S`) directly via the `snapshot_seed_block` setter — `start()`
+//! computes `S = min(newest_block)` + sets it before `subscribe()` so
+//! `after_subscribe` advances the engine phase to `SnapshotLoaded`.
+//!
+//! DADWUP retired the per-pool ingestion surface; XEANMB retires the
+//! whole-dict ingestion surface too. This slice is now intentionally empty —
+//! the `#[pymethods]` snapshot methods are gone + the file remains as a home
+//! for the module-level documentation of the retirement.
 
-use super::{make_tick_info, Address, EnginePhase, HashMap, PyUniswapArbEngine};
-use crate::prelude::*;
-
-use super::verify::map_verify_err;
-
-#[pymethods]
-impl PyUniswapArbEngine {
-    /// Drop the stored V3 snapshot, freeing memory.
-    /// Idempotent — no-op if no V3 snapshot is loaded.
-    fn clear_v3_snapshot(&self) {
-        self.v3_snapshot.clear();
-    }
-
-    /// Drop the stored V4 snapshot, freeing memory.
-    /// Idempotent — no-op if no V4 snapshot is loaded.
-    fn clear_v4_snapshot(&self) {
-        self.v4_snapshot.clear();
-    }
-
-    /// Begin streaming V3 snapshot data into the engine, one pool at a time.
-    ///
-    /// Call `insert_v3_pool_snapshot` for each pool, then `finish_v3_snapshot`
-    /// to finalize. This avoids building the entire snapshot dict in memory.
-    ///
-    /// Can be called in Created or Subscribed phase. Idempotent — calling again
-    /// while a stream is in progress is a no-op.
-    fn begin_v3_snapshot_stream(&self) -> PyResult<()> {
-        let phase = self.current_phase();
-        phase
-            .require_before(EnginePhase::Resumed, "begin_v3_snapshot_stream")
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-
-        if self.v3_snapshot.is_loaded() {
-            let msg = "Cannot begin V3 snapshot stream: snapshot already loaded.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-        self.v3_snapshot.begin_load();
-        Ok(())
-    }
-
-    /// Insert a single V3 pool's tick data into the in-progress snapshot stream.
-    ///
-    /// Args:
-    ///     `pool_address`: Hex string of the pool address.
-    ///     `tick_data`: Dict mapping `tick_index` (int) → (`liquidity_gross`, `liquidity_net`) tuple.
-    fn insert_v3_pool_snapshot(
-        &self,
-        pool_address: &str,
-        tick_data: &Bound<'_, pyo3::types::PyDict>,
-    ) -> PyResult<()> {
-        let addr = pool_address.parse::<Address>().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid pool address: {e}"))
-        })?;
-
-        let mut rust_tick_data = HashMap::new();
-        for (py_tick, py_values) in tick_data.iter() {
-            let tick_index: i32 = py_tick.extract()?;
-            let values: (u128, i128) = py_values.extract()?;
-            rust_tick_data.insert(tick_index, make_tick_info(values.0, values.1));
-        }
-
-        map_verify_err(self.v3_snapshot.insert(addr, rust_tick_data))
-    }
-
-    /// Finalize the V3 snapshot stream and transition to `SnapshotLoaded` phase.
-    fn finish_v3_snapshot(&self) -> PyResult<()> {
-        let phase = self.current_phase();
-        if !self.v3_snapshot.is_loaded() {
-            let msg = "No V3 snapshot stream in progress.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-        if phase < EnginePhase::SnapshotLoaded {
-            self.set_phase(EnginePhase::SnapshotLoaded);
-        }
-        Ok(())
-    }
-
-    /// Begin streaming V4 snapshot data into the engine, one pool at a time.
-    fn begin_v4_snapshot_stream(&self) -> PyResult<()> {
-        let phase = self.current_phase();
-        phase
-            .require_before(EnginePhase::Resumed, "begin_v4_snapshot_stream")
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-
-        if self.v4_snapshot.is_loaded() {
-            let msg = "Cannot begin V4 snapshot stream: snapshot already loaded.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-        self.v4_snapshot.begin_load();
-        Ok(())
-    }
-
-    /// Insert a single V4 pool's tick data into the in-progress snapshot stream.
-    ///
-    /// Args:
-    ///     `pool_manager`: Hex string of the pool manager address.
-    ///     `pool_id_hex`: Hex string of the 32-byte pool ID.
-    ///     `tick_data`: Dict mapping `tick_index` (int) → (`liquidity_gross`, `liquidity_net`) tuple.
-    fn insert_v4_pool_snapshot(
-        &self,
-        pool_manager: &str,
-        pool_id_hex: &str,
-        tick_data: &Bound<'_, pyo3::types::PyDict>,
-    ) -> PyResult<()> {
-        let pm_addr = pool_manager.parse::<Address>().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid pool_manager address: {e}"))
-        })?;
-        let pool_id = degenbot_core::hex_utils::decode_32byte_hex(pool_id_hex)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-        let mut rust_tick_data = HashMap::new();
-        for (py_tick, py_values) in tick_data.iter() {
-            let tick_index: i32 = py_tick.extract()?;
-            let values: (u128, i128) = py_values.extract()?;
-            rust_tick_data.insert(tick_index, make_tick_info(values.0, values.1));
-        }
-
-        map_verify_err(self.v4_snapshot.insert((pm_addr, pool_id), rust_tick_data))
-    }
-
-    /// Finalize the V4 snapshot stream and transition to `SnapshotLoaded` phase.
-    fn finish_v4_snapshot(&self) -> PyResult<()> {
-        let phase = self.current_phase();
-        if !self.v4_snapshot.is_loaded() {
-            let msg = "No V4 snapshot stream in progress.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-        if phase < EnginePhase::SnapshotLoaded {
-            self.set_phase(EnginePhase::SnapshotLoaded);
-        }
-        Ok(())
-    }
-
-    /// Load a V3 liquidity snapshot from a Python dict.
-    ///
-    /// The dict maps pool address (hex string) → tick data dict,
-    /// where tick data maps `tick_index` (int) → (`liquidity_gross`, `liquidity_net`) tuple.
-    ///
-    /// This is the fast path — no intermediate binary serialization in Python.
-    /// The Rust side iterates the `PyO3` dict and builds the internal `HashMap` directly.
-    fn load_v3_snapshot_from_py(&self, py_data: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
-        let phase = self.current_phase();
-        phase
-            .require_before(EnginePhase::Resumed, "load_v3_snapshot_from_py")
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-
-        if self.v3_snapshot.is_loaded() {
-            let msg = "Cannot load V3 snapshot: already loaded. Call clear_v3_snapshot() first.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-
-        let mut result = HashMap::new();
-        for (py_addr, py_tick_dict) in py_data.iter() {
-            let addr_str: String = py_addr.extract()?;
-            let address = addr_str.parse::<Address>().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Invalid pool address: {e}"))
-            })?;
-
-            let tick_dict = py_tick_dict
-                .cast::<pyo3::types::PyDict>()
-                .map_err(|_| pyo3::exceptions::PyTypeError::new_err("tick_data must be a dict"))?;
-
-            let mut tick_data = HashMap::new();
-            for (py_tick, py_values) in tick_dict.iter() {
-                let tick_index: i32 = py_tick.extract()?;
-                let values: (u128, i128) = py_values.extract()?;
-                tick_data.insert(tick_index, make_tick_info(values.0, values.1));
-            }
-            result.insert(address, tick_data);
-        }
-
-        self.v3_snapshot.load(result);
-        if phase < EnginePhase::SnapshotLoaded {
-            self.set_phase(EnginePhase::SnapshotLoaded);
-        }
-        Ok(())
-    }
-
-    /// Load a V4 liquidity snapshot from a Python dict.
-    ///
-    /// The dict maps `pool_manager` address (hex) → inner dict,
-    /// where inner dict maps `pool_id` (hex) → tick data dict,
-    /// and tick data maps `tick_index` (int) → (`liquidity_gross`, `liquidity_net`) tuple.
-    fn load_v4_snapshot_from_py(&self, py_data: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
-        let phase = self.current_phase();
-        phase
-            .require_before(EnginePhase::Resumed, "load_v4_snapshot_from_py")
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-
-        if self.v4_snapshot.is_loaded() {
-            let msg = "Cannot load V4 snapshot: already loaded. Call clear_v4_snapshot() first.";
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(msg));
-        }
-
-        let mut result = HashMap::new();
-        for (py_pm, py_pool_dict) in py_data.iter() {
-            let pm_str: String = py_pm.extract()?;
-            let pm_address = pm_str.parse::<Address>().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "Invalid pool_manager address: {e}"
-                ))
-            })?;
-
-            let pool_dict = py_pool_dict.cast::<pyo3::types::PyDict>().map_err(|_| {
-                pyo3::exceptions::PyTypeError::new_err("pool_manager value must be a dict")
-            })?;
-
-            for (py_pool_id, py_tick_dict) in pool_dict.iter() {
-                let pool_id_hex: String = py_pool_id.extract()?;
-                let pool_id = degenbot_core::hex_utils::decode_32byte_hex(&pool_id_hex)
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-                let tick_dict = py_tick_dict.cast::<pyo3::types::PyDict>().map_err(|_| {
-                    pyo3::exceptions::PyTypeError::new_err("tick_data must be a dict")
-                })?;
-
-                let mut tick_data = HashMap::new();
-                for (py_tick, py_values) in tick_dict.iter() {
-                    let tick_index: i32 = py_tick.extract()?;
-                    let values: (u128, i128) = py_values.extract()?;
-                    tick_data.insert(tick_index, make_tick_info(values.0, values.1));
-                }
-                result.insert((pm_address, pool_id), tick_data);
-            }
-        }
-
-        self.v4_snapshot.load(result);
-        if phase < EnginePhase::SnapshotLoaded {
-            self.set_phase(EnginePhase::SnapshotLoaded);
-        }
-        Ok(())
-    }
-}
+// No `#[pymethods]` here — the snapshot ingestion surface is retired (XEANMB).

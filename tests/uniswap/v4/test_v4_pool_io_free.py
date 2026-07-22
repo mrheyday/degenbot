@@ -5,13 +5,12 @@ from unittest.mock import MagicMock
 
 import eth_abi.abi
 from hexbytes import HexBytes
-from web3 import Web3
 
-from degenbot.bot import Bot
+from degenbot.bot import Bot, PyBot
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.constants import ZERO_ADDRESS
-from degenbot.degenbot_rs import PyBot
+from degenbot.crypto import function_selector
 from degenbot.erc20.erc20 import Erc20Token
 from degenbot.provider.call_helpers import encode_function_calldata
 from degenbot.uniswap.concentrated.types import BitmapAtWord, LiquidityAtTick
@@ -282,9 +281,9 @@ class TestBotBuildV4Pool:
 
         # getTickBitmap(bytes32,int16) selector
 
-        tick_bitmap_selector = Web3.keccak(text="getTickBitmap(bytes32,int16)")[:4]
+        tick_bitmap_selector = function_selector("getTickBitmap(bytes32,int16)")
 
-        def mock_call(*, to, data, block=None):
+        def mock_call(to, data, block=None):
             if data == slot0_calldata:
                 return slot0_encoded
             if data == liquidity_calldata:

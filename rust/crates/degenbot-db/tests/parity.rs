@@ -27,6 +27,10 @@ use serde::Deserialize;
 
 use degenbot_db::{DegenbotDb, ExchangeFamily, SchemaState};
 
+/// Local alias for the streamed result accumulator (mirrors the private
+/// `TickMap`). Keeps clippy's `type_complexity` lint quiet in the parity tests.
+type StreamedMap = std::collections::HashMap<i32, (U256, alloy::primitives::I256)>;
+
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 fn fixture_db_path() -> PathBuf {
@@ -91,6 +95,10 @@ fn parse_addr(s: &str) -> Address {
 
 fn parse_u256(s: &str) -> U256 {
     U256::from_str_radix(s, 10).unwrap_or_else(|e| panic!("u256 parse {s}: {e}"))
+}
+
+fn parse_i256(s: &str) -> alloy::primitives::I256 {
+    alloy::primitives::I256::from_dec_str(s).unwrap_or_else(|e| panic!("i256 parse {s}: {e}"))
 }
 
 fn parse_tick(s: &str) -> i32 {
@@ -191,11 +199,11 @@ fn fetch_liquidity_map_v3_matches_python_oracle() {
     }
 
     // tick_data
-    let mut rd: HashMap<i32, (U256, U256)> = HashMap::new();
+    let mut rd: HashMap<i32, (U256, alloy::primitives::I256)> = HashMap::new();
     for (ts, v) in &expected.tick_data {
         rd.insert(
             parse_tick(ts),
-            (parse_u256(&v.liquidity_gross), parse_u256(&v.liquidity_net)),
+            (parse_u256(&v.liquidity_gross), parse_i256(&v.liquidity_net)),
         );
     }
     assert_eq!(map.tick_data.len(), rd.len(), "tick_data lengths");
@@ -231,11 +239,11 @@ fn fetch_liquidity_map_v4_matches_python_oracle() {
         );
     }
 
-    let mut rd: HashMap<i32, (U256, U256)> = HashMap::new();
+    let mut rd: HashMap<i32, (U256, alloy::primitives::I256)> = HashMap::new();
     for (ts, v) in &expected.tick_data {
         rd.insert(
             parse_tick(ts),
-            (parse_u256(&v.liquidity_gross), parse_u256(&v.liquidity_net)),
+            (parse_u256(&v.liquidity_gross), parse_i256(&v.liquidity_net)),
         );
     }
     assert_eq!(map.tick_data.len(), rd.len(), "V4 tick_data lengths");
@@ -274,7 +282,7 @@ fn fetch_all_liquidity_maps_v3_matches_python_oracle() {
                 .get(&tick.to_string())
                 .unwrap_or_else(|| panic!("tick {tick} for {addr}"));
             assert_eq!(*gross, parse_u256(&want_pair[0]), "gross {addr}/{tick}");
-            assert_eq!(*net, parse_u256(&want_pair[1]), "net {addr}/{tick}");
+            assert_eq!(*net, parse_i256(&want_pair[1]), "net {addr}/{tick}");
         }
     }
 }
@@ -320,9 +328,59 @@ fn fetch_all_liquidity_maps_v4_matches_python_oracle() {
                 parse_u256(&want_pair[0]),
                 "V4 gross {pm}/{hash}/{tick}"
             );
-            assert_eq!(*net, parse_u256(&want_pair[1]), "V4 net {pm}/{hash}/{tick}");
+            assert_eq!(*net, parse_i256(&want_pair[1]), "V4 net {pm}/{hash}/{tick}");
         }
     }
+}
+
+#[test]
+fn stream_liquidity_maps_v3_matches_materialized() {
+    let (db, _state) = DegenbotDb::open(&fixture_db_path()).unwrap();
+    let exp = fixture_expected();
+    let materialized = db
+        .fetch_all_liquidity_maps(exp.chain_id, ExchangeFamily::V3)
+        .unwrap();
+    let mut streamed: Vec<(degenbot_db::PoolKey, StreamedMap)> = Vec::new();
+    db.stream_liquidity_maps(exp.chain_id, ExchangeFamily::V3, |key, ticks| {
+        streamed.push((key, ticks.clone()));
+    })
+    .unwrap();
+    assert_eq!(streamed.len(), materialized.len(), "V3 streamed pool count");
+    for (i, ((mk, mt), (sk, st))) in materialized.iter().zip(streamed.iter()).enumerate() {
+        assert_eq!(mk, sk, "V3 pool key mismatch at {i}");
+        assert_eq!(mt, st, "V3 tick map mismatch at {i}");
+    }
+}
+
+#[test]
+fn stream_liquidity_maps_v4_matches_materialized() {
+    let (db, _state) = DegenbotDb::open(&fixture_db_path()).unwrap();
+    let exp = fixture_expected();
+    let materialized = db
+        .fetch_all_liquidity_maps(exp.chain_id, ExchangeFamily::V4)
+        .unwrap();
+    let mut streamed: Vec<(degenbot_db::PoolKey, StreamedMap)> = Vec::new();
+    db.stream_liquidity_maps(exp.chain_id, ExchangeFamily::V4, |key, ticks| {
+        streamed.push((key, ticks.clone()));
+    })
+    .unwrap();
+    assert_eq!(streamed.len(), materialized.len(), "V4 streamed pool count");
+    for (i, ((mk, mt), (sk, st))) in materialized.iter().zip(streamed.iter()).enumerate() {
+        assert_eq!(mk, sk, "V4 pool key mismatch at {i}");
+        assert_eq!(mt, st, "V4 tick map mismatch at {i}");
+    }
+}
+
+#[test]
+fn stream_liquidity_maps_empty_chain_no_callbacks() {
+    let (db, _state) = DegenbotDb::open(&fixture_db_path()).unwrap();
+    // chain_id with no pools — the callback must never fire.
+    let mut calls = 0usize;
+    db.stream_liquidity_maps(999_999, ExchangeFamily::V3, |_key, _ticks| {
+        calls += 1;
+    })
+    .unwrap();
+    assert_eq!(calls, 0, "no callbacks for empty chain");
 }
 
 #[test]

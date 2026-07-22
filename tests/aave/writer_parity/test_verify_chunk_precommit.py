@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy import select, text
 
+from degenbot._ffi.aave import run_aave_update
+from degenbot._ffi.cancel import CancelHandle
 from degenbot.database.models.aave import AaveV3Market
-from degenbot.degenbot_rs import CancelHandle, run_aave_update
 from tests.aave.writer_parity.harness import (
     BOOTSTRAP_BLOCK,
     FIXTURE_BLOCK,

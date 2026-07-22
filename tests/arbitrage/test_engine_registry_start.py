@@ -32,6 +32,24 @@ class FakeEngine:
         self.backfill_args: list[tuple[str, int]] = []
         self.verify_args: dict | None = None
         self._last_processed_block: int | None = 18_000_042
+        # JUCFCB: the DB path reads `snapshot_seed_block` from the engine.
+        # FakeEngine defaults to None (cold-start → no backfill) unless a test
+        # sets it.
+        self._snapshot_seed_block: int | None = None
+        # 2SM4Y7: the non-DB path now records S via `set_snapshot_seed_block`
+        # (the pyo3 `backfill_from_snapshot` retired); the FakeEngine records
+        # the call so tests can assert the non-DB path drives the seed-set.
+        self.seed_args: list[int | None] = []
+
+    @property
+    def snapshot_seed_block(self) -> int | None:
+        return self._snapshot_seed_block
+
+    @snapshot_seed_block.setter
+    def snapshot_seed_block(self, value: int | None) -> None:
+        self.calls.append("set_snapshot_seed_block")
+        self.seed_args.append(value)
+        self._snapshot_seed_block = value
 
     def subscribe(self, ws: str) -> int:
         self.calls.append("subscribe")
@@ -111,27 +129,24 @@ class _FakeSnapshot:
 
 def test_start_derives_snapshot_block_as_min_newest_block(monkeypatch) -> None:
     """start() derives snapshot_block = min(snap.newest_block) across supplied
-    snapshots and passes it to backfill_from_snapshot — never a user param.
+    snapshots and stashes it for the per-pool verify, never passing it to
+    a backfill call (J3FMDO: the snapshot→WS gap closes automatically inside
+    `resume()` via the core `BlockPump::resume_from_subscribe`, not from
+    `start()`).
 
     The module-level stream functions are patched with recorders (the real fns
     need a full DB-backed snapshot); the engine is a real Fake. This verifies
-    start()'s ORCHESTRATION — that it calls stream then backfill with the
-    derived block in the documented order — not the stream fns themselves.
+    start()'s ORCHESTRATION — that it streams, stashes the derived block as
+    `_verify_snapshot_block`, and configures verify in the documented order —
+    not the stream fns themselves.
     """
     fake = FakeEngine()
     registry = runner.EngineRegistry(bot=None, engine=fake)
 
-    def record_v3_stream(snapshot, engine) -> None:
-        assert engine is fake
-        fake.calls.append("stream_v3")
-
-    def record_v4_stream(snapshot, engine) -> None:
-        assert engine is fake
-        fake.calls.append("stream_v4")
-
-    monkeypatch.setattr(runner, "stream_v3_snapshot_to_engine", record_v3_stream)
-    monkeypatch.setattr(runner, "stream_v4_snapshot_to_engine", record_v4_stream)
-
+    # XEANMB: `start()` no longer ingests snapshot dicts (the
+    # `load_*_from_py` surface is retired); it derives `S = min(newest_block)`
+    # + sets `snapshot_seed_block` BEFORE `subscribe()` so `after_subscribe`
+    # advances the phase to `SnapshotLoaded`.
     v3_snap = _FakeSnapshot(newest_block=18_000_100)
     v4_snap = _FakeSnapshot(newest_block=18_000_050)
 
@@ -142,16 +157,21 @@ def test_start_derives_snapshot_block_as_min_newest_block(monkeypatch) -> None:
         v4_snapshot=v4_snap,
     )
 
-    # The derived block is the min of the two newest_blocks.
-    assert fake.backfill_args == [("http://localhost:8545", 18_000_050)]
-    # Streams ran for both snapshots, in order, then backfill, then verify.
+    # J3FMDO: start() no longer calls backfill_from_snapshot — resume() drives
+    # it via the core auto-backfill. So backfill_args stays empty.
+    assert fake.backfill_args == []
+    # XEANMB: the snapshot seed block is set BEFORE subscribe (so the engine
+    # phase advances to SnapshotLoaded via after_subscribe), then
+    # verify-config. No stream/load_*_from_py calls remain.
     assert fake.calls == [
+        "set_snapshot_seed_block",
         "subscribe",
-        "stream_v3",
-        "stream_v4",
-        "backfill",
         "set_verify_rpc_url",
     ]
+    # The derived block (the min of the two newest_blocks) is set on the
+    # engine's snapshot_seed_block + stashed as the step-1 verify seed.
+    assert fake.seed_args == [18_000_050]
+    assert registry._verify_snapshot_block == 18_000_050
     assert "resume" not in fake.calls
 
 
@@ -183,12 +203,13 @@ def test_start_skips_set_verify_state_view_when_none() -> None:
 def test_pybot_exposes_verify_methods_after_engine_attach() -> None:
     """T4 (ADR-006 D4): PyBot exposes set_verify_rpc_url, set_verify_state_view,
     verify_liquidity_maps, verify_v3_liquidity_maps, verify_v4_liquidity_maps as
-    delegating entry points once a UniswapArbEngine is constructed against it.
+    delegating entry points once a ArbitrageEngine is constructed against it.
     The batch verify still passes (same behavior, new home on PyBot)."""
-    from degenbot.degenbot_rs import PyBot, UniswapArbEngine
+    from degenbot.arbitrage.engine_registry import ArbitrageEngine
+    from degenbot.bot import PyBot
 
     bot = PyBot()
-    UniswapArbEngine(py_bot=bot)  # attaches shared PumpState
+    ArbitrageEngine(py_bot=bot)  # attaches shared PumpState
     for method in (
         "set_verify_rpc_url",
         "set_verify_state_view",
@@ -200,21 +221,36 @@ def test_pybot_exposes_verify_methods_after_engine_attach() -> None:
 
 
 def test_pybot_exposes_pump_lifecycle_methods_after_engine_attach() -> None:
-    """T3 (ADR-006 D4): PyBot exposes subscribe/backfill_from_snapshot/resume
-    as delegating entry points once a UniswapArbEngine is constructed against
-    it (which attaches the shared PumpState). The Bot is the D4 pump owner;
-    these methods drive the SAME PumpState the engine reads. Before T3 only
-    the engine had them."""
-    from degenbot.degenbot_rs import PyBot, UniswapArbEngine
+    """T3 (ADR-006 D4): PyBot exposes subscribe/resume as delegating entry
+    points once a ArbitrageEngine is constructed against it (which attaches
+    the shared PumpState). The Bot is the D4 pump owner; these methods drive
+    the SAME PumpState the engine reads.
+
+    2SM4Y7: `backfill_from_snapshot` is retired — the snapshot→WS gap is
+    closed automatically inside the core `BlockPump::resume_from_subscribe`
+    (J3FMDO). The non-DB path uses the `snapshot_seed_block` setter to record
+    `S` so the core auto-backfill picks it up.
+    """
+    from degenbot.arbitrage.engine_registry import ArbitrageEngine
+    from degenbot.bot import PyBot
 
     bot = PyBot()
     # Constructing the engine against the bot attaches the shared PumpState.
-    engine = UniswapArbEngine(py_bot=bot)
-    for method in ("subscribe", "backfill_from_snapshot", "resume"):
+    engine = ArbitrageEngine(py_bot=bot)
+    for method in ("subscribe", "resume"):
         assert hasattr(bot, method), f"PyBot must expose {method} after engine attach"
-    # The engine still exposes them too (reads the same shared state).
-    for method in ("subscribe", "backfill_from_snapshot", "resume"):
+    # 2SM4Y7: backfill_from_snapshot is retired.
+    assert not hasattr(bot, "backfill_from_snapshot"), (
+        "PyBot::backfill_from_snapshot retired (2SM4Y7)"
+    )
+    # The engine still exposes subscribe/resume too (reads the same shared state).
+    for method in ("subscribe", "resume"):
         assert hasattr(engine, method)
+    assert not hasattr(engine, "backfill_from_snapshot"), (
+        "ArbitrageEngine::backfill_from_snapshot retired (2SM4Y7)"
+    )
+    # The non-DB path uses the snapshot_seed_block setter.
+    assert hasattr(engine, "snapshot_seed_block")  # getter+setter (2SM4Y7)
 
 
 def test_start_stashes_snapshot_and_backfill_blocks_for_two_step_verify(monkeypatch) -> None:
@@ -226,12 +262,6 @@ def test_start_stashes_snapshot_and_backfill_blocks_for_two_step_verify(monkeypa
     No behavior change yet beyond setting the fields (T6 reads them)."""
     fake = FakeEngine()
     registry = runner.EngineRegistry(bot=None, engine=fake)
-
-    def _noop(snapshot, engine) -> None:  # noqa: ARG001
-        pass
-
-    monkeypatch.setattr(runner, "stream_v3_snapshot_to_engine", _noop)
-    monkeypatch.setattr(runner, "stream_v4_snapshot_to_engine", _noop)
 
     v3_snap = _FakeSnapshot(newest_block=18_000_100)
     v4_snap = _FakeSnapshot(newest_block=18_000_050)

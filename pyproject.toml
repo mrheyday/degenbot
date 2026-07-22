@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "degenbot"
-# Version is supplied by maturin at build time from the `degenbot_rs` binding
+# Version is supplied by maturin at build time from the `_ffi` binding
 # crate's [package].version, which is inherited from [workspace.package] in
 # rust/Cargo.toml (ADR-009 single-source-of-truth versioning). The single
 # literal lives on the Rust side; maturin bridges it into the wheel and
@@ -13,7 +13,7 @@ dynamic = ["version"]
 authors = [
     { name="BowTiedDevil", email="devil@bowtieddevil.com" },
 ]
-description = "Python + Rust (PyO3) building blocks for Uniswap (V2, V3, V4), Curve V1, Solidly V2, Balancer V2 & Aave V3 arbitrage and liquidation bots on EVM-compatible blockchains"
+description = "Python + Rust building blocks for Uniswap (V2, V3, V4), Curve V1, Solidly V2, Balancer V2 & Aave V3 arbitrage and liquidation bots on EVM-compatible blockchains"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -21,13 +21,11 @@ dependencies = [
     "click ~= 8.4",
     "pydantic ~= 2.13",
     "pydantic-settings ~= 2.14",
-    "scipy ~= 1.17",
     "sqlalchemy ~= 2.0",
     "tenacity ~= 9.1",
     "tomlkit ~= 0.15",
     "tqdm ~= 4.67",
-    "ujson ~= 5.12",
-    "web3 ~= 7.14",
+    "ujson ~= 5.12",    
 ]
 license = {text = "MIT"}
 license-files = ["LICENSE"]
@@ -156,7 +154,7 @@ allow-star-arg-any = true
     "D",        # docstring strictness (Returns:/Raises:/imperative) not enforced on the CLI
     "DOC",      # pydoclint Returns:/Raises: sections not enforced on the CLI
     "EM102",    # short f-string error messages are fine in a script
-    "PLC0415",  # lazy web3/ProviderAdapter imports avoid a hard dep at module load
+    "PLC0415",  # lazy imports avoid circular dependency with degenbot.provider
     "PLW0717",  # the drive fn's broad try/except is intentional (log+re-raise)
     "PLR1702",  # the bisect loop nests deeply by design
     "PTH",      # os.path + os.makedirs are fine for the bisect's file-copy logic
@@ -186,6 +184,15 @@ allow-star-arg-any = true
     "S403",
     "SLF001",   # tests may need to access private attributes to test implementation
     "T201",     # print
+]
+"src/degenbot/provider/factory.py" = [
+    "PLC0415",  # lazy import avoids circular dependency with degenbot.provider.__init__
+]
+"src/degenbot/registry/deployment_loader.py" = [
+    "PLC0415",  # lazy imports avoid circular dependency (pool classes → uniswap → this module)
+]
+"src/degenbot/uniswap/deployments.py" = [
+    "PLC0415",  # lazy import avoids circular dependency (deployment_loader → pool classes → this module)
 ]
 
 [tool.pytest.ini_options]
@@ -232,14 +239,29 @@ dev = [
     "pytest",
     "python-dotenv",
     "ruff",
+    "scipy",
     "sybil",
     "ty",
     "vyper",
+    "web3",
+    "vulture",
 ]
 
 [tool.ty.environment]
 python-version = "3.12"
 extra-paths = ["examples"]
+
+[tool.vulture]
+# Dead-code detector. Output is a triage list, not a gate: each hit
+# needs a human call (rg for refs) before deletion — vulture is static
+# and can't see FFI-seam callers (Rust core) or framework dispatch
+# (pydantic validators, SQLAlchemy TypeDecorator signatures, protocol
+# params). 80% confidence is the operating point — the 60% tier is
+# mostly framework-dispatched methods (validators, properties on
+# models, enum members referenced dynamically).
+min_confidence = 80
+paths = ["src/degenbot"]
+exclude = ["src/degenbot/migrations"]  # Alembic, retention-gated per ADR-010
 
 [tool.uv]
 exclude-newer = "14 days"
@@ -252,10 +274,24 @@ cache-keys = [
 [tool.maturin]
 manifest-path = "rust/crates/degenbot-python/Cargo.toml"
 python-source = "src"
-module-name = "degenbot.degenbot_rs"
+module-name = "degenbot._ffi"
 bindings = "pyo3"
-profile = "release"
-features = ["pyo3/extension-module"]
+# Dev/agent loop builds in the `dev` profile (opt-level 0, no LTO) so the
+# uv-sync cdylib rebuild that fires on every Rust edit (via [tool.uv]
+# cache-keys) is ~5x faster: 149s (release) → ~30s (dev). This setting is
+# consumed ONLY by the local editable-install build path (`uv sync` /
+# `maturin develop`); the published wheel is built by the PyO3/maturin-action
+# in .github/workflows/publish-to-pypi.yaml, which passes `--release`
+# explicitly and OVERRIDES the features list — so the shipped artifact is
+# unaffected by this setting and stays fully optimized. See
+# rust/PERF_RESULTS.md "dev-vs-release profile" lever.
+profile = "dev"
+# Dev builds compile hotpath in (toggle at runtime via DEGENBOT_HOTPATH=1 —
+# see rust/crates/degenbot-bot/src/profiling.rs). Release wheels override this
+# list with `--features pyo3/extension-module` (see
+# .github/workflows/publish-to-pypi.yaml) so the shipped artifact excludes
+# hotpath — macros are no-op `lib_off`, zero runtime penalty.
+features = ["pyo3/extension-module", "degenbot-bot/hotpath"]
 python-packages = ["degenbot"]
 
 [tool.alembic]

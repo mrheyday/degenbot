@@ -1,7 +1,7 @@
 """Rust-path-only smoke for the §4.2 harness (proves the mock drives run_aave_update offline).
 
 Proves the mock RPC + the seeded temp DB drive
-``degenbot_rs.run_aave_update`` through the full fetch → decode → dispatch →
+``degenbot._ffi.run_aave_update`` through the full fetch → decode → dispatch →
 write path for a ``UserEModeSet`` event, producing the expected ``aave_v3_users``
 row. Once this is GREEN, the Python-oracle side + the row comparison are added.
 """
@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from degenbot._ffi.aave import run_aave_update
+from degenbot._ffi.cancel import CancelHandle
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import CancelHandle, run_aave_update
 from tests.aave.writer_parity.harness import (
     BOOTSTRAP_BLOCK,
     FIXTURE_BLOCK,

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from degenbot.degenbot_rs import PyBot
+from degenbot.bot import PyBot
 
 # Cross-checked vectors (Python generate_v2/v3_pool_address + on-chain).
 UNISWAP_V2_FACTORY = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
@@ -34,9 +34,7 @@ V3_UNI_USDC_WETH_500_ADDR = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
 V3_PCS_USDC_WETH_500_SEPARATE_ADDR = "0x1ac1A8FEaAEa1900C4166dEeed0C11cC10669D36"
 # The address PancakeSwap V3 *would* compute with the factory as deployer
 # (wrong — proves the separate-deployer distinction is enforced).
-V3_PCS_USDC_WETH_500_FACTORY_ADDR_WRONG = (
-    "0xc1CaD0F6b1Cc9124D71DE161a7F133da6aF93c0D"
-)
+V3_PCS_USDC_WETH_500_FACTORY_ADDR_WRONG = "0xc1CaD0F6b1Cc9124D71DE161a7F133da6aF93c0D"
 
 
 class TestV2RegistrationVerify:
@@ -107,7 +105,7 @@ class TestV3RegistrationVerify:
             fee=500,
             tick_spacing=10,
             factory=UNISWAP_V3_FACTORY,
-            sqrt_price_x96=1,
+            sqrt_price_x96=1 << 96,
             liquidity=0,
             tick=0,
         )
@@ -123,7 +121,7 @@ class TestV3RegistrationVerify:
             fee=500,
             tick_spacing=10,
             factory=PANCAKESWAP_V3_FACTORY,
-            sqrt_price_x96=1,
+            sqrt_price_x96=1 << 96,
             liquidity=0,
             tick=0,
         )
@@ -145,7 +143,7 @@ class TestV3RegistrationVerify:
                 fee=500,
                 tick_spacing=10,
                 factory=PANCAKESWAP_V3_FACTORY,
-                sqrt_price_x96=1,
+                sqrt_price_x96=1 << 96,
                 liquidity=0,
                 tick=0,
             )
@@ -161,7 +159,7 @@ class TestV3RegistrationVerify:
                 fee=500,
                 tick_spacing=10,
                 factory=UNISWAP_V3_FACTORY,
-                sqrt_price_x96=1,
+                sqrt_price_x96=1 << 96,
                 liquidity=0,
                 tick=0,
             )
@@ -176,7 +174,7 @@ class TestV3RegistrationVerify:
             fee=500,
             tick_spacing=10,
             factory=ad_hoc_factory,
-            sqrt_price_x96=1,
+            sqrt_price_x96=1 << 96,
             liquidity=0,
             tick=0,
         )

@@ -1,6 +1,6 @@
 """§4.2 parity for the Rust-backed SQLite file operations (ergo OP23QV).
 
-The four file ops now delegate to the Rust core (`degenbot_rs.db_*` over
+The four file ops now delegate to the Rust core (`degenbot._ffi.db_*` over
 `degenbot-db::ops`). These tests drive the Python wrappers in
 `degenbot.database.operations` against a temp DB and assert the file-level
 invariants the acceptance criteria pin:
@@ -33,7 +33,7 @@ from degenbot.database.operations import (
     get_alembic_config,
     upgrade_existing_sqlite_database,
 )
-from degenbot.degenbot_rs import (
+from degenbot.db import (
     DatabaseSchemaStale,
     db_backup_database,
     db_create_new_database,
@@ -201,9 +201,7 @@ def test_heal_round_trips_through_seam(tmp_path: pathlib.Path):
         with engine.connect() as conn:
             tables = {
                 r[0]
-                for r in conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type='table'")
-                )
+                for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }
         assert "alembic_version" not in tables
         assert "_degenbot_db_schema_version" in tables

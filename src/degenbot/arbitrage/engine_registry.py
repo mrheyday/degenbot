@@ -1,7 +1,7 @@
 """The canonical bot-startup orchestrator (Plan 102, slice 3).
 
 :class:`EngineRegistry` is the **one correct way to start** a
-:class:`~degenbot.degenbot_rs.UniswapArbEngine` operator: it runs the
+:class:`~degenbot._ffi.ArbitrageEngine` operator: it runs the
 pre-pump startup ritual (``subscribe`` → stream snapshots → ``backfill`` →
 verify config) and *stops before* ``resume()``, so the caller can attach its
 result consumer before any batches flow. It also maintains the Python pool ↔
@@ -18,15 +18,16 @@ from typing import TYPE_CHECKING
 
 from degenbot import Bot, UniswapV2Pool
 from degenbot.aerodrome.pools import AerodromeV2Pool
-from degenbot.degenbot_rs import UniswapArbEngine
+from degenbot.arbitrage import ArbitrageEngine
 from degenbot.logging import logger as bot_logger
-from degenbot.uniswap.snapshot_binary import (
-    stream_v3_snapshot_to_engine,
-    stream_v4_snapshot_to_engine,
-)
+
+# XEANMB: the `load_*_from_py` ingestion surface + `_v3_snapshot_to_py_dict`
+# / `_v4_snapshot_to_py_dict` converters are retired (the in-memory
+# SnapshotStore is gone). Per-pool tick data is read via the Db arm (held tx) or
+# the Chain arm (RPC) at registration; `start()` only sets the snapshot seed
+# block `S`.
 from degenbot.uniswap.v4_liquidity_pool import UniswapV4Pool
 
-from .hop_info import PathInfo, build_hops_from_pools
 from .policy import NoOpPathPredicate, PathCompositionPredicate
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ __all__ = ["EngineRegistry"]
 
 
 class EngineRegistry:
-    """Thin wrapper over the Rust UniswapArbEngine.
+    """Thin wrapper over the Rust ArbitrageEngine.
 
     Maintains Python pool ↔ Rust key mappings so events can be routed
     to the right engine pool, and results can be mapped back to Python
@@ -58,7 +59,7 @@ class EngineRegistry:
         self,
         bot: Bot | None = None,
         *,
-        engine: UniswapArbEngine | None = None,
+        engine: ArbitrageEngine | None = None,
         path_predicate: PathCompositionPredicate | None = None,
     ) -> None:
         # ADR-006 D1+D4: the engine adopts the Bot's shared BotState, so the
@@ -74,12 +75,16 @@ class EngineRegistry:
             msg = "EngineRegistry requires either `engine` (test path) or `bot` (production)."
             raise ValueError(msg)
         else:
-            self.engine = UniswapArbEngine(py_bot=bot._py_bot)  # noqa: SLF001
+            self.engine = ArbitrageEngine(py_bot=bot._py_bot)  # noqa: SLF001
         self._v2_keys: dict[str, int] = {}  # address → pool_id (shared BotState)
         self._v3_keys: dict[str, int] = {}
         # V4 pools keyed by pool_id hex — for event routing from PoolManager logs
         self._v4_keys: dict[str, int] = {}  # pool_id_hex → pool_id
-        self.paths: dict[int, PathInfo] = {}
+        # NXM2BF: the Python `PathInfo` relay is retired. `register_path`
+        # returns the Rust `path_id`; `PyDispatchCandidate` resolves the
+        # encoder's `composers::PathInfo` from that `path_id` via
+        # `PyArbitrageEngine.path_info_for_core`. The `[profit]` hop-detail
+        # render reads `outcome.path_infos` (Rust→Py), not a stored Python copy.
         # ADR-006 D4 + D7KMQO: a pluggable path-composition predicate enforces
         # deployment policy (token denylist/allowlist, hop-count bounds,
         # min-liquidity, duplicate-pool guard) BEFORE hop building + engine
@@ -116,44 +121,70 @@ class EngineRegistry:
     ) -> int:
         """Run the pre-pump startup ritual and stop BEFORE resume().
 
-        Sequences: subscribe(ws) → stream snapshots → backfill → verify config.
-        Stops at EnginePhase::Backfilled so the caller can attach its result
+        Sequences: subscribe(ws) → load snapshots → verify config.
+        Stops at the snapshot-loaded phase so the caller can attach its result
         consumer before batches begin to flow (`resume()` is the single gate
         after which the pump emits one ResultBatch per block into the
         fire-and-forget channel — attaching the consumer after resume risks
-        unbounded backlog and stale-batch dispatch).
+        unbounded backlog and stale-batch dispatch; `resume()` also runs the
+        auto-backfill that closes the snapshot→WS gap, J3FMDO).
 
-        `snapshot_block` is derived internally from min(snap.newest_block)
-        across the supplied snapshots — the caller never passes a block.
-        Snapshots are a first-class degenbot feature, so the registry owns this
-        coupling rather than exposing it.
+        DB snapshot (JUCFCB, Shape 2): the V3+V4 DB snapshot is eagerly loaded
+        into the core ``BotState`` at ``Bot.__init__`` time via
+        ``PyBot.load_snapshot_from_db`` — so the DB path needs NO snapshot
+        kwargs here. The snapshot seed block ``S`` stays on the shared
+        ``BotState``; the per-pool two-step verify (step-1) reads the stashed
+        ``_verify_snapshot_block`` (set below from the same source), and the
+        snapshot→WS backfill runs automatically inside ``resume()``
+        (`BlockPump::resume_from_subscribe`) using the pump's own HTTP provider.
+
+        Non-DB snapshots (file/memory): pass ``v3_snapshot``/``v4_snapshot``
+        kwargs; each is converted to a single Python dict and handed to the
+        engine via ``load_v3_snapshot_from_py`` / ``load_v4_snapshot_from_py``
+        (ONE PyO3 crossing per family — DADWUP retired the per-pool
+        ``insert_*_pool_snapshot`` crossings), then
+        ``snapshot_block = min(s.newest_block)`` stashes the per-pool step-1
+        verify seed. These two kwargs are non-DB-only — the DB path constructs
+        the Bot with ``config.database.path`` and passes no snapshots here.
 
         Returns:
-            The backfill target (first observed WS block) from ``subscribe``.
+            The first observed WS block from ``subscribe`` (the resume live-loop
+            anchor).
 
         """
-        backfill_target = self.engine.subscribe(node_ws)
+        # Compute the snapshot seed block `S` BEFORE `subscribe()` so the
+        # core's `after_subscribe` phase transition sees `core_has_snapshot =
+        # true` and advances the engine phase to `SnapshotLoaded` (required by
+        # `resume()`). XEANMB: the non-DB path no longer fills a
+        # `SnapshotStore` via `load_*_from_py` (retired); per-pool tick data is
+        # read through the Db arm (held tx) or the Chain arm (RPC) at
+        # registration. `S` is the only thing stashed here — it drives the
+        # core auto-backfill inside `resume()` (J3FMDO) that closes the
+        # snapshot→WS gap.
+        if v3_snapshot is not None or v4_snapshot is not None:
+            # Non-DB (file/memory) path — `S = min(newest_block)` across the
+            # supplied snapshots. The tick-data dicts themselves are NOT
+            # ingested here (the Store is retired, epic XEANMB); per-pool tick
+            # data is fetched via the Chain arm (RPC) at registration.
+            snapshot_block = min(
+                s.newest_block for s in (v3_snapshot, v4_snapshot) if s is not None
+            )
+        else:
+            # DB path (Shape 2): snapshot already loaded at Bot construction;
+            # read S from the core BotState via the engine getter.
+            snapshot_block = self.engine.snapshot_seed_block
 
-        # Stream snapshots and backfill the snapshot→WS gap. Zero batches are
-        # emitted here — the pump isn't running until resume().
-        snapshots = [s for s in (v3_snapshot, v4_snapshot) if s is not None]
-        if snapshots:
-            if v3_snapshot is not None:
-                stream_v3_snapshot_to_engine(v3_snapshot, self.engine)
-            if v4_snapshot is not None:
-                stream_v4_snapshot_to_engine(v4_snapshot, self.engine)
-            snapshot_block = min(s.newest_block for s in snapshots)
-            self.engine.backfill_from_snapshot(node_http, snapshot_block)
-            # T1: stash the snapshot seed block for the per-pool two-step verify
-            # (T6). step-1 compares the pinned seed against on-chain@this
-            # block. step-2 captures its OWN block atomically with the drain
-            # (the post-drain pin carries `(tick_data, update_block)`), so the
-            # registry stashes no backfill-block constant for step-2 (removed
-            # 2026-06-29: pre-fix it stashed `backfill_target` and passed it to
-            # step-2, fabricating a mismatch on active pools during a slow
-            # `build_paths`). Only set when a snapshot was supplied (else
-            # there's no seed).
-            self._verify_snapshot_block = snapshot_block
+        # Only set when a snapshot was supplied (else there's no seed).
+        self._verify_snapshot_block = snapshot_block
+        # 2SM4Y7: record S on the shared BotState so the core auto-backfill
+        # inside `resume()` (J3FMDO) closes the snapshot→WS gap (the pyo3
+        # `backfill_from_snapshot` is retired; the non-DB path sets S via the
+        # `snapshot_seed_block` property setter — the DB path's
+        # `load_snapshot_from_db` already set S).
+        if snapshot_block is not None:
+            self.engine.snapshot_seed_block = snapshot_block
+
+        backfill_target = self.engine.subscribe(node_ws)
 
         # Verify config (consumer-safe: nothing emits yet).
         self.engine.set_verify_rpc_url(node_http)
@@ -396,8 +427,9 @@ class EngineRegistry:
         """Register a V3 pool with the Rust engine.
 
         Tick data is resolved automatically by the Rust engine from
-        the streamed snapshot (loaded via stream_v3_snapshot_to_engine).
-        The engine applies buffered events on top of stale snapshot data.
+        the loaded snapshot (fed via load_v3_snapshot_from_py or the DB
+        path's load_snapshot_from_db). The engine applies buffered events on
+        top of stale snapshot data.
 
         Returns:
             The registered pool's engine ``pool_id``.
@@ -467,8 +499,9 @@ class EngineRegistry:
         """Register a V4 pool with the Rust engine.
 
         Tick data is resolved automatically by the Rust engine from
-        the streamed snapshot (loaded via stream_v4_snapshot_to_engine).
-        The engine applies buffered events on top of stale snapshot data.
+        the loaded snapshot (fed via load_v4_snapshot_from_py or the DB
+        path's load_snapshot_from_db). The engine applies buffered events on
+        top of stale snapshot data.
 
         Pool admission (amount-modifying hooks / dynamic fees) is enforced
         by the Rust core as a *correctness floor* — the solver's V3-CL math
@@ -552,10 +585,14 @@ class EngineRegistry:
     ) -> int:
         """Register a path from concrete pool objects + per-hop directions.
 
-        ``HopInfo`` is built via ``build_hops_from_pools`` from pool
-        attributes; each pool's engine key is resolved from this registry's
-        key maps. Uses ``register_and_solve_path`` for eager solving so the
-        path is immediately included in the next result batch.
+        Each pool's engine key is resolved from this registry's key maps +
+        dispatched as a ``(key, zero_for_one)`` tuple to the engine's
+        ``register_and_solve_path`` (eager solve — the path is immediately
+        included in the next result batch). NXM2BF: the Python ``PathInfo``
+        relay is retired — ``PyDispatchCandidate`` resolves the encoder's
+        ``composers::PathInfo`` from the returned ``path_id`` via
+        ``PyArbitrageEngine.path_info_for_core`` (no Python hop build, no
+        stored copy).
 
         Returns:
             The registered path's ``path_id``.
@@ -576,7 +613,6 @@ class EngineRegistry:
         # raises a PathRejectedError subtype and never reaches the engine —
         # mirrors how V4 admission (HookedPoolRejectedError) is typed.
         self.path_predicate.evaluate(pools_and_zfos)
-        hops = build_hops_from_pools(pools_and_zfos)
         engine_hops: list[tuple[int, bool]] = []
         for pool, zfo in pools_and_zfos:
             if isinstance(pool, UniswapV4Pool):
@@ -601,6 +637,4 @@ class EngineRegistry:
             # shim is gone — Bot is 1-id-per-pool post-ADR-003).
             engine_hops.append((key, zfo))
 
-        path_id = self.engine.register_and_solve_path(engine_hops)
-        self.paths[path_id] = PathInfo(hops=hops)
-        return path_id
+        return self.engine.register_and_solve_path(engine_hops)

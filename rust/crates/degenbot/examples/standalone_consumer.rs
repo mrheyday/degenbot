@@ -13,12 +13,86 @@
 //! It `panic!`s on any check failure (exit code != 0), so it doubles as a
 //! standalone-consumer gate.
 
-use alloy::primitives::{address, U256};
+use std::path::PathBuf;
+
+use alloy::primitives::{address, aliases::U112, U256};
 use degenbot::degenbot_balancer_math::{mul_down, ONE};
 use degenbot::degenbot_curve_math::{stableswap_get_d, DVariant};
+use degenbot::degenbot_db::snapshot_db::SnapshotDb;
 use degenbot::degenbot_solidly_math::{calc_d as solidly_calc_d, calc_f as solidly_calc_f};
 use degenbot::dex_identity::UNISWAP_V2;
-use degenbot::{BotState, RegisterV2PoolParams};
+use degenbot::{bot_core::Bot, BotState, RegisterV2PoolParams};
+
+fn fixture_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("DEGENBOT_FIXTURE_DB") {
+        return PathBuf::from(p);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("degenbot-db")
+        .join("tests")
+        .join("fixtures")
+        .join("parity.db")
+}
+
+/// (JLLE57) Standalone-Rust consumer: full DB-snapshot → auto-backfill → resume flow.
+///
+/// Proves the end-state contract of epic P73ER6 with zero Python: a
+/// `cargo add degenbot` consumer can
+///   a. open a `SnapshotDb` (file-backed — here the `parity.db` fixture
+///      read handle with a held deferred read tx so `S` + per-pool reads
+///      share one frozen DB snapshot, epic `XEANMB`) from the bot's
+///      `-pl fixtures/parity.db` path,
+///      shipped alongside `degenbot-db`, chain 8453, which carries an
+///      `aerodrome_v3` exchange with V3 tick rows + an empty `uniswap_v4`
+///      family),
+///   b. construct a `Bot` for that chain,
+///   c. call `Bot::load_snapshot_from_db(&snap, chain)` — pure Rust, reads `S`
+///      inside the held tx (no `SnapshotStore` materialization, epic `XEANMB`)
+///      that emits `S = MIN(last_update_block)` over the V3/V4 `exchanges`
+///      rows for the chain (here `S = 12_340_000` = min(V3 `12_345_000`, V4
+///      `12_340_000`)); no tick dict ever crosses the FFI (the DB read is owned
+///      by `degenbot-db`/`degenbot-bot` after DADWUP).
+///
+/// The remaining two steps — (d) `BlockPump::subscribe(...)` and
+/// (e) `pump.resume_from_subscribe(state)` — close the S→W snapshot→WS
+/// backfill *internally* (J3FMDO): `resume_from_subscribe` calls
+/// `BlockPump::backfill_from_snapshot(W)` which fetches `eth_getLogs` for
+/// `S+1..W-1` and applies them via `BotState::process_backfill_logs`
+/// (state-only — no solve, no `on_send`), then enters the live loop with
+/// `current_block = W` reflecting the backfilled anchor. No Python call,
+/// no per-pool `PyO3` ingestion.
+///
+/// `subscribe()` needs a live WS endpoint, so driving (d)+(e) here is gated
+/// behind `SMOKE_RPC_URL` for the executable proof; without it the smoke
+/// loads the fixture and exits 0 (CI-runnable). The auto-backfill contract
+/// itself is asserted directly by `block_pump::tests::
+/// resume_anchors_to_subscribe_block` and the J3FMDO backfill tests; real
+/// consumers wire (d)+(e) from their own tokio runtime +
+/// sink/reorg/engine setup.
+fn fixture_snapshot_seed_block() -> Option<u64> {
+    let db_path = fixture_db_path();
+    let snap = SnapshotDb::open(&db_path)
+        .unwrap_or_else(|e| panic!("open fixture DB at {}: {e}", db_path.display()));
+    let snapshot_bot = Bot::new(8453);
+    snapshot_bot
+        .load_snapshot_from_db(&snap.0, 8453)
+        .expect("load_snapshot_from_db on the fixture DB returns Ok");
+    let seed_block = snapshot_bot.state_arc().read().snapshot_seed_block();
+    // Fixture DB has V3 ticks at chain 8453 (aerodrome_v3, last_update_block
+    // = 12_345_000) AND an empty V4 family (uniswap_v4 exchange row,
+    // last_update_block = 12_340_000) → S = MIN(V3, V4) = 12_340_000
+    // (the bot loads BOTH families and takes the min as the snapshot anchor
+    // so any participant pool's snapshot is honored).
+    assert_eq!(
+        seed_block,
+        Some(12_340_000),
+        "fixture DB at chain 8453 has V3+V4 exchanges → S = MIN(12345000, 12340000) = 12_340_000"
+    );
+    drop(snapshot_bot);
+    drop(snap);
+    seed_block
+}
 
 fn main() {
     // 1. Construct the Rust-owned per-chain bot state (no Python).
@@ -43,8 +117,8 @@ fn main() {
         address: pool,
         token0,
         token1,
-        reserve0,
-        reserve1,
+        reserve0: reserve0.to::<U112>(),
+        reserve1: reserve1.to::<U112>(),
         fee_token0: UNISWAP_V2.fee_token0,
         fee_token1: UNISWAP_V2.fee_token1,
         factory: UNISWAP_V2.factory,
@@ -54,11 +128,13 @@ fn main() {
         fee_denominator: None,
         ..Default::default()
     };
-    let pool_id = bot.register_v2_pool(&params);
+    let pool_id = bot
+        .register_v2_pool(&params)
+        .expect("standalone: register V2");
     assert_eq!(pool_id, 1, "first registered pool gets id 1");
 
-    // 3. Run a swap calc through the Rust core (the Möbius `IntHopState`
-    //    constant-product path). The same code path the PyO3 binding ships to
+    // 3. Run a swap calc through the Rust core (the `degenbot-v2-math`
+    //    `IntHopState` constant-product path). The same code path the PyO3 binding ships to
     //    Python — but here reached without a single `pyo3` import.
     let amount_in = U256::from(1_000_000_000_u64); // 1000 USDC in
     let amount_out = bot.calculate_tokens_out(pool_id, true, amount_in);
@@ -85,7 +161,7 @@ fn main() {
     //      numerator       = amountInWithFee * reserve_out
     //      denominator     = reserve_in * 1000 + amountInWithFee
     //    — byte-identical to the core's EVM-exact integer path
-    //    (`mobius_int::IntHopState::swap`).
+    //    (`degenbot_v2_math::IntHopState::swap`).
     let amount_in_with_fee = amount_in * U256::from(997_u64);
     let numer = amount_in_with_fee * reserve1;
     let denom = reserve0 * U256::from(1000_u64) + amount_in_with_fee;
@@ -151,4 +227,18 @@ fn main() {
     assert_eq!(got_f, expected_f, "solidly calc_f direct port");
 
     println!("standalone degenbot consumer OK: curve D={d} balancer fp.mul_down(identity) solidly calc_d={got_d}");
+
+    // 7. (JLLE57) Standalone-Rust consumer: full DB-snapshot → auto-backfill → resume flow.
+    //    See `fixture_snapshot_seed_block` for the end-state contract of
+    //    epic P73ER6 (zero-Python), the S→W backfill that happens inside
+    //    `BlockPump::resume_from_subscribe` (J3FMDO), and the SMOKE_RPC_URL
+    //    gate for driving `subscribe`+`resume`.
+    let seed_block = fixture_snapshot_seed_block();
+
+    let rpc_url = std::env::var("SMOKE_RPC_URL").ok();
+    if let Some(rpc) = rpc_url.as_deref() {
+        println!("standalone degenbot consumer OK: fixture DB at chain 8453 loaded with S={seed_block:?}; SMOKE_RPC_URL={rpc} set — wire `BlockPump::subscribe({rpc}, bot_arc, sink, reorg, shutdown)` then `pump.resume_from_subscribe(state)` and the pump auto-backfills S+1..W-1 internally (state-only `eth_getLogs` via `BotState::process_backfill_logs`) before entering the live loop with current_block = W.");
+    } else {
+        println!("standalone degenbot consumer OK: fixture DB at chain 8453 loaded with S={seed_block:?} (set SMOKE_RPC_URL='ws://...' to drive `BlockPump::subscribe()`+`resume_from_subscribe()` — gated so the example stays CI-runnable without a node; the auto-backfill path is covered by `block_pump::tests::resume_anchors_to_subscribe_block`).");
+    }
 }

@@ -1,19 +1,19 @@
-//! `PyO3` wrapper for the `UniswapEngine` — register `#[pymethods]` slice.
+//! `PyO3` wrapper for the `ArbitrageEngine` — register `#[pymethods]` slice.
 //!
 //! Split out of the former monolithic `py_binding.rs` (ergo UG6FKN task 74W2Z6),
-//! mirroring `crates/degenbot-bot/src/solvers/uniswap_engine/`'s per-concern
-//! layout. `PyO3` allows multiple `#[pymethods] impl PyUniswapArbEngine { … }`
+//! mirroring `crates/degenbot-bot/src/solvers/arb_engine/`'s per-concern
+//! layout. `PyO3` allows multiple `#[pymethods] impl PyArbitrageEngine { … }`
 //! blocks per type, so each concern file contributes one slice.
 
 use super::{
-    mpsc, Arc, Bot, DynamicFeePoolRejectedError, EngineHandle, EngineSubscriber,
-    HookedPoolRejectedError, PoolHop, PyBot, PyList, PyUniswapArbEngine, ReorgCoordinator,
-    SnapshotStore, SolveCoordinator, UniswapEngine,
+    mpsc, ArbitrageEngine, Arc, Bot, DynamicFeePoolRejectedError, EngineHandle,
+    HookedPoolRejectedError, PoolHop, PyArbitrageEngine, PyBot, PyList, ReorgCoordinator,
+    SolveCoordinator,
 };
 use crate::prelude::*;
 
 #[pymethods]
-impl PyUniswapArbEngine {
+impl PyArbitrageEngine {
     #[new]
     #[pyo3(signature = (py_bot=None))]
     #[allow(clippy::needless_pass_by_value)]
@@ -29,13 +29,13 @@ impl PyUniswapArbEngine {
         // a standalone core + wrap it in a fresh `Bot` (no-pyo3 / legacy path).
         let (engine, bot) = if let Some(bot) = py_bot_ref {
             let bot = bot.borrow(py).bot_arc();
-            (UniswapEngine::with_core(bot.state_arc()), bot)
+            (ArbitrageEngine::with_core(bot.state_arc()), bot)
         } else {
             let core = Arc::new(parking_lot::RwLock::new(
                 degenbot_bot::bot_core::BotState::new(),
             ));
             let bot = Arc::new(Bot::with_core(Arc::clone(&core)));
-            (UniswapEngine::with_core(core), bot)
+            (ArbitrageEngine::with_core(core), bot)
         };
         let mut engine = engine;
         engine.set_result_channel(result_tx);
@@ -48,9 +48,18 @@ impl PyUniswapArbEngine {
         // calls to the engine under a `drain_lock` and exposes a
         // drain-consistent `last_processed_block` (Python polls block until
         // any in-flight drain completes — no Rust/Python race).
-        let coordinator = Arc::new(SolveCoordinator::new(vec![EngineHandle::arc_dyn(
-            Arc::clone(&engine),
-        )]));
+        //
+        // The `EngineHandle` is retained on `Self` (not discarded into the
+        // coordinator) so `register_path`/`register_and_solve_path` can draw a
+        // live `Weak<dyn PoolStateSubscriber>` from it via `subscriber_weak()`.
+        // This is the ADR-006 cycle-free home for the strong subscriber: it is
+        // co-owned with the engine `Arc`, so the dispatcher's `Weak::upgrade`
+        // succeeds until the engine actually drops (the fix for the dangling-
+        // Weak bug the 2026-07-14 hotpath capture surfaced).
+        let engine_handle = Arc::new(EngineHandle::new(Arc::clone(&engine)));
+        let coordinator = Arc::new(SolveCoordinator::new(vec![
+            Arc::clone(&engine_handle) as Arc<dyn degenbot_bot::bot_core::engine::Engine>
+        ]));
         let reorg_coordinator = Arc::new(ReorgCoordinator::new(Arc::clone(&bot)));
         let pump = Arc::new(crate::bot::pump::PumpState::new(
             Arc::clone(&engine),
@@ -63,11 +72,10 @@ impl PyUniswapArbEngine {
         }
         Self {
             engine,
+            engine_handle,
             pump,
             result_rx: Arc::new(parking_lot::Mutex::new(Some(result_rx))),
             block_rx: Arc::new(parking_lot::Mutex::new(Some(block_rx))),
-            v3_snapshot: SnapshotStore::new(),
-            v4_snapshot: SnapshotStore::new(),
         }
     }
 
@@ -113,7 +121,12 @@ impl PyUniswapArbEngine {
         // severed when `apply_log` was replaced by `dispatch_log` in slice 5).
         // Duplicate pool_ids across paths are harmless (`insert_dirty` is
         // idempotent via `HashSet`).
-        let subscriber = EngineSubscriber::weak_handle(&self.engine);
+        //
+        // The `Weak` is drawn from the retained `EngineHandle` (the
+        // cycle-free strong owner) so `LogDispatcher::notify`'s `upgrade()`
+        // succeeds until the engine drops — the fix for the dangling-Weak bug
+        // (2026-07-14 hotpath capture: 71 notifies → 0 dirties).
+        let subscriber = self.engine_handle.subscriber_weak();
         for pool_id in pool_ids {
             self.pump.bot.attach_engine(pool_id, subscriber.clone());
         }
@@ -158,7 +171,7 @@ impl PyUniswapArbEngine {
             .register_and_solve_path(hops)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         // ADR-006 D4: subscribe the engine to each pool_id (see `register_path`).
-        let subscriber = EngineSubscriber::weak_handle(&self.engine);
+        let subscriber = self.engine_handle.subscriber_weak();
         for pool_id in pool_ids {
             self.pump.bot.attach_engine(pool_id, subscriber.clone());
         }
@@ -185,37 +198,6 @@ impl PyUniswapArbEngine {
         // the Bot-owned entry point. Kept on the engine for the engine-only
         // test seam; production routes through PyBot::subscribe.
         self.pump.subscribe(&rpc_url)
-    }
-
-    /// Backfill Mint/Burn/ModifyLiquidity events from the last DB snapshot
-    /// block to the first WS block observed during `subscribe()`.
-    ///
-    /// Must be called after `subscribe()`, before `resume()`. Uses
-    /// `eth_getLogs` to fetch events for the gap between the DB snapshot
-    /// and the live WS connection, then applies them to the V3/V4 engines
-    /// via `backfill_logs()`.
-    ///
-    /// This ensures that when pools are registered (with `tick_data` from the
-    /// DB snapshot), any liquidity changes between the snapshot block and
-    /// the current chain head are reflected in the Rust engine's state.
-    ///
-    /// Args:
-    ///     `rpc_url`: HTTP RPC endpoint for `eth_getLogs` requests
-    ///     `chunk_size`: Number of blocks per `eth_getLogs` request (default 2000)
-    ///
-    /// Returns the number of blocks backfilled (0 if snapshot is current).
-    #[pyo3(signature = (rpc_url, snapshot_block, chunk_size=2000))]
-    fn backfill_from_snapshot(
-        &self,
-        rpc_url: &str,
-        snapshot_block: u64,
-        chunk_size: u64,
-    ) -> PyResult<u64> {
-        // ADR-006 D4 (T3): delegates to the shared `PumpState` — the
-        // Bot-owned entry point. Kept on the engine for the engine-only test
-        // seam; production routes through PyBot::backfill_from_snapshot.
-        self.pump
-            .backfill_from_snapshot(rpc_url, snapshot_block, chunk_size)
     }
 
     /// Resume phase: begin normal pump processing.
@@ -249,19 +231,72 @@ impl PyUniswapArbEngine {
     }
 }
 
-// --- V4 registration error mapping (free helper) ---
-/// Map a [`RegisterV4PoolError`] to a typed Python exception (Plan 102).
+// --- Pool-registration error mapping (free helpers, F2EVV6) ---
+/// Map a [`RegisterV2PoolError`] to a typed Python exception under the
+/// `PoolRegistrationError` hierarchy.
 ///
-/// - `HookedPool` → [`HookedPoolRejectedError`]
-/// - `DynamicFee` → [`DynamicFeePoolRejectedError`]
-/// - `AlreadyRegistered` → `PyValueError` (a wiring/programming error, not an
-///   admission category)
+/// - `AlreadyRegistered` → [`PoolAlreadyRegisteredError`]
+/// - `SpecViolation` → [`SpecViolationError`] (the message names the
+///   offending field, its value, and the bound it violates, mirroring
+///   `spec_bounds::SpecViolation`'s `Display`)
 ///
-/// The message text is byte-for-byte unchanged from the legacy `Err(String)`
-/// formatting so `build_paths`'s classification (now `isinstance`, was
-/// substring) matches the same diagnostics.
+/// These are subclasses of `PoolRegistrationError`, which is itself a
+/// subclass of `ValueError`, so a broad `except ValueError:` (or
+/// `except PoolRegistrationError:` to scope just admission refusals) keeps
+/// working.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn map_register_v2_err(err: degenbot_bot::bot_core::RegisterV2PoolError) -> pyo3::PyErr {
+    use crate::bot::engine::{PoolAlreadyRegisteredError, SpecViolationError};
+    match err {
+        degenbot_bot::bot_core::RegisterV2PoolError::AlreadyRegistered { address } => {
+            PoolAlreadyRegisteredError::new_err(format!(
+                "V2 pool already registered: address={address}"
+            ))
+        }
+        degenbot_bot::bot_core::RegisterV2PoolError::SpecViolation(v) => {
+            SpecViolationError::new_err(format!("V2 pool registration failed: {v}"))
+        }
+    }
+}
+
+/// Map a [`RegisterV3PoolError`] to a typed Python exception under the
+/// `PoolRegistrationError` hierarchy. Mirrors [`map_register_v2_err`].
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn map_register_v3_err(err: degenbot_bot::bot_core::RegisterV3PoolError) -> pyo3::PyErr {
+    use crate::bot::engine::{PoolAlreadyRegisteredError, SpecViolationError};
+    match err {
+        degenbot_bot::bot_core::RegisterV3PoolError::AlreadyRegistered { address } => {
+            PoolAlreadyRegisteredError::new_err(format!(
+                "V3 pool already registered: address={address}"
+            ))
+        }
+        degenbot_bot::bot_core::RegisterV3PoolError::SpecViolation(v) => {
+            SpecViolationError::new_err(format!("V3 pool registration failed: {v}"))
+        }
+    }
+}
+
+/// Map a [`RegisterV4PoolError`] to a typed Python exception (Plan 102 +
+/// F2EVV6 unified hierarchy).
+///
+/// - `HookedPool` → [`HookedPoolRejectedError`] (V4 amount-modifying-hook
+///   admission floor — the solver's CL math assumes no hook intervention).
+/// - `DynamicFee` → [`DynamicFeePoolRejectedError`] (V4 dynamic-fee
+///   admission floor — the solver assumes a fixed fee).
+/// - `AlreadyRegistered` → [`PoolAlreadyRegisteredError`] (duplicate
+///   `(pool_manager, pool_id)` registration — a wiring/programming error
+///   surfaced at admission time, now unified with the V2/V3 twins under
+///   `PoolRegistrationError`, F2EVV6).
+/// - `SpecViolation` → [`SpecViolationError`] (out-of-spec
+///   sqrtPriceX96/tick/fee/tickSpacing, K3IICB stop-gap upgraded to a typed
+///   exception in F2EVV6).
+///
+/// The message text for the V4-specific variants is byte-for-byte unchanged
+/// from the legacy `Err(String)` formatting so `build_paths`'s classification
+/// (now `isinstance`, was substring) matches the same diagnostics.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn map_register_v4_err(err: degenbot_bot::bot_core::RegisterV4PoolError) -> pyo3::PyErr {
+    use crate::bot::engine::{PoolAlreadyRegisteredError, SpecViolationError};
     match err {
         degenbot_bot::bot_core::RegisterV4PoolError::HookedPool { hook_flags } => {
             HookedPoolRejectedError::new_err(format!(
@@ -277,9 +312,12 @@ pub(crate) fn map_register_v4_err(err: degenbot_bot::bot_core::RegisterV4PoolErr
         degenbot_bot::bot_core::RegisterV4PoolError::AlreadyRegistered {
             pool_manager,
             pool_id,
-        } => pyo3::exceptions::PyValueError::new_err(format!(
+        } => PoolAlreadyRegisteredError::new_err(format!(
             "V4 pool already registered: pool_manager={pool_manager}, pool_id=0x{}",
             alloy::hex::encode(pool_id),
         )),
+        degenbot_bot::bot_core::RegisterV4PoolError::SpecViolation(v) => {
+            SpecViolationError::new_err(format!("V4 pool registration failed: {v}"))
+        }
     }
 }

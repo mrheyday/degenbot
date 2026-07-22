@@ -1,18 +1,16 @@
 """Tests for the Bot class (single-chain facade, ADR-006 D5)."""
 
 import pathlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from degenbot.async_bot import AsyncBot
-from degenbot.bot import Bot
+from degenbot.bot import Bot, PyBot
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.config import DatabaseSettings, DegenbotConfig
 from degenbot.database.session_manager import DatabaseSessionManager
-from degenbot.degenbot_rs import PyBot
 from degenbot.exceptions.pool import TrackerAlreadyInitialized
-from degenbot.provider import ProviderAdapter
+from degenbot.provider import OfflineProvider
 from degenbot.registry import ManagedPoolRegistry, PoolRegistry, TokenRegistry
 from degenbot.uniswap.trackers import UniswapV2PoolTracker
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
@@ -27,10 +25,18 @@ def _make_test_config(tmp_path: pathlib.Path, chain_id: int = 1) -> DegenbotConf
     )
 
 
-def _fake_provider(chain_id: int = 1) -> ProviderAdapter:
-    provider = MagicMock(spec=ProviderAdapter)
-    provider.chain_id = chain_id
-    return provider
+def _fake_provider(chain_id: int = 1) -> OfflineProvider:
+    """A real offline provider (recorded JSON, no RPC) with the given chain_id.
+
+    `Bot.__init__` reads `provider.chain_id` (the recorded chain_id) to enforce
+    config/chain alignment; no RPC is issued at construction, so an offline
+    provider over an in-memory Rust transport suffices — no MagicMock double
+    (see O3).
+    """
+    return OfflineProvider(
+        chain_id=chain_id,
+        blocks={"1": {"timestamp": 1, "calls": {}, "code": {}}},
+    )
 
 
 class TestBotInit:
@@ -110,9 +116,9 @@ class TestBotFromConfigFile:
     """Bot.from_config_file() tests."""
 
     def test_from_config_file_creates_bot(self, tmp_path: pathlib.Path) -> None:
-        with patch("degenbot.bot._init_config") as mock_init:
+        with patch("degenbot.bot._bot._init_config") as mock_init:
             mock_init.return_value = _make_test_config(tmp_path)
-            with patch("degenbot.bot.get_provider_from_config") as mock_factory:
+            with patch("degenbot.bot._bot.get_provider_from_config") as mock_factory:
                 mock_factory.return_value = _fake_provider(1)
                 bot = Bot.from_config_file()
                 assert isinstance(bot, Bot)
@@ -169,17 +175,3 @@ class TestMultipleBots:
         # Second bot can add a manager for the same factory without error
         manager2 = bot2.add_tracker(UniswapV2PoolTracker, factory_address=factory)
         assert manager1 is not manager2
-
-
-class TestAsyncBotInit:
-    """AsyncBot constructor tests."""
-
-    def test_async_bot_creates_database_session_manager(self, tmp_path: pathlib.Path) -> None:
-        config = _make_test_config(tmp_path)
-        bot = AsyncBot(config, provider=_fake_provider(1))
-        assert isinstance(bot.db, DatabaseSessionManager)
-
-    def test_async_bot_stores_config(self, tmp_path: pathlib.Path) -> None:
-        config = _make_test_config(tmp_path)
-        bot = AsyncBot(config, provider=_fake_provider(1))
-        assert bot.config is config

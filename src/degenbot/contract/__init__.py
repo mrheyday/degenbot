@@ -30,13 +30,13 @@ from typing import TYPE_CHECKING
 
 from eth_typing import ChecksumAddress as Address
 
-from degenbot.degenbot_rs import Contract as _Contract
-from degenbot.degenbot_rs import decode_return_data as _decode_return_data
-from degenbot.degenbot_rs import encode_function_call as _encode_function_call
-from degenbot.degenbot_rs import get_function_selector as _get_function_selector
+from degenbot._ffi.contract import Contract as _Contract
+from degenbot._ffi.contract import decode_return_data as _decode_return_data
+from degenbot._ffi.contract import encode_function_call as _encode_function_call
+from degenbot._ffi.contract import get_function_selector as _get_function_selector
 
 if TYPE_CHECKING:
-    from degenbot.provider.sync_adapter import ProviderAdapter
+    from degenbot.provider import AlloyProvider
 
 
 class Contract:
@@ -81,7 +81,7 @@ class Contract:
     def __init__(
         self,
         address: Address,
-        provider: "ProviderAdapter | None" = None,
+        provider: "AlloyProvider | None" = None,
         provider_url: str | None = None,
     ) -> None:
         """Create a new contract instance.

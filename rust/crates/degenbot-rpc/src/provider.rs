@@ -5,7 +5,7 @@
 //! chunked log fetching. Also supports IPC endpoints for local node connections.
 
 use alloy::consensus::{Header as ConsensusHeader, TxEnvelope};
-use alloy::eips::BlockNumberOrTag;
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, Bytes, B256, U256};
 use alloy::providers::{Provider, ProviderBuilder};
@@ -19,7 +19,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::ipc::IpcConnect;
 use alloy::transports::layers::ThrottleLayer;
-use alloy::transports::ws::WsConnect;
+use alloy::transports::ws::{WebSocketConfig, WsConnect};
 use alloy::transports::{RpcError, TransportErrorKind};
 use degenbot_core::errors::{ProviderError, ProviderResult};
 use rand::RngExt;
@@ -112,6 +112,21 @@ impl IntoProviderError for RpcError<TransportErrorKind> {
 
         // Server returned an error response (JSON-RPC error)
         if let Some(error_resp) = self.as_error_resp() {
+            // Detect EVM execution reverts structurally (alloy's
+            // `as_revert_data()` checks `message.contains("revert")` + spelunks
+            // `data` for the 0x08c379a0/0x4e487b71 selector). The classification
+            // here is by message content (case-insensitive marker substring),
+            // mirroring the Python `alloy_errors.is_alloy_revert` markers; the
+            // FFI layer (degenbot-python) raises the degenbot-owned
+            // `ContractLogicError` from this variant.
+            let is_revert = error_resp.message.to_lowercase().contains("revert")
+                || error_resp.as_revert_data().is_some();
+            if is_revert {
+                return ProviderError::ExecutionReverted {
+                    code: error_resp.code,
+                    message,
+                };
+            }
             return ProviderError::RpcError {
                 code: error_resp.code,
                 message,
@@ -381,7 +396,41 @@ impl AlloyProvider {
                     .erased();
                 Arc::new(provider)
             } else if rpc_url.starts_with("ws://") || rpc_url.starts_with("wss://") {
-                let ws_connect = WsConnect::new(rpc_url.to_string());
+                // Raise tungstenite's default message/frame size caps (`64 MiB`
+                // / `16 MiB`) to `None` (unlimited). A single WS connection is
+                // used for BOTH subscriptions (`newHeads`/logs — tiny messages)
+                // AND batch `eth_getLogs` (the snapshot→WS backfill issues a
+                // 6-topic OR filter over up to 2000 blocks → ~100k logs, ~90 MB
+                // — well over both default caps).
+                //
+                // Failure mode WITHOUT the raise (confirmed via
+                // `ws_getlogs_large_filter_diagnostic` + tracing, 2026-07-12):
+                // tungstenite correctly returns `Error::Capacity(MessageTooLong)`
+                // when the oversized response arrives, but `alloy-pubsub`'s
+                // `WsBackend` converts that to `TransportErrorKind::backend_gone()`
+                // (a *retryable* error) at the backend→service boundary — losing
+                // the Capacity specificity. The pubsub service then enters an
+                // INFINITE reconnect→redispatch loop: `reconnect()` succeeds on
+                // the first attempt (the WS handshake is fine; only the response
+                // is too big), `max_retries` is never consumed, and the pending
+                // in-flight `eth_getLogs` is re-dispatched each cycle
+                // (`service.rs: Reissuing pending requests count=1`). The
+                // caller's `get_logs` future never resolves — small concurrent
+                // calls (`get_block_number`) keep succeeding on the same
+                // provider, so the transport isn't stalled, just the one
+                // oversized request. This is the "overly-broad catch": the
+                // `is_non_retryable()` gate treats every backend death as
+                // retryable, so a structurally-oversized request hangs forever.
+                //
+                // Raising the caps removes the trigger entirely; this matches
+                // HTTP transport behaviour (no body cap) and the degenbot
+                // threat model (the RPC endpoint is the user's own node, not
+                // an untrusted server that would DoS via oversized messages).
+                let ws_connect = WsConnect::new(rpc_url.to_string()).with_config(
+                    WebSocketConfig::default()
+                        .max_message_size(None)
+                        .max_frame_size(None),
+                );
                 let provider = ProviderBuilder::default()
                     .with_default_caching()
                     .connect_ws(ws_connect)
@@ -806,7 +855,9 @@ impl AlloyProvider {
     /// profit pattern, state override construction, revert decoding) is the
     /// Simulation epic — this fn only performs the typed RPC round-trip.
     ///
-    /// `block_number` selects the base state; `None` defaults to "latest".
+    /// `block_id` selects the base state (`BlockId::Number(Tag::Pending)` for
+    /// the simulate-v1 `block_identifier="pending"` parity, `BlockId::Number(Tag::Latest)`
+    /// to default to the head block, or `BlockId::Hash(..)` for a specific hash).
     ///
     /// # Errors
     ///
@@ -814,15 +865,15 @@ impl AlloyProvider {
     pub async fn eth_simulate_v1(
         &self,
         payload: &SimulatePayload,
-        block_number: Option<u64>,
+        block_id: BlockId,
     ) -> ProviderResult<Vec<SimulatedBlock<EthBlock>>> {
         self.retry_with_backoff(|| async {
-            let result = if let Some(block) = block_number {
-                self.inner.simulate(payload).block_id(block.into()).await
-            } else {
-                self.inner.simulate(payload).await
-            }
-            .map_err(|e| e.into_provider_error("eth_simulateV1 failed"))?;
+            let result = self
+                .inner
+                .simulate(payload)
+                .block_id(block_id)
+                .await
+                .map_err(|e| e.into_provider_error("eth_simulateV1 failed"))?;
             Ok(result)
         })
         .await
@@ -857,7 +908,8 @@ impl AlloyProvider {
     /// Returns `{accessList, gasUsed}` (plus an optional `error` field if the
     /// transaction would revert).
     ///
-    /// `block_number` selects the base state; `None` defaults to "latest".
+    /// `block_id` selects the base state; `BlockId::Number(Tag::Latest)` is the
+    /// default-of-defaults (the previous `None` semantics).
     ///
     /// # Errors
     ///
@@ -865,18 +917,15 @@ impl AlloyProvider {
     pub async fn eth_create_access_list(
         &self,
         request: &TransactionRequest,
-        block_number: Option<u64>,
+        block_id: BlockId,
     ) -> ProviderResult<AccessListResult> {
         self.retry_with_backoff(|| async {
-            let result = if let Some(block) = block_number {
-                self.inner
-                    .create_access_list(request)
-                    .block_id(block.into())
-                    .await
-            } else {
-                self.inner.create_access_list(request).await
-            }
-            .map_err(|e| e.into_provider_error("eth_createAccessList failed"))?;
+            let result = self
+                .inner
+                .create_access_list(request)
+                .block_id(block_id)
+                .await
+                .map_err(|e| e.into_provider_error("eth_createAccessList failed"))?;
             Ok(result)
         })
         .await
@@ -940,18 +989,12 @@ impl AlloyProvider {
     }
 }
 
-/// Test-only constructors for `AlloyProvider`.
-///
-/// Gated behind the `test-utils` feature so production builds don't carry them,
-/// but downstream crates' tests (e.g. `bot_core::block_pump` tests in the
-/// root `degenbot_rs` crate) can opt in via `degenbot-rpc/test-utils`.
-/// In a library crate, `#[cfg(test)]` is not visible to consumers' tests, so
-/// this feature gate is the seam.
-#[cfg(feature = "test-utils")]
 impl AlloyProvider {
-    /// Test-only constructor wrapping a pre-built provider (e.g. a mock
-    /// transport). Used by `BlockPump` tests that drive `run_with_stream`
-    /// from a deterministic synthetic `WsEvent` stream without a live RPC.
+    /// Wraps a pre-built provider (e.g. a custom transport such as the
+    /// `OfflineProvider`, or a mock transport). Used both at runtime (the
+    /// offline provider wraps an in-memory transport via this constructor) and
+    /// by tests that drive `run_with_stream` from a deterministic synthetic
+    /// `WsEvent` stream without a live RPC.
     #[must_use]
     pub fn from_provider(inner: Arc<dyn Provider<Ethereum>>) -> Self {
         Self {
@@ -1086,6 +1129,56 @@ impl LogFetcher {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // ── Revert classification ───────────────────────────────────────────
+
+    /// An EVM execution revert ("execution reverted" message, code -32000)
+    /// classifies as `ProviderError::ExecutionReverted`, not `RpcError`.
+    #[test]
+    fn execution_revert_classified_as_execution_reverted() {
+        let json = r#"{"code":-32000,"message":"execution reverted"}"#;
+        let payload: alloy::rpc::json_rpc::ErrorPayload = serde_json::from_str(json).unwrap();
+        let rpc_err: RpcError<TransportErrorKind> = RpcError::ErrorResp(payload);
+        let provider_err = rpc_err.into_provider_error("eth_call failed");
+        assert!(
+            matches!(
+                provider_err,
+                ProviderError::ExecutionReverted { code: -32000, .. }
+            ),
+            "expected ExecutionReverted, got {provider_err:?}"
+        );
+        assert!(!provider_err.is_retryable());
+    }
+
+    /// An Anvil-style revert ("error code 3: execution reverted") also
+    /// classifies as `ExecutionReverted` (case-insensitive marker match).
+    #[test]
+    fn anvil_revert_classified_as_execution_reverted() {
+        let json = r#"{"code":3,"message":"error code 3: execution reverted"}"#;
+        let payload: alloy::rpc::json_rpc::ErrorPayload = serde_json::from_str(json).unwrap();
+        let rpc_err: RpcError<TransportErrorKind> = RpcError::ErrorResp(payload);
+        let provider_err = rpc_err.into_provider_error("eth_call failed");
+        assert!(
+            matches!(
+                provider_err,
+                ProviderError::ExecutionReverted { code: 3, .. }
+            ),
+            "expected ExecutionReverted, got {provider_err:?}"
+        );
+    }
+
+    /// A non-revert JSON-RPC error stays `RpcError`.
+    #[test]
+    fn non_revert_error_stays_rpc_error() {
+        let json = r#"{"code":-32001,"message":"requested block not available"}"#;
+        let payload: alloy::rpc::json_rpc::ErrorPayload = serde_json::from_str(json).unwrap();
+        let rpc_err: RpcError<TransportErrorKind> = RpcError::ErrorResp(payload);
+        let provider_err = rpc_err.into_provider_error("eth_call failed");
+        assert!(
+            matches!(provider_err, ProviderError::RpcError { code: -32001, .. }),
+            "expected RpcError, got {provider_err:?}"
+        );
+    }
 
     // ── LogFilter construction ──────────────────────────────────────────
 
@@ -1342,6 +1435,10 @@ mod tests {
             ProviderError::RpcError {
                 code: -32000,
                 message: "revert".to_string(),
+            },
+            ProviderError::ExecutionReverted {
+                code: -32000,
+                message: "execution reverted".to_string(),
             },
             ProviderError::InvalidBlockRange { from: 1, to: 0 },
             ProviderError::InvalidParams {

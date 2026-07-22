@@ -30,7 +30,7 @@ from degenbot.database.operations import (
     inspect_schema_state,
 )
 from degenbot.database.session_manager import DatabaseSessionManager
-from degenbot.degenbot_rs import (
+from degenbot.db import (
     V2PoolRowInput,
     db_create_new_database,
     db_fetch_exchange_by_name,
@@ -285,8 +285,7 @@ def test_heal_boundary_preserves_all_rows_and_fk_integrity(
     assert inspect_schema_state(database_path=pathlib.Path(db_path_str)) == "rust_owned"
     post_counts = _row_counts(db_path_str)
     assert post_counts == pre_counts, (
-        f"row-count mismatch after heal (pre vs post):\n"
-        f"  pre:  {pre_counts}\n  post: {post_counts}"
+        f"row-count mismatch after heal (pre vs post):\n  pre:  {pre_counts}\n  post: {post_counts}"
     )
     _assert_fk_integrity(db_path_str)  # healed DB is clean.
 
@@ -328,8 +327,11 @@ def test_heal_boundary_preserves_all_rows_and_fk_integrity(
     assert fetched is not None
     assert fetched.id == new_row.id
     # The new row is distinct from the pre-heal chain-1 exchanges.
-    assert fetched.id != db_fetch_exchange_by_name(
-        database_path=db_path_str,
-        chain_id=1,
-        name="uniswap_v2",
-    ).id
+    assert (
+        fetched.id
+        != db_fetch_exchange_by_name(
+            database_path=db_path_str,
+            chain_id=1,
+            name="uniswap_v2",
+        ).id
+    )

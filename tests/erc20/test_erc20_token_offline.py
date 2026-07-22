@@ -6,8 +6,8 @@ Uses I/O-free token construction without requiring a live RPC.
 import pytest
 from hexbytes import HexBytes
 
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot
 from tests.helpers.erc20_factory import make_erc20
 
 _PY_BOT = PyBot()

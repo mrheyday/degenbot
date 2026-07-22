@@ -3,7 +3,7 @@
 Proves the ADR-006 single-``Bot``-per-chain topology end-to-end, the structural
 closure of the ``rust-owned-bot.md`` §17 stale-state caveat:
 
-- ``UniswapArbEngine(py_bot=core)`` adopts ``core``'s shared ``BotState`` (one
+- ``ArbitrageEngine(py_bot=core)`` adopts ``core``'s shared ``BotState`` (one
   state, not the engine's private copy).
 - Pools register ONCE — via ``PyBot.register_v2_pool`` (the same path
   ``Bot.build_pool`` takes). The engine does NOT re-register them; it reads
@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import threading
 
-from degenbot.degenbot_rs import PyBot, UniswapArbEngine
+from degenbot.arbitrage.engine_registry import ArbitrageEngine
+from degenbot.bot import PyBot
 
 USDC = 10**6
 WETH = 10**18
@@ -44,7 +45,7 @@ V3_TICK = -76020
 V3_LIQUIDITY = 1_234_567_890
 
 # ─── V4 topology round-trip fixtures (RAJ3PP public-interface regression) ─
-# A V4 pool registered via UniswapArbEngine.register_v4_pool (with its core
+# A V4 pool registered via ArbitrageEngine.register_v4_pool (with its core
 # shared from a PyBot) and read back through a PyLiquidityPool handle. The
 # handle is family-agnostic — the same getters/apply methods used for V3.
 V4_POOL_MANAGER = "0x" + "ee" * 20
@@ -94,13 +95,13 @@ def _register_balanced_v2_pair(core: PyBot) -> tuple[int, int]:
 
 
 class TestSharedStateTopology:
-    """``UniswapArbEngine(py_bot=)`` shares the bot's ``BotState`` (ADR-006 D1+D4)."""
+    """``ArbitrageEngine(py_bot=)`` shares the bot's ``BotState`` (ADR-006 D1+D4)."""
 
     def test_engine_adopts_shared_bot_state(self) -> None:
         """The engine reads pools registered on the shared PyBot — no re-registration."""
         core = PyBot()
         pool_id_a, pool_id_b = _register_balanced_v2_pair(core)
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
 
         # The engine can build a path from pool_ids it never registered itself —
         # proof it reads the shared BotState, not a private copy.
@@ -118,7 +119,7 @@ class TestSharedStateTopology:
         """
         core = PyBot()
         pool_id_a, pool_id_b = _register_balanced_v2_pair(core)
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         engine.register_and_solve_path([(pool_id_a, True), (pool_id_b, True)])
 
         engine.solve_all_paths(1)
@@ -156,7 +157,7 @@ class TestSharedStateTopology:
         """
         core = PyBot()
         pool_id_a, pool_id_b = _register_balanced_v2_pair(core)
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         engine.register_and_solve_path([(pool_id_a, True), (pool_id_b, True)])
 
         engine.solve_all_paths(1)
@@ -652,7 +653,7 @@ class TestSharedStateTopologyV4:
     """
 
     @staticmethod
-    def _register_v4(core: PyBot, engine: UniswapArbEngine) -> int:
+    def _register_v4(core: PyBot, engine: ArbitrageEngine) -> int:
         """Register a V4 pool via the shared core; return its handle key.
 
         ADR-006 D3 (T5): deleted the unreachable ``engine.register_v4_pool``
@@ -687,7 +688,7 @@ class TestSharedStateTopologyV4:
         (``test_v3_handle_apply_swap_is_visible_to_handle_reads``).
         """
         core = PyBot()
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         pool_id = self._register_v4(core, engine)
         handle = core.get_pool(pool_id)
         assert handle is not None
@@ -721,7 +722,7 @@ class TestSharedStateTopologyV4:
         (``test_v3_handle_apply_liquidity_update_inits_ticks``).
         """
         core = PyBot()
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         pool_id = self._register_v4(core, engine)
         handle = core.get_pool(pool_id)
         assert handle is not None
@@ -761,7 +762,7 @@ class TestSharedStateTopologyV4:
         the RAJ3PP silent-drop footgun shape).
         """
         core = PyBot()
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         pool_id = self._register_v4(core, engine)
         handle = core.get_pool(pool_id)
         assert handle is not None
@@ -810,7 +811,7 @@ class TestSharedStateTopologyConcurrency:
     """ADR-006 slice 10 acceptance: the deadlock surface + atomic-read invariant.
 
     The lock-ordering invariant is **engine-then-core**: every pump path holds
-    the engine ``Mutex<UniswapEngine>`` and nests ``core.write()``/``core.read()``
+    the engine ``Mutex<ArbitrageEngine>`` and nests ``core.write()``/``core.read()``
     inside; ``PyBot``/``PyLiquidityPool`` methods take ``core`` alone and never
     call into the engine (ADR-003's rule keeping the deadlock surface empty).
     These tests characterize that invariant under concurrent writer/reader
@@ -923,19 +924,13 @@ class TestSharedStateTopologyConcurrency:
                 spx, liq, tick, block = snap
                 # All four fields must encode the SAME write index `block`.
                 if spx != V3_SQRT_PRICE + block:
-                    errors.append(
-                        f"torn read: spx={spx} != base+block={V3_SQRT_PRICE + block}"
-                    )
+                    errors.append(f"torn read: spx={spx} != base+block={V3_SQRT_PRICE + block}")
                     return
                 if liq != V3_LIQUIDITY + block:
-                    errors.append(
-                        f"torn read: liq={liq} != base+block={V3_LIQUIDITY + block}"
-                    )
+                    errors.append(f"torn read: liq={liq} != base+block={V3_LIQUIDITY + block}")
                     return
                 if tick != V3_TICK + block:
-                    errors.append(
-                        f"torn read: tick={tick} != base+block={V3_TICK + block}"
-                    )
+                    errors.append(f"torn read: tick={tick} != base+block={V3_TICK + block}")
                     return
 
         writer_thread = threading.Thread(target=writer)
@@ -963,7 +958,7 @@ class TestSharedStateTopologyConcurrency:
         """
         core = PyBot()
         pool_id_a, pool_id_b = _register_balanced_v2_pair(core)
-        engine = UniswapArbEngine(py_bot=core)
+        engine = ArbitrageEngine(py_bot=core)
         engine.register_and_solve_path([(pool_id_a, True), (pool_id_b, True)])
 
         errors: list[BaseException] = []
@@ -990,9 +985,7 @@ class TestSharedStateTopologyConcurrency:
                 errors.append(exc)
 
         solver_thread = threading.Thread(target=solver)
-        reader_threads = [
-            threading.Thread(target=reader) for _ in range(self._READERS)
-        ]
+        reader_threads = [threading.Thread(target=reader) for _ in range(self._READERS)]
         solver_thread.start()
         for t in reader_threads:
             t.start()
@@ -1289,31 +1282,36 @@ class TestSharedStateTopologyBalancerWeighted:
         assert snap_balances == list(BALANCER_WEIGHTED_BALANCES)
         assert snap_block == 10
 
-    def test_balancer_weighted_apply_is_silent_noop_on_curve_pool(self) -> None:
-        """``apply_balancer_weighted_balance_update`` on a Curve pool is a
-        silent no-op (``False``) — the family-dispatch contract: a non-matching
-        companion must NOT corrupt a pool registered under a different family.
+    def test_balancer_weighted_apply_is_silent_noop_on_v3_pool(self) -> None:
+        """``apply_balancer_weighted_balance_update`` on a V3 pool is a
+        silent no-op (``False``) — the structural-family dispatch contract
+        (ADR-017 D1): the balance-vector apply dispatcher matches
+        ``Curve | BalancerWeighted | BalancerStable`` and is ``None`` on any
+        non-balance-vector pool. A V3 pool registered under the CL family must
+        NOT be mutated by a balance-vector companion.
         """
         core = PyBot()
-        curve_pool_id = core.register_curve_pool(
-            address=CURVE_POOL_A,
-            tokens=CURVE_TOKENS,
-            a_coefficient=CURVE_A,
-            fee=CURVE_FEE,
-            admin_fee=CURVE_ADMIN_FEE,
-            rate_multipliers=CURVE_RATE_MULTIPLIERS,
-            balances=CURVE_BALANCES,
-            update_block=10,
+        v3_pool_id = core.register_v3_pool(
+            address=V3_POOL_A,
+            token0=TOKEN0,
+            token1=TOKEN1,
+            fee=V3_FEE,
+            tick_spacing=V3_TICK_SPACING,
+            factory=FACTORY,
+            sqrt_price_x96=V3_SQRT_PRICE,
+            liquidity=V3_LIQUIDITY,
+            tick=V3_TICK,
         )
-        curve_handle = core.get_pool(curve_pool_id)
-        assert curve_handle is not None
-        applied = curve_handle.apply_balancer_weighted_balance_update(
+        v3_handle = core.get_pool(v3_pool_id)
+        assert v3_handle is not None
+        applied = v3_handle.apply_balancer_weighted_balance_update(
             [1, 2, 3],
             5,
         )
-        assert applied is False, "Balancer weighted apply on a Curve pool must be a silent no-op"
-        # The Curve balances are unchanged — no corruption.
-        assert curve_handle.balances == list(CURVE_BALANCES)
+        assert applied is False, "Balancer weighted apply on a V3 pool must be a silent no-op"
+        # The V3 scalars are unchanged — no corruption.
+        assert v3_handle.sqrt_price_x96 == V3_SQRT_PRICE
+        assert v3_handle.liquidity == V3_LIQUIDITY
 
     def test_balancer_weighted_snapshot_returns_none_for_curve_pool(self) -> None:
         """``snapshot_balancer_weighted()`` returns ``None`` on non-Balancer-
@@ -1505,28 +1503,33 @@ class TestSharedStateTopologyBalancerStable:
         assert snap_balances == list(BALANCER_STABLE_BALANCES)
         assert snap_block == 10
 
-    def test_balancer_stable_apply_is_silent_noop_on_curve_pool(self) -> None:
-        """``apply_balancer_stable_balance_update`` on a Curve pool is a
-        silent no-op (``False``) — the family-dispatch contract: a non-matching
-        companion must NOT corrupt a pool registered under a different family.
+    def test_balancer_stable_apply_is_silent_noop_on_v3_pool(self) -> None:
+        """``apply_balancer_stable_balance_update`` on a V3 pool is a
+        silent no-op (``False``) — the structural-family dispatch contract
+        (ADR-017 D1): the balance-vector apply dispatcher matches
+        ``Curve | BalancerWeighted | BalancerStable`` and is ``None`` on any
+        non-balance-vector pool. A V3 pool registered under the CL family must
+        NOT be mutated by a balance-vector companion.
         """
         core = PyBot()
-        curve_pool_id = core.register_curve_pool(
-            address=CURVE_POOL_A,
-            tokens=CURVE_TOKENS,
-            a_coefficient=CURVE_A,
-            fee=CURVE_FEE,
-            admin_fee=CURVE_ADMIN_FEE,
-            rate_multipliers=CURVE_RATE_MULTIPLIERS,
-            balances=CURVE_BALANCES,
-            update_block=10,
+        v3_pool_id = core.register_v3_pool(
+            address=V3_POOL_A,
+            token0=TOKEN0,
+            token1=TOKEN1,
+            fee=V3_FEE,
+            tick_spacing=V3_TICK_SPACING,
+            factory=FACTORY,
+            sqrt_price_x96=V3_SQRT_PRICE,
+            liquidity=V3_LIQUIDITY,
+            tick=V3_TICK,
         )
-        curve_handle = core.get_pool(curve_pool_id)
-        assert curve_handle is not None
-        applied = curve_handle.apply_balancer_stable_balance_update([1, 2, 3], 5)
-        assert applied is False, "Balancer stable apply on a Curve pool must be a silent no-op"
-        # The Curve balances are unchanged — no corruption.
-        assert curve_handle.balances == list(CURVE_BALANCES)
+        v3_handle = core.get_pool(v3_pool_id)
+        assert v3_handle is not None
+        applied = v3_handle.apply_balancer_stable_balance_update([1, 2, 3], 5)
+        assert applied is False, "Balancer stable apply on a V3 pool must be a silent no-op"
+        # The V3 scalars are unchanged — no corruption.
+        assert v3_handle.sqrt_price_x96 == V3_SQRT_PRICE
+        assert v3_handle.liquidity == V3_LIQUIDITY
 
     def test_balancer_stable_snapshot_returns_none_for_curve_pool(self) -> None:
         """``snapshot_balancer_stable()`` returns ``None`` on non-Balancer-

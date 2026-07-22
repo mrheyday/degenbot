@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import pytest
 
-from degenbot.anvil_fork import AnvilFork
+from degenbot._ffi.dex_identity import dex_identity
+from degenbot.bot import PyBot
 from degenbot.camelot.abi import CAMELOT_POOL_ABI
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyBot, dex_identity
+from degenbot.fork import AnvilFork
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v2_pool_factory import make_v2_pool
+from tests.helpers.w3_contract import make_contract
 
 # Pinned well inside arb1.arbitrum.io/rpc's keyless archive window.
 CAMELOT_PARITY_BLOCK = 477_785_000
@@ -100,10 +102,7 @@ def _record_get_amount_out() -> int:
         anvil_opts=["--accounts=0"],
     )
     try:
-        w3_contract = fork.w3.eth.contract(
-            address=CAMELOT_WETH_USDC_LP_ADDRESS,
-            abi=CAMELOT_POOL_ABI,
-        )
+        w3_contract = make_contract(fork.http_url, CAMELOT_WETH_USDC_LP_ADDRESS, CAMELOT_POOL_ABI)
         return w3_contract.functions.getAmountOut(
             amountIn=_AMOUNT_IN_USDC,
             tokenIn=_USDC_ADDRESS,

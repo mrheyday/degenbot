@@ -1,16 +1,14 @@
 import pytest
 from hexbytes import HexBytes
 
-from degenbot.anvil_fork import AnvilFork
-from degenbot.bot import Bot
+from degenbot.bot import Bot, PyBot
 from degenbot.chainlink import ChainlinkPriceContract
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import ZERO_ADDRESS
-from degenbot.degenbot_rs import PyBot
 from degenbot.erc20.erc20 import Erc20Token
 from degenbot.exceptions import DegenbotValueError
 from degenbot.exceptions.infrastructure import NoPriceOracle
-from degenbot.provider import ProviderAdapter
+from degenbot.fork import AnvilFork
 from tests.helpers.bot_factory import make_bot_with_provider
 from tests.helpers.erc20_factory import make_ether_placeholder
 
@@ -24,7 +22,7 @@ CHAINLINK_WETH_PRICE_FEED = get_checksum_address("0x5f4ec3df9cbd43714fe2740f5e36
 
 @pytest.fixture
 def bot(fork_mainnet_full: AnvilFork) -> Bot:
-    return make_bot_with_provider(ProviderAdapter.from_web3(fork_mainnet_full.w3))
+    return make_bot_with_provider(fork_mainnet_full.provider)
 
 
 @pytest.fixture
@@ -149,8 +147,8 @@ def test_ether_placeholder(fork_mainnet_full: AnvilFork):
     ether = make_ether_placeholder(_PY_BOT, ZERO_ADDRESS)
 
     fake_balance = 69_420_000
-    current_block = fork_mainnet_full.w3.eth.block_number
-    balance_actual = fork_mainnet_full.w3.eth.get_balance(VITALIK_ADDRESS)
+    current_block = fork_mainnet_full.provider.get_block_number()
+    balance_actual = fork_mainnet_full.provider.get_balance(VITALIK_ADDRESS)
     ether.set_cached_balance(VITALIK_ADDRESS, current_block, fake_balance)
     balance_from_cache = ether.get_cached_balance(VITALIK_ADDRESS, current_block)
     assert balance_from_cache == fake_balance

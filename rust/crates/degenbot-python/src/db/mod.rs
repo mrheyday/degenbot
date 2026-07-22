@@ -12,6 +12,8 @@
 //! retired in favor of these Rust-backed wrappers.
 
 pub mod aave;
+#[cfg(feature = "aave-updater")]
+pub mod aave_analysis;
 pub mod discovery;
 pub mod liquidity_updater;
 pub mod pool_read;
@@ -46,7 +48,7 @@ pub use snapshot::PyDatabaseSnapshot;
 // `VerificationMismatchError` / `HookedPoolRejectedError` (typed subclasses of
 // a builtin so callers classify by type, not fragile string matching).
 create_exception!(
-    degenbot_rs,
+    degenbot._ffi.db,
     DatabaseSchemaStale,
     PyValueError,
     "The database is stamped at a prior Alembic revision; run `degenbot database upgrade`."
@@ -211,6 +213,24 @@ fn schema_state_label(state: &degenbot_db::SchemaState) -> &'static str {
     }
 }
 
+/// Map a [`degenbot_bot::bot_core::tick_assembly::TickMapAssemblyError`] to a
+/// Python exception.
+///
+/// - `Db` variant → delegates to [`db_err_to_py`] (same `ValueError` /
+///   `DatabaseSchemaStale` mapping).
+/// - `Chain` variant → `RuntimeError` (Decision 8 (A) loud-failure posture —
+///   RPC failures surface as a typed exception, not swallowed into a silent
+///   degrade-to-sparse path).
+pub(crate) fn assembly_err_to_py(
+    err: &degenbot_bot::bot_core::tick_assembly::TickMapAssemblyError,
+) -> PyErr {
+    use degenbot_bot::bot_core::tick_assembly::TickMapAssemblyError;
+    match err {
+        TickMapAssemblyError::Db(e) => db_err_to_py(e),
+        TickMapAssemblyError::Chain(e) => pyo3::exceptions::PyRuntimeError::new_err(e.to_string()),
+    }
+}
+
 /// Map a [`degenbot_db::DbError`] to a Python exception.
 ///
 /// `AlembicStale` becomes a [`DatabaseSchemaStale`] (subclass of `ValueError`)
@@ -233,76 +253,150 @@ pub(crate) fn db_err_to_py(err: &degenbot_db::DbError) -> PyErr {
 ///
 /// # Errors
 ///
-/// Returns a [`PyErr`] if any `add_function` call fails (e.g. a name
-/// collision); propagated unchanged to the `#[pymodule]` caller.
+/// Register the `#[pyclass]` types + the `DatabaseSchemaStale` exception on
+/// the `db` submodule (extracted from [`add_db_module`] to keep it under
+/// clippy's line budget).
+///
+/// # Errors
+///
+/// Returns a [`PyErr`] if any `add_class`/`add` call fails.
+fn register_db_classes(submod: &Bound<'_, PyModule>) -> PyResult<()> {
+    submod.add_class::<liquidity_updater::PyLiquidityUpdateEvent>()?;
+    submod.add_class::<snapshot::PyDatabaseSnapshot>()?;
+    submod.add_class::<aave::PyDatabasePositionQuery>()?;
+    submod.add_class::<pool_read::PyLiquidityPoolRow>()?;
+    submod.add_class::<pool_read::PyPoolKindRow>()?;
+    submod.add_class::<pool_read::PyExchangeRow>()?;
+    submod.add_class::<pool_read::PyLiquidityPositionRow>()?;
+    submod.add_class::<pool_read::PyInitializationMapRow>()?;
+    submod.add_class::<pool_read::PyPoolManagerRow>()?;
+
+    // Typed database-schema-stale exception (`DbError::AlembicStale` →
+    // `DatabaseSchemaStale`, a `ValueError` subclass). Previously registered
+    // flat on root via `c_api.rs`; moved onto the db submodule so the whole
+    // db surface lives under `degenbot._ffi.db`.
+    submod.add(
+        "DatabaseSchemaStale",
+        submod.py().get_type::<crate::db::DatabaseSchemaStale>(),
+    )?;
+    Ok(())
+}
+
+/// Register the DB functions + classes on a real Python submodule.
+///
+/// Creates `degenbot._ffi.db` (a `PyModule`, not flat root-level functions)
+/// and registers all ~45 `db_*` pyfunctions + ~11 pyclasses + the
+/// `DatabaseSchemaStale` exception on it. The `db_` prefix is retained on
+/// the submodule names (unlike the math submodules which dropped their
+/// prefix) because (a) the blast radius is much larger (5 Rust files, ~45
+/// fns) and (b) `db_` functions as a functional namespace marker is clearer
+/// than bare `backup_database` on a `db` submodule.
+///
+/// The companion `src/degenbot/database/_ffi.py` re-exports these as the
+/// stable import path, decoupling Python consumers from `degenbot._ffi`.
+///
+/// # Errors
+///
+/// Returns a [`PyErr`] if any `add_function`/`add_class`/`add` call fails
+/// (e.g. a name collision); propagated unchanged to the `#[pymodule]` caller.
 pub fn add_db_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(db_create_new_database, m)?)?;
-    m.add_function(wrap_pyfunction!(db_backup_database, m)?)?;
-    m.add_function(wrap_pyfunction!(db_compact_database, m)?)?;
-    m.add_function(wrap_pyfunction!(db_upgrade_database, m)?)?;
-    m.add_function(wrap_pyfunction!(db_inspect_schema_state, m)?)?;
-    m.add_function(wrap_pyfunction!(db_convert_alembic_to_rust_owned, m)?)?;
-    m.add_function(wrap_pyfunction!(db_heal_database, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    let py = m.py();
+    let submod = PyModule::new(py, "degenbot._ffi.db")?;
+
+    submod.add_function(wrap_pyfunction!(db_create_new_database, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_backup_database, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_compact_database, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_upgrade_database, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_inspect_schema_state, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_convert_alembic_to_rust_owned, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(db_heal_database, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(
         liquidity_updater::db_apply_v3_liquidity_updates,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
         liquidity_updater::db_apply_v4_liquidity_updates,
-        m
+        &submod
     )?)?;
     // Aave V3 writer seam (Sub-step B of AZGJUN/RQXEKH) — mirror the
     // liquidity_updater registration. 14 pyfunctions: 7 `get_or_create_*` + 7
     // `apply_*` + `decode_reserve_configuration_bitmap`.
-    m.add_function(wrap_pyfunction!(aave::db_get_or_create_e_mode_category, m)?)?;
-    m.add_function(wrap_pyfunction!(aave::db_get_or_create_asset_config, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
+        aave::db_get_or_create_e_mode_category,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
+        aave::db_get_or_create_asset_config,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
         aave::db_get_or_create_user_collateral_config,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(aave::db_get_or_create_user, m)?)?;
-    m.add_function(wrap_pyfunction!(aave::db_get_or_create_erc20_token, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(aave::db_get_or_create_user, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(
+        aave::db_get_or_create_erc20_token,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
         aave::db_get_or_create_collateral_position,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(aave::db_get_or_create_debt_position, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
+        aave::db_get_or_create_debt_position,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
         aave::db_apply_collateral_configuration_changed,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(aave::db_apply_e_mode_category_added, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
+        aave::db_apply_e_mode_category_added,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
         aave::db_apply_emode_asset_category_changed,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
         aave::db_apply_asset_collateral_in_emode_changed,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(
         aave::db_apply_reserve_used_as_collateral,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(aave::db_apply_user_e_mode_set, m)?)?;
-    m.add_function(wrap_pyfunction!(aave::db_apply_price_oracle_updated, m)?)?;
-    m.add_function(wrap_pyfunction!(aave::db_apply_asset_source_updated, m)?)?;
-    m.add_function(wrap_pyfunction!(
+    submod.add_function(wrap_pyfunction!(aave::db_apply_user_e_mode_set, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(
+        aave::db_apply_price_oracle_updated,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
+        aave::db_apply_asset_source_updated,
+        &submod
+    )?)?;
+    submod.add_function(wrap_pyfunction!(
         aave::db_decode_reserve_configuration_bitmap,
-        m
+        &submod
     )?)?;
-    m.add_function(wrap_pyfunction!(pool_read::db_fetch_pool_row, m)?)?;
-    m.add_function(wrap_pyfunction!(pool_read::db_fetch_exchange, m)?)?;
-    m.add_function(wrap_pyfunction!(pool_read::db_fetch_exchange_by_name, m)?)?;
-    discovery::add_discovery_module(m)?;
-    m.add_class::<liquidity_updater::PyLiquidityUpdateEvent>()?;
-    m.add_class::<snapshot::PyDatabaseSnapshot>()?;
-    m.add_class::<aave::PyDatabasePositionQuery>()?;
-    m.add_class::<pool_read::PyLiquidityPoolRow>()?;
-    m.add_class::<pool_read::PyPoolKindRow>()?;
-    m.add_class::<pool_read::PyExchangeRow>()?;
-    m.add_class::<pool_read::PyLiquidityPositionRow>()?;
-    m.add_class::<pool_read::PyInitializationMapRow>()?;
-    m.add_class::<pool_read::PyPoolManagerRow>()?;
+    submod.add_function(wrap_pyfunction!(pool_read::db_fetch_pool_row, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(pool_read::db_fetch_exchange, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(
+        pool_read::db_fetch_exchange_by_name,
+        &submod
+    )?)?;
+    discovery::add_discovery_module(&submod)?;
+    register_db_classes(&submod)?;
+    // Aave analysis seam (Step B of GAXGCR): the pure `analyze_user_position`
+    // math over `degenbot-aave::analysis`. Gated on `aave-updater` (the
+    // feature that brings in the `degenbot-aave` dep).
+    #[cfg(feature = "aave-updater")]
+    aave_analysis::register_aave_analysis(&submod)?;
+
+    m.add_submodule(&submod)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("degenbot._ffi.db", &submod)?;
+
     Ok(())
 }

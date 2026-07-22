@@ -48,14 +48,15 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from degenbot.anvil_fork import AnvilFork
+from degenbot.bot import PyBot
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.constants import MAX_INT128, ZERO_ADDRESS
-from degenbot.degenbot_rs import PyBot
 from degenbot.exceptions.pool import IncompleteSwap
+from degenbot.fork import AnvilFork
 from tests.conftest import ETHEREUM_ARCHIVE_NODE_HTTP_URI
 from tests.helpers.erc20_factory import make_erc20
 from tests.helpers.v4_pool_factory import make_v4_pool
+from tests.helpers.w3_contract import make_contract
 from tests.uniswap.v4.test_uniswap_v4_liquidity_pool import (
     UNISWAP_V4_QUOTER_ABI,
     UNISWAP_V4_QUOTER_ADDRESS,
@@ -264,9 +265,8 @@ def test_cached_calculations_v4_eth_usdc(golden_factory) -> None:
     with _RecordFork(recording=golden.is_recording) as ctx:
         if golden.is_recording:
             assert ctx.fork is not None
-            ctx.contract = ctx.fork.w3.eth.contract(
-                address=UNISWAP_V4_QUOTER_ADDRESS,
-                abi=UNISWAP_V4_QUOTER_ABI,
+            ctx.contract = make_contract(
+                ctx.fork.http_url, UNISWAP_V4_QUOTER_ADDRESS, UNISWAP_V4_QUOTER_ABI
             )
         for method, key, token_in, token_out, amount, zero_for_one in cases:
             oracle = golden.check(

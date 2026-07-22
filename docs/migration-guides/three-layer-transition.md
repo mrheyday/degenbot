@@ -83,8 +83,7 @@ Adapted from `rust/AGENTS.md` "Porting Decision Framework":
 A module is likely `partial`/`port-now` if any of these hold:
 - It is a 1:1 port of a Solidity/Vyper library and a `degenbot-*-math` leaf
   for that library already exists (`calculations/*`, `uniswap/v3_libraries/`,
-  `uniswap/v4_libraries/`, `balancer/libraries/`, `aave/libraries/`,
-  `curve/calculators/`).
+  `uniswap/v4_libraries/`, `balancer/libraries/`, `curve/calculators/`).
 - It hand-slices EVM log bytes and `degenbot-decoders` already decodes the
   same event (`uniswap/log_decoders.py`).
 - It ABI-encodes/decodes and `degenbot-abi` already covers the signature
@@ -237,7 +236,7 @@ delegation seam, not just the numbers.
 ```
 just test-rust            # cargo test --workspace (Rust unit + integration)
 just test-rust-python     # pytest tests/rust (PyO3-wrapped Python tests)
-just test-python          # full pytest suite (compile-test-contracts first)
+just test-python          # full pytest suite
 just lint-rust            # clippy --fix --all-targets --deny warnings
 just check-no-pyo3-in-cores  # cores + umbrella pyo3-free under default features
 just lint-python          # ruff + ty
@@ -259,13 +258,14 @@ ADR-005 slices 3–15 (ergo `XQ5UX6`, all done) closed the **stateful** topology
 - Slice 7 — V2 DEX subclass collapse (Sushi/Pancake/Swapbased/Camelot hollow
   subclasses deleted; `UniswapV2Pool` + `dex.variant`).
 - Slices 8–9 — V3/V4 companions over `PyLiquidityPool`.
-- Slice 10 — `UniswapEngine` lock unification onto shared `Arc<RwLock<Bot>>`.
+- Slice 10 — `ArbitrageEngine` lock unification onto shared `Arc<RwLock<Bot>>`.
 - Slices 11–12 — Curve + Balancer family ports (state + companion + pure-math
   leaves `degenbot-curve-math`/`degenbot-balancer-math`).
 - Slice 13 — crate split (`degenbot-core`/`-python`/umbrella `degenbot` +
   `examples/standalone_consumer.rs`).
 - Slice 14 — `PyBotIo` stateful I/O struct (sync RPC choreography ported;
-  the Python `SyncPoolIO` stays as parity gate).
+  the Python `SyncPoolIO` parity gate has since been retired — `PyBotIo` is the
+  sole construction-I/O executor).
 - Slice 15 — pickle multiprocessing retired + Rust-side parallel solve fan-out.
 
 Blocked: ADR-003 `Bot`=state + engine=solving split; ADR-006 one `Bot` per
@@ -397,7 +397,7 @@ The per-(chain,factory) CREATE2 deployer + init_hash moved from Python
 The Solidly stable invariant (`x³y + xy³ ≥ k`) solve — Aerodrome stable /
 volatile pools and Camelot `stable_swap` pools — moved from the Python
 `SolidlyStableSolver` (Möbius compose + Newton outer over the existing
-`degenbot-solidly-math` integer leaf) into the Rust `UniswapArbEngine`.
+`degenbot-solidly-math` integer leaf) into the Rust `ArbitrageEngine`.
 
 - **Two-tier solver (`DMPSNG`).** `solve_solidly_path_int` runs a Möbius
   precheck on a V2-equivalent approximation of the Solidly curve to bracket

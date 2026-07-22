@@ -1,6 +1,6 @@
 """Rust-path market-activation tests (MPI6Q3).
 
-Exercises the PyO3 seam `degenbot_rs.activate_aave_market` /
+Exercises the PyO3 seam `degenbot._ffi.activate_aave_market` /
 `deactivate_aave_market` against the mock JSON-RPC harness — verifies the
 Rust-owned activation path (getMarketId RPC + GHO metadata fetch + the
 `aave_v3_markets` / `POOL_ADDRESS_PROVIDER` contract / GHO `erc20_tokens` /
@@ -18,11 +18,8 @@ from typing import Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from degenbot.degenbot_rs import (
-    activate_aave_market,
-    db_upgrade_database,
-    deactivate_aave_market,
-)
+from degenbot._ffi.aave import activate_aave_market, deactivate_aave_market
+from degenbot.db import db_upgrade_database
 from tests.aave.writer_parity.harness import mock_rpc_server
 
 # The 4-byte selectors the activation path RPCs (keccak256 of the canonical
@@ -73,10 +70,7 @@ def _dump_market(db_path: Path) -> dict[str, Any]:
     engine = create_engine(f"sqlite:///{db_path}")
     with Session(engine) as session:
         row = session.execute(
-            text(
-                "SELECT id, chain_id, name, active, last_update_block "
-                "FROM aave_v3_markets"
-            )
+            text("SELECT id, chain_id, name, active, last_update_block FROM aave_v3_markets")
         ).one()
         out = dict(row._mapping)
     engine.dispose()

@@ -1,4 +1,4 @@
-"""Contract: the legacy one-shot ``UniswapArbEngine.start(rpc_url)`` is gone.
+"""Contract: the legacy one-shot ``ArbitrageEngine.start(rpc_url)`` is gone.
 
 Plan 102, Slice 1. The canonical bot-startup path is the Python-orchestrated
 two-phase ritual (``subscribe`` → ``backfill_from_snapshot`` → ``resume``),
@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import pytest
 
-from degenbot.degenbot_rs import UniswapArbEngine
+from degenbot.arbitrage.engine_registry import ArbitrageEngine
 
 
 def test_start_is_not_exposed() -> None:
     """The legacy one-shot entry must not be on the Python surface."""
-    assert not hasattr(UniswapArbEngine, "start"), (
-        "UniswapArbEngine.start still exists — the dead one-shot "
-        "(PyUniswapArbEngine::start / BlockPump::spawn) must be deleted "
-        "(Plan 102, Slice 1). The canonical startup is subscribe→backfill→resume."
+    assert not hasattr(ArbitrageEngine, "start"), (
+        "ArbitrageEngine.start still exists — the dead one-shot "
+        "(PyArbitrageEngine::start / BlockPump::spawn) must be deleted "
+        "(Plan 102, Slice 1). The canonical startup is subscribe→resume."
     )
 
 
@@ -32,7 +32,6 @@ def test_start_is_not_exposed() -> None:
     "method",
     [
         "subscribe",
-        "backfill_from_snapshot",
         "resume",
     ],
 )
@@ -40,11 +39,12 @@ def test_canonical_phase_methods_remain(method: str) -> None:
     """The two-phase surface every operator uses must stay intact.
 
     The pump lifecycle ends via the engine's ``__pyo3::traverse``/drop or by
-    dropping the handle; there is no ``stop`` method on the Python surface,
-    only the three phase entry points: ``subscribe`` observes, ``backfill``'
-    closes the gap, ``resume`` begins normal processing.
+    dropping the handle; the phase entry points are ``subscribe`` (observe)
+    and ``resume`` (begin normal processing + auto-backfill, J3FMDO). The
+    ``backfill_from_snapshot`` method is retired (2SM4Y7) — the snapshot→WS
+    gap is closed automatically inside ``BlockPump::resume_from_subscribe``.
     """
-    assert hasattr(UniswapArbEngine, method), (
-        f"UniswapArbEngine.{method} missing — Slice 1 deletes only start(); "
+    assert hasattr(ArbitrageEngine, method), (
+        f"ArbitrageEngine.{method} missing — Slice 1 deletes only start(); "
         f"the canonical phase surface must be preserved."
     )

@@ -36,13 +36,16 @@
 #![allow(clippy::doc_markdown)]
 
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use alloy::primitives::U256;
 use degenbot_executor::composers::{EncodeOptions, PathInfo};
 use degenbot_submission::PathSuppression;
 use futures::stream::{self, StreamExt};
 
-use crate::simulate_one::{simulate_one, FailBuckets, SimResult, SimulateContext, SimulatePath};
+use crate::simulate_one::{
+    simulate_one, FailBuckets, SimFailure, SimResult, SimulateContext, SimulatePath,
+};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Constants (ports the Python oracle's module-level literals)
@@ -198,8 +201,17 @@ pub struct DispatchOutcome {
     pub thin_dropped: usize,
     /// The `_fail_buckets` tally — the revert/no-profit/overflow buckets
     /// accumulated across the fan-out (ports `_fail_buckets`, L1769). The
-    /// rendering (`format_failure_breakdown`) stays Python (D4).
+    /// aggregation rendering (`format_failure_breakdown`) stays Python (D4);
+    /// this exposes the typed buckets the companion renders.
     pub fail_buckets: FailBuckets,
+    /// The per-path `SimFailure` records (one per `tally`/`record` site across
+    /// the fan-out), in fan-out completion order — surfaced across the FFI so
+    /// the Python driver can render a per-candidate `[sim-fail]` line carrying
+    /// `path_id` + `fail_index` + the raw revert bytes. The aggregation
+    /// (`fail_buckets`) collapses these into a count; this preserves the
+    /// per-candidate attribution the operator needs to identify WHICH path
+    /// reverted against WHICH pools.
+    pub failures: Vec<SimFailure>,
 }
 
 impl DispatchOutcome {
@@ -262,10 +274,19 @@ impl DispatchOutcome {
 /// `JoinSet` tasks' individual errors are tolerated — ports
 /// `return_exceptions=True`). In practice the semaphore acquire never fails
 /// (it's cancelled only on runtime shutdown).
+///
+/// # Panics
+///
+/// Panics if the `path_suppression` mutex is poisoned (a peer task panicked
+/// while holding it). The mutex is locked ONLY at the bookends (step 1
+/// pre-filter + step 6 outcome record) — both synchronous spans, no `.await`
+/// held under the guard — so a poison indicates a bug in a sibling task
+/// (the suppression arc is shared with the submission seam's accessors;
+/// never locked across an `.await`).
 pub async fn dispatch_profitable_results(
     mut candidates: Vec<DispatchCandidate>,
     ctx: &SimulateContext<'_>,
-    path_suppression: &mut PathSuppression,
+    path_suppression: &Arc<Mutex<PathSuppression>>,
     current_block: u64,
     min_profit_net: u128,
     min_profit_margin_bps: u64,
@@ -273,8 +294,16 @@ pub async fn dispatch_profitable_results(
     let mut outcome = DispatchOutcome::default();
     let pre_filter_count = candidates.len();
 
-    // 1. Pre-filter — suppression (L2486–L2490).
-    candidates.retain(|c| !path_suppression.is_suppressed(c.path_id, current_block));
+    // 1. Pre-filter — suppression (L2486–L2490). Lock the suppression arc
+    //    ONLY for this synchronous retain (the guard is dropped before the
+    //    fan-out `.await` so the future stays `Send` — a `std::sync::MutexGuard`
+    //    is not `Send`). A3 (`LITQFF`) extracted `PathSuppression` onto its own
+    //    arc precisely so this bookend scope never contends with the
+    //    `Dispatcher` arc the monitor tasks lock.
+    {
+        let mut s = path_suppression.lock().expect("suppression mutex poisoned");
+        candidates.retain(|c| !s.is_suppressed(c.path_id, current_block));
+    }
     outcome.suppressed_count = pre_filter_count - candidates.len();
 
     // 2. Pre-filter — thin-margin (L2497–L2499).
@@ -328,6 +357,13 @@ pub async fn dispatch_profitable_results(
                 .or_insert(0);
             *entry += count;
         }
+        // Surface the per-candidate failure detail (`path_id` + `fail_index` +
+        // `revert_data`) across the FFI so the Python driver can render a
+        // `[sim-fail]` line. `fail_buckets.tally` was paired with `record`
+        // (pushing a `SimFailure`) at every site that should be surfaced;
+        // `into_failures()` moves them out of the dropped `buckets` instance
+        // into the outcome without a clone.
+        outcome.failures.extend(buckets.into_failures());
         match result {
             Ok(Some(r)) => {
                 succeeded_path_ids.insert(pid);
@@ -351,12 +387,17 @@ pub async fn dispatch_profitable_results(
 
     // 6. Record suppression outcomes (L2573–L2577). Ports
     //    `record_success(pid)` for succeeded, `record_failure(pid)` for the
-    //    rest (revert/no-profit/overflow/exception).
-    for &pid in &candidate_path_ids {
-        if succeeded_path_ids.contains(&pid) {
-            path_suppression.record_success(pid);
-        } else {
-            path_suppression.record_failure(pid);
+    //    rest (revert/no-profit/overflow/exception). Scope-locked (same
+    //    bookend-only discipline as step 1 — the guard drops before any
+    //    `.await`; there is no `.await` in this synchronous loop anyway).
+    {
+        let mut s = path_suppression.lock().expect("suppression mutex poisoned");
+        for &pid in &candidate_path_ids {
+            if succeeded_path_ids.contains(&pid) {
+                s.record_success(pid);
+            } else {
+                s.record_failure(pid);
+            }
         }
     }
 
@@ -400,7 +441,7 @@ mod tests {
     use degenbot_executor::composers::{HopInfo, PathInfo, V2HopInfo};
     use degenbot_executor::{compute_simulation_warmup_slots, WarmupSlots};
     use degenbot_rpc::provider::{AlloyProvider, EthBlock};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     const OWNER: Address = address!("9c56a29c7231974c269e24f9fb3c29203039089e");
     const EXECUTOR: Address = address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -549,7 +590,7 @@ mod tests {
         asserter.push_success(&access_list_response());
         asserter.push_success(&profit_block(U256::ZERO, 200_000));
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         let cands = vec![
             candidate(
@@ -562,7 +603,7 @@ mod tests {
         let outcome = dispatch_profitable_results(
             cands,
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             100,
             MIN_PROFIT_NET,
             0,
@@ -577,7 +618,13 @@ mod tests {
         assert_eq!(outcome.exception_count, 0);
         assert_eq!(outcome.candidate_count, 2);
         // Suppression: path 2 has 1 failure (not yet suppressed — threshold 10).
-        assert_eq!(suppression.total_suppressed(), 0);
+        assert_eq!(
+            suppression
+                .lock()
+                .expect("suppression mutex poisoned")
+                .total_suppressed(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -590,14 +637,14 @@ mod tests {
             asserter.push_success(&profit_block(U256::ZERO, 100_000)); // no-profit
         }
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         for _ in 0..10 {
             let cands = vec![candidate(7, 1_000_000_000_000_000_000u128, 0)];
             let _ = dispatch_profitable_results(
                 cands,
                 &ctx(&provider),
-                &mut suppression,
+                &suppression,
                 100,
                 MIN_PROFIT_NET,
                 0,
@@ -606,8 +653,17 @@ mod tests {
             .unwrap();
         }
         // After 10 failures, path 7 is suppressed.
-        assert!(suppression.is_in_suppressed_set(7));
-        assert_eq!(suppression.total_suppressed(), 1);
+        assert!(suppression
+            .lock()
+            .expect("suppression mutex poisoned")
+            .is_in_suppressed_set(7));
+        assert_eq!(
+            suppression
+                .lock()
+                .expect("suppression mutex poisoned")
+                .total_suppressed(),
+            1
+        );
 
         // The NEXT dispatch with the same path at block 100 → suppressed_count=1
         // (is_suppressed returns true; no RPC dispatched — the asserter queue
@@ -618,7 +674,7 @@ mod tests {
         let outcome = dispatch_profitable_results(
             vec![candidate(7, 1_000_000_000_000_000_000u128, 0)],
             &ctx(&provider2),
-            &mut suppression,
+            &suppression,
             50, // < retry interval (100) → still suppressed (last_retry stays 0)
             MIN_PROFIT_NET,
             0,
@@ -637,17 +693,23 @@ mod tests {
         let asserter = Asserter::new();
         asserter.push_success(&access_list_response()); // sentinel
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
         // Manually suppress path 99.
         for _ in 0..10 {
-            suppression.record_failure(99);
+            suppression
+                .lock()
+                .expect("suppression mutex poisoned")
+                .record_failure(99);
         }
-        assert!(suppression.is_in_suppressed_set(99));
+        assert!(suppression
+            .lock()
+            .expect("suppression mutex poisoned")
+            .is_in_suppressed_set(99));
 
         let outcome = dispatch_profitable_results(
             vec![candidate(99, 1_000_000_000_000_000_000u128, 1_000)],
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             50, // < retry interval (100) → still suppressed
             MIN_PROFIT_NET,
             0,
@@ -735,7 +797,7 @@ mod tests {
         // gas huge → net clamps to ~0 (unprofitable).
         push_profitable(&asserter, U256::from(1_000_000_000u128), 50_000_000);
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         let cands = vec![
             candidate(
@@ -748,7 +810,7 @@ mod tests {
         let outcome = dispatch_profitable_results(
             cands,
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             100,
             MIN_PROFIT_NET,
             0,
@@ -769,7 +831,76 @@ mod tests {
         // Sorted by net descending: the profitable path (big net) is first.
         assert!(outcome.gas_profitable[0].net_profit > outcome.gas_unprofitable[0].net_profit);
         // Both paths recorded success (both returned Some).
-        assert_eq!(suppression.total_suppressed(), 0);
+        assert_eq!(
+            suppression
+                .lock()
+                .expect("suppression mutex poisoned")
+                .total_suppressed(),
+            0
+        );
+    }
+
+    /// A6 golden-fixture parity: pin the EXACT gross/net/gas/priority-fee
+    /// figures on a gas-profitable survivor. The categorizes test (above)
+    /// asserts the profitable SUBSET + a net comparison; this test pins the
+    /// absolute ints so a drift in the fee arithmetic
+    /// (`compute_priority_fee` / `gas_fee` / `net`) is caught as a figure
+    /// change, not just a category flip. The fixture mirrors the deleted
+    /// Python `_compute_priority_fee` + net arithmetic (the §4.2 parity: the
+    /// Rust port reproduces the Python oracle's `int(...)` truncation of the
+    /// f64 priority-fee path — pins the exact `int` the Python would have
+    /// produced for this gross/gas/fee block).
+    #[tokio::test]
+    async fn dispatch_pins_exact_profitable_figures() {
+        // Path: gross 2 ETH, gas 200_000, base_fee_next 1 gwei, p10=0.5 gwei,
+        // p50=2 gwei, age 0 (solve_block == current_block == 100).
+        let asserter = Asserter::new();
+        push_profitable(
+            &asserter,
+            U256::from(2_000_000_000_000_000_000u128),
+            200_000,
+        );
+        let provider = mock_provider(&asserter);
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
+
+        let cands = vec![candidate(
+            10,
+            1_000_000_000_000_000_000u128,
+            2_000_000_000_000_000_000u128,
+        )];
+        let outcome = dispatch_profitable_results(
+            cands,
+            &ctx(&provider),
+            &suppression,
+            100,
+            MIN_PROFIT_NET,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome.gas_profitable.len(),
+            1,
+            "buckets: {:?}",
+            outcome.fail_buckets.buckets()
+        );
+        let r = &outcome.gas_profitable[0];
+        assert_eq!(r.path_id, 10);
+        assert_eq!(r.gross_profit, U256::from(2_000_000_000_000_000_000u128));
+        assert_eq!(r.gas_used, 200_000);
+        assert_eq!(r.base_fee_next, 1_000_000_000);
+        // priority_fee: target = (gross/1.25 - gas*base)/gas is huge (~8e15);
+        // age 0 keeps target unchanged (age_factor=1.0). Market ceiling is
+        // max = p50+1 = 2_000_000_001, so the final clamp pins the priority fee
+        // directly to that ceiling. The §4.2 parity is on the `int(...)`
+        // truncation semantics — the f64 path is lossy by design.
+        assert_eq!(r.priority_fee, 2_000_000_001);
+        // net = gross - gas*(base + priority)
+        //     = 2e18 - 200_000*(1e9 + 2_000_000_001)
+        //     = 2e18 - 600_000_000_200_000
+        //     = 1_999_399_999_999_800_000.
+        assert_eq!(r.net_profit, U256::from(1_999_399_999_999_800_000u128));
     }
 
     #[tokio::test]
@@ -786,7 +917,7 @@ mod tests {
         asserter.push_success(&access_list_response());
         asserter.push_failure_msg("simulate_v1 RPC failed");
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         let outcome = dispatch_profitable_results(
             vec![candidate(
@@ -795,7 +926,7 @@ mod tests {
                 2_000_000_000_000_000_000u128,
             )],
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             100,
             MIN_PROFIT_NET,
             0,
@@ -813,7 +944,13 @@ mod tests {
         );
         assert_eq!(outcome.fail_buckets.get("rpc-failed"), 1);
         // Path 21 records a failure.
-        assert_eq!(suppression.total_suppressed(), 0);
+        assert_eq!(
+            suppression
+                .lock()
+                .expect("suppression mutex poisoned")
+                .total_suppressed(),
+            0
+        );
     }
 
     // ── D1: the cap ────────────────────────────────────────────────────────
@@ -823,11 +960,14 @@ mod tests {
         // MAX_SIMULATE_CONCURRENT = 50. Hand 60 candidates (all suppressed at
         // the block-context retry interval → no RPC). The candidate_count
         // should be capped at 50.
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
         // Suppress paths 0..60.
         for pid in 0..60u64 {
             for _ in 0..10 {
-                suppression.record_failure(pid);
+                suppression
+                    .lock()
+                    .expect("suppression mutex poisoned")
+                    .record_failure(pid);
             }
         }
         let asserter = Asserter::new();
@@ -848,7 +988,7 @@ mod tests {
         let outcome = dispatch_profitable_results(
             cands,
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             50, // < retry interval → all suppressed
             MIN_PROFIT_NET,
             0,
@@ -866,12 +1006,12 @@ mod tests {
     async fn dispatch_returns_empty_outcome_for_empty_input() {
         let asserter = Asserter::new();
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         let outcome = dispatch_profitable_results(
             Vec::new(),
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             100,
             MIN_PROFIT_NET,
             0,
@@ -894,7 +1034,7 @@ mod tests {
         push_profitable(&asserter, U256::ZERO, 100_000); // path 1 no-profit
         push_profitable(&asserter, U256::ZERO, 100_000); // path 2 no-profit
         let provider = mock_provider(&asserter);
-        let mut suppression = PathSuppression::new();
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
 
         let cands = vec![
             candidate(30, 1_000_000_000_000_000_000u128, 1_000),
@@ -903,7 +1043,7 @@ mod tests {
         let outcome = dispatch_profitable_results(
             cands,
             &ctx(&provider),
-            &mut suppression,
+            &suppression,
             100,
             MIN_PROFIT_NET,
             0,
@@ -912,5 +1052,78 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.fail_count, 2);
         assert_eq!(outcome.fail_buckets.get("no-profit"), 2);
+    }
+
+    // ── D1: per-path failure detail surfacing ────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_surfaces_per_path_failures_with_no_fail_index() {
+        // Two no-profit candidates → two `SimFailure` records in
+        // `outcome.failures`, each carrying its own `path_id`. No call
+        // reverted (no-profit = all 7 succeeded), so `fail_index` is `None`.
+        let asserter = Asserter::new();
+        push_profitable(&asserter, U256::ZERO, 100_000);
+        push_profitable(&asserter, U256::ZERO, 100_000);
+        let provider = mock_provider(&asserter);
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
+
+        let cands = vec![
+            candidate(30, 1_000_000_000_000_000_000u128, 1_000),
+            candidate(31, 1_000_000_000_000_000_000u128, 1_000),
+        ];
+        let outcome = dispatch_profitable_results(
+            cands,
+            &ctx(&provider),
+            &suppression,
+            100,
+            MIN_PROFIT_NET,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.failures.len(), 2, "expected two failure records");
+        let ids: Vec<u64> = outcome.failures.iter().map(|f| f.path_id).collect();
+        assert!(ids.contains(&30), "path 30 must be surfaced, got {ids:?}");
+        assert!(ids.contains(&31), "path 31 must be surfaced, got {ids:?}");
+        for f in &outcome.failures {
+            assert_eq!(f.bucket, "no-profit");
+            assert!(f.fail_index.is_none(), "no-profit has no failing call idx");
+            assert!(f.revert_data.is_empty(), "no revert data on no-profit");
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_surfaces_rpc_failed_failure_with_fail_index_none() {
+        // A simulate_v1 RPC failure tallies `rpc-failed` + records a
+        // `SimFailure` with `fail_index: None` + empty `revert_data` (no
+        // simulate response was ever returned to inspect).
+        let asserter = Asserter::new();
+        asserter.push_success(&access_list_response());
+        asserter.push_failure_msg("simulate_v1 RPC failed");
+        let provider = mock_provider(&asserter);
+        let suppression = Arc::new(Mutex::new(PathSuppression::new()));
+
+        let outcome = dispatch_profitable_results(
+            vec![candidate(
+                21,
+                1_000_000_000_000_000_000u128,
+                2_000_000_000_000_000_000u128,
+            )],
+            &ctx(&provider),
+            &suppression,
+            100,
+            MIN_PROFIT_NET,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.failures.len(), 1);
+        let f = &outcome.failures[0];
+        assert_eq!(f.path_id, 21);
+        assert_eq!(f.bucket, "rpc-failed");
+        assert!(f.fail_index.is_none(), "rpc-failed has no sim call idx");
+        assert!(f.revert_data.is_empty());
     }
 }

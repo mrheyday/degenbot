@@ -12,7 +12,7 @@ PancakeSwap V3 (separate deployer) is the load-bearing case: the handle's
 
 from __future__ import annotations
 
-from degenbot.degenbot_rs import PyBot
+from degenbot.bot import PyBot
 
 UNISWAP_V3_FACTORY = "0x1F98431c8aD98523631AE4a59f267346ea31F984"
 PANCAKESWAP_V3_FACTORY = "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
@@ -36,7 +36,7 @@ def _register_v3(bot: PyBot, address: str, factory: str) -> int:
         fee=500,
         tick_spacing=10,
         factory=factory,
-        sqrt_price_x96=1,
+        sqrt_price_x96=1 << 96,
         liquidity=0,
         tick=0,
     )

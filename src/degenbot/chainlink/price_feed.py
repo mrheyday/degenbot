@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from degenbot.chainlink import ChainlinkPriceFeed
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.degenbot_rs import PyChainlinkPriceFeed
 
 if TYPE_CHECKING:
     from degenbot.bot import Bot
-    from degenbot.provider.sync_adapter import ProviderAdapter
+    from degenbot.provider import AlloyProvider
     from degenbot.types.aliases import ChainId
 
 
@@ -22,7 +22,7 @@ class ChainlinkPriceContract:
     The ``price`` property returns the decimal-corrected nominal token price in USD
     (e.g. 1 DAI = 1.0 USD).
 
-    This is a delegating shell over the Rust ``PyChainlinkPriceFeed`` reader
+    This is a delegating shell over the Rust ``ChainlinkPriceFeed`` reader
     (the ``degenbot-price`` core crate, ADR-005). The inline ``provider.call_raw``
     / ``abi_decode`` bodies are retired — ``eth_call`` + canonical ABI decode now
     run in Rust. The float ``price`` is computed here (display layer) from the raw
@@ -43,13 +43,13 @@ class ChainlinkPriceContract:
         self._chain_id = chain_id
         self._decimals = decimals
         self._bot = bot
-        self._py_feed: PyChainlinkPriceFeed | None = None
+        self._py_feed: ChainlinkPriceFeed | None = None
 
-    def _get_py_feed(self) -> PyChainlinkPriceFeed:
+    def _get_py_feed(self) -> ChainlinkPriceFeed:
         """Lazily build the Rust reader over the bot's AlloyProvider.
 
         Returns:
-            The cached ``PyChainlinkPriceFeed`` reader.
+            The cached ``ChainlinkPriceFeed`` reader.
 
         Raises:
             ValueError: If no ``bot`` was set (the provider is required).
@@ -59,9 +59,9 @@ class ChainlinkPriceContract:
             if self._bot is None:
                 msg = "ChainlinkPriceContract requires a `bot` to fetch price"
                 raise ValueError(msg)
-            provider: ProviderAdapter = self._bot.provider
+            provider: AlloyProvider = self._bot.provider
             alloy_provider = provider.to_alloy_provider()
-            self._py_feed = PyChainlinkPriceFeed(
+            self._py_feed = ChainlinkPriceFeed(
                 self.address,
                 alloy_provider,
                 chain_id=self._chain_id,

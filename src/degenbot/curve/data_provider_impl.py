@@ -12,20 +12,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-import eth_abi.abi
 from hexbytes import HexBytes
-from web3 import Web3
-from web3.exceptions import ContractLogicError
 
+from degenbot.abi import decode, encode
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.crypto import function_selector
 from degenbot.curve.types import LendingRateStyle
-from degenbot.exceptions.pool import EVMRevertError
+from degenbot.exceptions import ContractLogicError, EVMRevertError
 from degenbot.provider.call_helpers import encode_function_calldata
 
 if TYPE_CHECKING:
     from eth_typing import ChecksumAddress
 
-    from degenbot.builders.pool_io import PoolIO
+    from degenbot.bot import PyBotIo
 
 
 class CurveDataProviderImpl:
@@ -38,7 +37,7 @@ class CurveDataProviderImpl:
     def __init__(
         self,
         *,
-        io: PoolIO,
+        io: PyBotIo,
         pool_address: ChecksumAddress,
         base_pool_address: ChecksumAddress | None = None,
         n_coins: int = 2,
@@ -78,10 +77,10 @@ class CurveDataProviderImpl:
 
         """
         data = self._io.call_raw(
-            {"to": to, "data": Web3.keccak(text=method_sig)[:4]},
+            {"to": to, "data": function_selector(method_sig)},
             block=block_number,
         )
-        return eth_abi.abi.decode(types=return_types, data=data)
+        return decode(types=return_types, data=data)
 
     def _call_single(
         self,
@@ -116,7 +115,7 @@ class CurveDataProviderImpl:
             {"to": to, "data": data},
             block=block_number,
         )
-        (value,) = eth_abi.abi.decode(types=[return_type], data=result)
+        (value,) = decode(types=[return_type], data=result)
         return value
 
     @staticmethod
@@ -210,7 +209,7 @@ class CurveDataProviderImpl:
                     ),
                     block=block_number,
                 )
-                (admin_balance,) = eth_abi.abi.decode(types=["uint256"], data=balance)
+                (admin_balance,) = decode(types=["uint256"], data=balance)
                 balances.append(admin_balance)
             except Exception:  # noqa: BLE001
                 break
@@ -261,7 +260,7 @@ class CurveDataProviderImpl:
         """
         price_scale = [0] * (self._n_coins - 1)
         for token_index in range(self._n_coins - 1):
-            data = Web3.keccak(text="price_scale(uint256)")[:4] + eth_abi.abi.encode(
+            data = function_selector("price_scale(uint256)") + encode(
                 types=["uint256"],
                 args=[token_index],
             )
@@ -269,7 +268,7 @@ class CurveDataProviderImpl:
                 {"to": self._pool_address, "data": data},
                 block=block_number,
             )
-            (price_scale[token_index],) = eth_abi.abi.decode(types=["uint256"], data=result)
+            (price_scale[token_index],) = decode(types=["uint256"], data=result)
         return tuple(price_scale)
 
     def block_timestamp(self, block_number: int) -> int:
@@ -306,7 +305,7 @@ class CurveDataProviderImpl:
             data=data,
             block=block_number,
         )
-        (balance,) = eth_abi.abi.decode(types=["uint256"], data=result)
+        (balance,) = decode(types=["uint256"], data=result)
         return cast("int", balance)
 
     def token_total_supply(self, token_address: str, block_number: int) -> int:
@@ -322,7 +321,7 @@ class CurveDataProviderImpl:
             data=data,
             block=block_number,
         )
-        (total_supply,) = eth_abi.abi.decode(types=["uint256"], data=result)
+        (total_supply,) = decode(types=["uint256"], data=result)
         return cast("int", total_supply)
 
     def lending_rates(self, block_number: int) -> tuple[int, ...]:
